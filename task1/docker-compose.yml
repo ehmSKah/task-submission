@@ -1,0 +1,35 @@
+# Local runtime: the Floci AWS emulator, plus a read-only Swagger UI (ADRs 0008 and 0010).
+name: orders-api
+
+services:
+  floci:
+    image: floci/floci:2.3.0
+    ports:
+      - "4566:4566"
+    environment:
+      # Tokens' issuer and the endpoints injected into Lambda containers become
+      # http://floci:4566, reachable from the Lambda containers on the shared network.
+      FLOCI_HOSTNAME: floci
+      FLOCI_SERVICES_LAMBDA_DOCKER_NETWORK: orders-api
+      # Lets expiry tests use access tokens shorter than AWS's 5-minute minimum.
+      FLOCI_SERVICES_COGNITO_ENFORCE_TOKEN_VALIDITY_LIMITS: "false"
+    volumes:
+      # Floci starts Lambda functions as sibling containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - orders-api
+
+  swagger-ui:
+    image: swaggerapi/swagger-ui:v5.29.3
+    profiles: ["docs"]
+    ports:
+      - "8080:8080"
+    environment:
+      SWAGGER_JSON: /spec/openapi.yaml
+      SUPPORTED_SUBMIT_METHODS: "[]"
+    volumes:
+      - ./openapi:/spec:ro
+
+networks:
+  orders-api:
+    name: orders-api
