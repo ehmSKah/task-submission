@@ -4,7 +4,8 @@ import base64
 import json
 from typing import Any
 
-from tests.builders import rest_event
+from orders_api.adapters.inbound import api_handler
+from tests.builders import FakeLambdaContext, rest_event
 
 ALICE = {"principalId": "alice-sub", "sub": "alice-sub", "roles": "USER"}
 
@@ -46,3 +47,16 @@ def get_order_event(order_id: str, authorizer: dict[str, Any] | None = ALICE) ->
     if authorizer is not None:
         event["requestContext"]["authorizer"] = authorizer
     return event
+
+
+def invoke(event: dict[str, Any]) -> dict[str, Any]:
+    response: dict[str, Any] = api_handler.handler(event, FakeLambdaContext())
+    return response
+
+
+def headers_of(response: dict[str, Any]) -> dict[str, str]:
+    """A proxy response's headers, single- and multi-value merged."""
+    merged = {k: v for k, v in (response.get("headers") or {}).items()}
+    for key, values in (response.get("multiValueHeaders") or {}).items():
+        merged[key] = values[-1]
+    return merged

@@ -17,7 +17,7 @@ from orders_api.adapters.inbound.http_headers import (
     SECURITY_HEADERS,
 )
 from orders_api.adapters.inbound.order_json import order_to_json
-from orders_api.adapters.inbound.order_requests import new_order_from, valid_order_id
+from orders_api.adapters.inbound.order_requests import ORDERS_PATH, new_order_from, valid_order_id
 from orders_api.adapters.inbound.problems import FieldError, ProblemType, problem_body
 from orders_api.adapters.inbound.request_checks import InvalidRequest
 from orders_api.adapters.outbound.dynamodb_orders import DynamoDbOrderRepository
@@ -78,7 +78,7 @@ def order_response(order: Order, status_code: int) -> Response[str]:
     )
 
 
-@app.post("/api/v1/orders")
+@app.post(ORDERS_PATH)
 def post_order() -> Response[str]:
     caller = identified_caller()
     request = new_order_from(app.current_event)

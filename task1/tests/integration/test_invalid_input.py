@@ -12,13 +12,13 @@ from typing import Any
 import httpx
 import pytest
 
+from orders_api.adapters.inbound.request_checks import MAX_BODY_BYTES
 from tests.integration.assertions import assert_problem
 from tests.integration.function_logs import FunctionLogs, api_function_name
-from tests.integration.test_create_order import NEW_ORDER, bearer
+from tests.integration.requests import NEW_ORDER, bearer
 
 ORDERS = "/api/v1/orders"
 ITEM = NEW_ORDER["items"][0]
-MAX_BODY_BYTES = 64 * 1024
 
 
 @pytest.fixture

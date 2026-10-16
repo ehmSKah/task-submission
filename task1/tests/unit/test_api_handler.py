@@ -7,19 +7,8 @@ import pytest
 
 from orders_api.adapters.inbound import api_handler
 from orders_api.adapters.inbound.http_headers import SECURITY_HEADERS
-from tests.builders import FakeLambdaContext, rest_event
-
-
-def headers_of(response: dict[str, Any]) -> dict[str, str]:
-    merged = {k: v for k, v in (response.get("headers") or {}).items()}
-    for key, values in (response.get("multiValueHeaders") or {}).items():
-        merged[key] = values[-1]
-    return merged
-
-
-def invoke(event: dict[str, Any]) -> dict[str, Any]:
-    response: dict[str, Any] = api_handler.handler(event, FakeLambdaContext())
-    return response
+from tests.builders import rest_event
+from tests.unit.events import headers_of, invoke
 
 
 def test_health_returns_ok() -> None:

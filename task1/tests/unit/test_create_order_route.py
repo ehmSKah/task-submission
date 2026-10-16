@@ -7,10 +7,14 @@ import pytest
 
 from orders_api.adapters.inbound import api_handler
 from orders_api.adapters.inbound.request_checks import MAX_BODY_BYTES
-from tests.builders import FakeLambdaContext
-from tests.unit.events import VALID_ORDER, create_order_event, get_order_event
+from tests.unit.events import (
+    VALID_ORDER,
+    create_order_event,
+    get_order_event,
+    headers_of,
+    invoke,
+)
 from tests.unit.fakes import FixedClock, InMemoryOrderRepository, SequentialIds
-from tests.unit.test_api_handler import headers_of
 
 NEW_ID = "0e6bb2c6-0000-4000-8000-0000000000aa"
 
@@ -22,11 +26,6 @@ def repository(monkeypatch: pytest.MonkeyPatch) -> InMemoryOrderRepository:
     monkeypatch.setattr(api_handler, "clock", FixedClock(datetime(2026, 10, 17, 9, 30, tzinfo=UTC)))
     monkeypatch.setattr(api_handler, "order_ids", SequentialIds([NEW_ID]))
     return fake
-
-
-def invoke(event: dict[str, Any]) -> dict[str, Any]:
-    response: dict[str, Any] = api_handler.handler(event, FakeLambdaContext())
-    return response
 
 
 def test_creates_the_order_for_the_caller_with_201_and_etag(

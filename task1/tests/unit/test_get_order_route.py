@@ -1,14 +1,12 @@
 import io
 import json
-from typing import Any
 
 import pytest
 
 from orders_api.adapters.inbound import api_handler
-from tests.builders import FakeLambdaContext, an_order, rest_event
-from tests.unit.events import ALICE, get_order_event
+from tests.builders import an_order, rest_event
+from tests.unit.events import ALICE, get_order_event, headers_of, invoke
 from tests.unit.fakes import InMemoryOrderRepository
-from tests.unit.test_api_handler import headers_of
 
 ORDER = an_order()
 
@@ -23,11 +21,6 @@ def repository(monkeypatch: pytest.MonkeyPatch) -> InMemoryOrderRepository:
     fake = InMemoryOrderRepository([ORDER])
     monkeypatch.setattr(api_handler, "_orders", fake)
     return fake
-
-
-def invoke(event: dict[str, Any]) -> dict[str, Any]:
-    response: dict[str, Any] = api_handler.handler(event, FakeLambdaContext())
-    return response
 
 
 def test_returns_the_order_in_its_published_shape() -> None:
