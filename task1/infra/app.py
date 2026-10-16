@@ -77,6 +77,17 @@ if not config.retains_data:
             )
         ],
     )
+NagSuppressions.add_resource_suppressions(
+    stack.data.idempotency_table,
+    [
+        NagPackSuppression(
+            id="AwsSolutions-DDB3",
+            reason="Idempotency records expire after 24 hours and only guard against duplicate "
+            "creates; a restore would bring back nothing worth keeping, so the table has no "
+            "point-in-time recovery in any environment (ADR 0005).",
+        )
+    ],
+)
 api_suppressions = [
     NagPackSuppression(
         id="AwsSolutions-APIG2",
