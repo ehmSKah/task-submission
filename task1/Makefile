@@ -15,8 +15,8 @@ CDK := cd infra && npx --no-install cdk
 RUN_INFRA_MODULE := cd infra && uv run python -m
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor install up floci-up bootstrap bundle deploy endpoints down \
-	test test-integration lint docs
+.PHONY: help doctor install up floci-up bootstrap bundle deploy endpoints seed token down \
+	test test-adapter test-integration lint docs
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -28,7 +28,7 @@ install: ## Install Python and CDK CLI dependencies
 	uv sync --frozen
 	npm ci --prefix infra --no-audit --no-fund
 
-up: install floci-up bootstrap deploy endpoints ## Start Floci and deploy the stack (ENV=local)
+up: install floci-up bootstrap deploy endpoints seed ## Start Floci, deploy and seed users (ENV=local)
 
 floci-up: ## Start the Floci emulator
 	docker compose up -d floci
@@ -49,6 +49,14 @@ deploy: bundle ## Deploy the stack
 endpoints: ## Write build/endpoints.json from the stack outputs
 	$(RUN_INFRA_MODULE) orders_api_infra.endpoints --env $(ENV) --floci-url $(FLOCI_URL)
 
+seed: ## Create the demo users (idempotent; refused where seedUsers is false)
+	$(RUN_INFRA_MODULE) orders_api_infra.demo_users seed --env $(ENV)
+
+ROLE ?= user
+token: ## Print an access token: ROLE=user|manager|admin|none, or USER_NAME=alice|bob|…
+	@$(RUN_INFRA_MODULE) orders_api_infra.demo_users token --env $(ENV) --role $(ROLE) \
+		$(if $(USER_NAME),--user $(USER_NAME))
+
 # Floci leaves sibling containers (e.g. its ECR registry) on the network; remove those too.
 down: ## Stop Floci and remove its containers, network and volumes
 	docker compose --profile docs down -v --remove-orphans || true
@@ -57,6 +65,9 @@ down: ## Stop Floci and remove its containers, network and volumes
 
 test: ## Unit tests
 	uv run pytest tests/unit
+
+test-adapter: ## Adapter tests against the emulator
+	uv run pytest tests/adapter -m adapter
 
 test-integration: ## Integration tests against the deployed stack
 	uv run pytest tests/integration -m integration

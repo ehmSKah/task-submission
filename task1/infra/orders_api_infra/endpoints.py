@@ -19,16 +19,28 @@ def api_base_url(config: EnvConfig, outputs: dict[str, str], floci_url: str) -> 
     return f"https://{api_id}.execute-api.{config.region}.amazonaws.com/{stage}"
 
 
-def write(env: str, floci_url: str) -> dict[str, str]:
-    config = load_config(env)
+def stack_outputs(config: EnvConfig) -> dict[str, str]:
+    """The outputs `cdk deploy --outputs-file` wrote for this environment's stack."""
     outputs_by_stack = json.loads((BUILD_DIR / "cdk-outputs.json").read_text())
     outputs: dict[str, str] = outputs_by_stack[config.stack_name]
+    return outputs
+
+
+def write(env: str, floci_url: str) -> dict[str, str]:
+    config = load_config(env)
+    outputs = stack_outputs(config)
     endpoints = {
         "env": config.name,
         "target": config.target,
         "region": config.region,
         "apiUrl": api_base_url(config, outputs, floci_url),
+        "userPoolId": outputs["UserPoolId"],
+        "userPoolClientId": outputs["UserPoolClientId"],
+        "tokenIssuer": outputs["TokenIssuer"],
+        "ordersTable": outputs["OrdersTableName"],
     }
+    if "SeedUsersSecretName" in outputs:
+        endpoints["seedUsersSecret"] = outputs["SeedUsersSecretName"]
     (BUILD_DIR / "endpoints.json").write_text(json.dumps(endpoints, indent=2) + "\n")
     return endpoints
 
