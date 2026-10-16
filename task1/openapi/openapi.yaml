@@ -44,6 +44,18 @@ paths:
       description: >-
         Creates a `PENDING` order owned by the caller. The API computes `totalAmount`; clients
         never send it, nor `id`, `ownerId`, `status`, timestamps or `version`.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >-
+            Makes retries safe (IETF draft "The Idempotency-Key HTTP Header Field"). A key is
+            scoped to the caller and remembered for 24 hours. Repeating it with the same body
+            replays the original `201` without creating a second order; with a different body it
+            is a `422`; while the first request is still in progress it is a `409`. Without the
+            header every request creates an order.
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -66,10 +78,14 @@ paths:
           $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "413":
           $ref: "#/components/responses/PayloadTooLarge"
         "415":
           $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/IdempotencyKeyMismatch"
         "500":
           $ref: "#/components/responses/InternalError"
         "502":
@@ -311,6 +327,26 @@ components:
             $ref: "#/components/schemas/Problem"
     NotFound:
       description: Unknown path or method, or a resource the caller can't see.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Conflict:
+      description: >-
+        The request conflicts with the current state, e.g. a request with the same
+        `Idempotency-Key` is still in progress.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    IdempotencyKeyMismatch:
+      description: The `Idempotency-Key` was already used with a different request body.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
