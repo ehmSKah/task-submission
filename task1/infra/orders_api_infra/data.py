@@ -1,4 +1,8 @@
-"""The Data construct: the orders table and its two list indexes (ADR 0005)."""
+"""The Data construct: one table per purpose (ADR 0005).
+
+- orders, with its two list indexes
+- idempotency records for retried creates (ADR 0004)
+"""
 
 import aws_cdk as cdk
 from aws_cdk import aws_dynamodb as dynamodb
@@ -38,6 +42,26 @@ class Data(Construct):
             projection_type=dynamodb.ProjectionType.ALL,
         )
 
+        # Powertools' default layout: one item per owner-scoped key, removed by TTL after 24 hours.
+        # The records are short-lived by design, so no backups and always destroyed (ADR 0005).
+        self.idempotency_table = dynamodb.Table(
+            self,
+            "IdempotencyTable",
+            partition_key=dynamodb.Attribute(name="id", type=STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            time_to_live_attribute="expiration",
+            point_in_time_recovery_specification=dynamodb.PointInTimeRecoverySpecification(
+                point_in_time_recovery_enabled=False
+            ),
+            removal_policy=cdk.RemovalPolicy.DESTROY,
+        )
+
         cdk.CfnOutput(
             self, "OrdersTableName", value=self.orders_table.table_name, key="OrdersTableName"
+        )
+        cdk.CfnOutput(
+            self,
+            "IdempotencyTableName",
+            value=self.idempotency_table.table_name,
+            key="IdempotencyTableName",
         )

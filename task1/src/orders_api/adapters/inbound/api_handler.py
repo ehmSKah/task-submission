@@ -7,6 +7,11 @@ from typing import Any
 
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.event_handler import APIGatewayRestResolver, Response
+from aws_lambda_powertools.utilities.idempotency import BasePersistenceLayer
+from aws_lambda_powertools.utilities.idempotency.exceptions import (
+    IdempotencyAlreadyInProgressError,
+    IdempotencyValidationError,
+)
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from orders_api.adapters.inbound.caller import Caller, MissingCallerIdentity, caller_from_event
@@ -16,6 +21,7 @@ from orders_api.adapters.inbound.http_headers import (
     REQUEST_ID_HEADER,
     SECURITY_HEADERS,
 )
+from orders_api.adapters.inbound.idempotency import dynamodb_store, idempotency_key, run_once
 from orders_api.adapters.inbound.order_json import order_to_json
 from orders_api.adapters.inbound.order_requests import ORDERS_PATH, new_order_from, valid_order_id
 from orders_api.adapters.inbound.problems import FieldError, ProblemType, problem_body
@@ -41,6 +47,7 @@ logger = Logger(service="orders-api")
 app = APIGatewayRestResolver()
 
 _orders: OrderRepository | None = None
+_idempotency_store: BasePersistenceLayer | None = None
 clock: Clock = SystemClock()
 order_ids: IdGenerator = RandomOrderIds()
 
@@ -51,6 +58,14 @@ def orders() -> OrderRepository:
     if _orders is None:
         _orders = DynamoDbOrderRepository(os.environ["ORDERS_TABLE"])
     return _orders
+
+
+def idempotency_store() -> BasePersistenceLayer:
+    """The idempotency table's persistence layer, created once per Lambda instance."""
+    global _idempotency_store
+    if _idempotency_store is None:
+        _idempotency_store = dynamodb_store(os.environ["IDEMPOTENCY_TABLE"])
+    return _idempotency_store
 
 
 def health_status() -> dict[str, str]:
@@ -85,9 +100,22 @@ def order_response(order: Order, status_code: int) -> Response[str]:
 def post_order() -> Response[str]:
     caller = identified_caller()
     request = new_order_from(app.current_event)
+    # Step 6 before step 7: a caller without the permission never creates an idempotency record.
     check_may_create(caller)
-    order = create_order(orders(), clock, order_ids, owner_id=caller.subject, request=request)
-    return order_response(order, 201)
+
+    def create() -> Response[str]:
+        order = create_order(orders(), clock, order_ids, owner_id=caller.subject, request=request)
+        return order_response(order, 201)
+
+    # Step 7: a retry with the same Idempotency-Key replays the first 201 (ADR 0009).
+    return run_once(
+        create,
+        store=idempotency_store(),
+        lambda_context=app.lambda_context,
+        owner_id=caller.subject,
+        key=idempotency_key(app.current_event.headers),
+        request=request,
+    )
 
 
 @app.get("/api/v1/orders/<order_id>")
@@ -133,6 +161,22 @@ def permission_denied(error: PermissionDenied) -> Response[str]:
 @app.exception_handler(OrderNotFound)  # type: ignore[untyped-decorator]  # Powertools leaves it untyped
 def order_not_found(_: OrderNotFound) -> Response[str]:
     return problem_response(ProblemType.NOT_FOUND)
+
+
+@app.exception_handler(IdempotencyValidationError)  # type: ignore[untyped-decorator]
+def idempotency_key_mismatch(_: IdempotencyValidationError) -> Response[str]:
+    return problem_response(
+        ProblemType.IDEMPOTENCY_KEY_MISMATCH,
+        "This Idempotency-Key was already used with a different request body",
+    )
+
+
+@app.exception_handler(IdempotencyAlreadyInProgressError)  # type: ignore[untyped-decorator]
+def idempotent_request_in_progress(_: IdempotencyAlreadyInProgressError) -> Response[str]:
+    return problem_response(
+        ProblemType.CONFLICT,
+        "A request with this Idempotency-Key is still in progress; retry it later",
+    )
 
 
 @app.exception_handler(MissingCallerIdentity)  # type: ignore[untyped-decorator]

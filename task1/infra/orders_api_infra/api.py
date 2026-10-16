@@ -37,6 +37,7 @@ class Api(Construct):
         config: EnvConfig,
         authorizer_environment: dict[str, str],
         orders_table: dynamodb.ITable,
+        idempotency_table: dynamodb.ITable,
     ) -> None:
         super().__init__(scope, construct_id)
         self._config = config
@@ -53,12 +54,27 @@ class Api(Construct):
             "ApiFunction",
             handler=f"{HANDLERS}.api_handler.handler",
             timeout_seconds=10,
-            environment={"ORDERS_TABLE": orders_table.table_name},
+            environment={
+                "ORDERS_TABLE": orders_table.table_name,
+                "IDEMPOTENCY_TABLE": idempotency_table.table_name,
+            },
         )
         self.api_function.add_to_role_policy(
             iam.PolicyStatement(
                 actions=["dynamodb:GetItem", "dynamodb:PutItem"],
                 resources=[orders_table.table_arn],
+            )
+        )
+        # Exactly the calls Powertools Idempotency makes, on this one table (ADR 0012).
+        self.api_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                ],
+                resources=[idempotency_table.table_arn],
             )
         )
 

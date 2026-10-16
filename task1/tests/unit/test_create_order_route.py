@@ -8,13 +8,19 @@ import pytest
 from orders_api.adapters.inbound import api_handler
 from orders_api.adapters.inbound.request_checks import MAX_BODY_BYTES
 from tests.unit.events import (
+    NOBODY,
     VALID_ORDER,
     create_order_event,
     get_order_event,
     headers_of,
     invoke,
 )
-from tests.unit.fakes import FixedClock, InMemoryOrderRepository, SequentialIds
+from tests.unit.fakes import (
+    FixedClock,
+    InMemoryIdempotencyStore,
+    InMemoryOrderRepository,
+    SequentialIds,
+)
 
 NEW_ID = "0e6bb2c6-0000-4000-8000-0000000000aa"
 
@@ -116,3 +122,17 @@ def test_access_line_names_the_created_order(log_output: io.StringIO) -> None:
     assert access["status"] == 201
     assert access["orderId"] == NEW_ID
     assert access["sub"] == "alice-sub"
+
+
+def test_a_caller_without_permission_never_leaves_an_idempotency_record(
+    idempotency_store: InMemoryIdempotencyStore,
+) -> None:
+    event = create_order_event(authorizer=NOBODY)
+    event["headers"]["Idempotency-Key"] = "retry-1"
+    event["multiValueHeaders"]["Idempotency-Key"] = ["retry-1"]
+
+    response = invoke(event)
+
+    assert response["statusCode"] == 403
+    assert idempotency_store.records == {}
+    assert idempotency_store.saved_in_progress == []

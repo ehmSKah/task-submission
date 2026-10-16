@@ -1,19 +1,11 @@
 """A signed-in user creates an order through the real path (ADR 0004)."""
 
 from collections.abc import Callable
-from typing import Any
 
 import httpx
-import jwt
 
 from tests.integration.assertions import assert_contract_headers
-from tests.integration.requests import NEW_ORDER, bearer
-
-
-def subject_of(token: str) -> str:
-    """The token's `sub`; the authorizer has verified it, the test only reads it."""
-    claims: dict[str, Any] = jwt.decode(token, options={"verify_signature": False})
-    return str(claims["sub"])
+from tests.integration.requests import NEW_ORDER, bearer, subject_of
 
 
 def test_alice_creates_an_order_and_reads_it_back(
