@@ -32,7 +32,7 @@ The API is described **design-first** in one OpenAPI document. That document is 
 - **No `nullable`.** It is OpenAPI-specific, not draft-04.
 - **`pattern` instead of `format`** for anything that must be enforced. Draft-04 validators generally don't enforce `format`.
 - **`additionalProperties: false` on request and response objects.** A new response field therefore needs a spec change first: we own both sides of the contract.
-- **`$ref` only to `#/components/schemas/…`.**
+- **Inside schemas, `$ref` only to `#/components/schemas/…`.** Those are the references API Gateway turns into models and `fastjsonschema` resolves. Responses and headers may reference `#/components/responses` and `#/components/headers`, which validators never see.
 
 **Guards.**
 - **CI lints the document** with `openapi-spec-validator` and Spectral, including custom rules for the schema rules above.

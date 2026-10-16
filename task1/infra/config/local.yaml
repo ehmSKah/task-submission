@@ -1,0 +1,10 @@
+# Local development on the Floci emulator (ADR 0010).
+name: local
+target: floci
+account: "000000000000"
+region: us-east-1
+stageName: live
+lambdaArchitecture: host
+logLevel: DEBUG
+logRetentionDays: 7
+removalPolicy: destroy

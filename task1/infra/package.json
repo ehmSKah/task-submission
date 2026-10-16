@@ -1,0 +1,8 @@
+{
+  "name": "orders-api-infra",
+  "private": true,
+  "description": "Pins the AWS CDK CLI used to deploy the Orders API (ADR 0010).",
+  "devDependencies": {
+    "aws-cdk": "2.1145.0"
+  }
+}

@@ -1,0 +1,123 @@
+openapi: 3.0.3
+info:
+  title: Orders API
+  version: 1.0.0
+  description: >-
+    Orders REST API with Amazon Cognito authentication, role-based authorization and rate
+    limiting. Every error is an RFC 9457 Problem Details document.
+tags:
+  - name: health
+paths:
+  /api/v1/health:
+    get:
+      tags: [health]
+      operationId: getHealth
+      summary: Liveness check
+      description: Shallow check that the API function runs. Needs no token and is not rate limited.
+      security: []
+      responses:
+        "200":
+          description: The API function is running.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+components:
+  headers:
+    X-Request-Id:
+      description: API Gateway's request id; also in every error body and in the logs.
+      schema:
+        type: string
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+    Problem:
+      description: RFC 9457 Problem Details.
+      type: object
+      additionalProperties: false
+      required: [type, title]
+      properties:
+        type:
+          type: string
+          description: >-
+            The error kind. `about:blank` marks a generic error produced by the gateway itself.
+          enum:
+            - urn:problem:orders-api:validation-error
+            - urn:problem:orders-api:unauthorized
+            - urn:problem:orders-api:forbidden
+            - urn:problem:orders-api:not-found
+            - urn:problem:orders-api:conflict
+            - urn:problem:orders-api:precondition-failed
+            - urn:problem:orders-api:payload-too-large
+            - urn:problem:orders-api:unsupported-media-type
+            - urn:problem:orders-api:idempotency-key-mismatch
+            - urn:problem:orders-api:rate-limited
+            - urn:problem:orders-api:internal-error
+            - urn:problem:orders-api:bad-gateway
+            - urn:problem:orders-api:service-unavailable
+            - urn:problem:orders-api:gateway-timeout
+            - about:blank
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        requestId:
+          type: string
+  responses:
+    NotFound:
+      description: Unknown path or method, or a resource the caller can't see.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InternalError:
+      description: Unexpected error. The body contains no internals.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    BadGateway:
+      description: The API function failed.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    GatewayTimeout:
+      description: The API function did not answer in time.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
