@@ -12,8 +12,8 @@ All AWS resources are defined in **one AWS CDK (Python) stack built from three c
 
 | Construct | Resources |
 |---|---|
-| `Identity` | Cognito user pool; **public** app client (no client secret; auth flows `ALLOW_USER_PASSWORD_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH`; access tokens valid for 15 min); groups `USER`, `ORDER_MANAGER`, `ADMIN` |
-| `Data` | DynamoDB tables `orders` (GSIs `byOwner`, `byCreated`), idempotency (TTL), rate limits (TTL) ([ADR 0005](0005-dynamodb-storage.md), [ADR 0006](0006-rate-limiting.md)); SSM parameter `/orders-api/<env>/rate-limits`; Secrets Manager secret `/orders-api/<env>/seed-users` |
+| `Identity` | Cognito user pool; **public** app client (no client secret; auth flows `ALLOW_USER_PASSWORD_AUTH`, `ALLOW_REFRESH_TOKEN_AUTH`; access tokens valid for 15 min); groups `USER`, `ORDER_MANAGER`, `ADMIN`; Secrets Manager secret `/orders-api/<env>/seed-users` (the demo users belong to identity) |
+| `Data` | DynamoDB tables `orders` (GSIs `byOwner`, `byCreated`), idempotency (TTL), rate limits (TTL) ([ADR 0005](0005-dynamodb-storage.md), [ADR 0006](0006-rate-limiting.md)); SSM parameter `/orders-api/<env>/rate-limits` |
 | `Api` | Authorizer and API functions from one code bundle ([ADR 0009](0009-code-structure.md)); `SpecRestApi` from the OpenAPI document with the AWS extensions added at synth ([ADR 0008](0008-openapi-contract.md)), edge-optimized; Gateway Responses ([ADR 0007](0007-validation-and-errors.md)); explicit Lambda invoke permissions; regional WAF web ACL with the rate-based rule (ADR 0006) |
 
 - **In production, data is protected without a separate stack:**
@@ -89,7 +89,7 @@ Rules:
 | `nobody@example.test` | none | a valid token without a role → `403` |
 
 - **Steps:** `AdminCreateUser` (no invitation), `AdminSetUserPassword` (permanent), `AdminAddUserToGroup`.
-- **Passwords** come from the generated secret.
+- **Passwords** come from the generated secret: one generated password shared by the demo users. Secrets Manager's generator produces a single value per secret, and separate passwords per demo user would add secrets without protecting anything.
 - **Idempotent:** existing users are left alone.
 - **Guarded:** the script **refuses to run when the environment has `seedUsers: false`**.
 
@@ -112,7 +112,7 @@ Rules:
 
 - **Local and AWS bundles differ in architecture.** Local bundles target the host; AWS bundles target arm64. CI builds each for its target.
 - **Test suites that change the rate-limit parameter run one after another** against the single local deployment.
-- **Floci specifics live in the `local` config and the Makefile:** id-pinning tags, `--method=direct`, the URL lookup, `FLOCI_HOSTNAME`, the token-validity flag. The CDK code itself stays target-neutral.
+- **Floci specifics live in the `local` config and the Makefile:** the pinned pool id and issuer base (`flociUserPoolId`, `flociIssuerBaseUrl`), `--method=direct`, the URL lookup, `FLOCI_HOSTNAME`, the token-validity flag. The CDK code only reacts to whether those settings are present.
 - **Password sign-in** (`USER_PASSWORD_AUTH`) is for the demo and the tests. Real users would sign in through the hosted login with authorization code + PKCE, or SRP.
 - **Deploying to AWS** is supported: `aws-dev` can be deployed, tested with the same suites and destroyed, either locally or through a manually triggered workflow ([ADR 0011](0011-testing-strategy.md)). It is optional and not required for the local deliverable.
 - **To verify while building:**

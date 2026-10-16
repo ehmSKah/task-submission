@@ -26,8 +26,9 @@ make doctor
 ## Quick start
 
 ```sh
-make up                 # start Floci, deploy the stack, write build/endpoints.json
+make up                 # start Floci, deploy the stack, seed demo users, write build/endpoints.json
 make test               # unit tests
+make test-adapter       # DynamoDB adapter against Floci
 make test-integration   # HTTP tests against the deployed stack
 make down               # stop and remove everything
 ```
@@ -36,8 +37,14 @@ make down               # stop and remove everything
 `http://localhost:4566/restapis/<id>/live/_user_request_`. Then:
 
 ```sh
-curl "$(jq -r .apiUrl build/endpoints.json)/api/v1/health"
+API=$(jq -r .apiUrl build/endpoints.json)
+curl "$API/api/v1/health"
+curl -H "Authorization: Bearer $(make -s token ROLE=user)" "$API/api/v1/orders/<id>"
 ```
+
+`make token` prints an access token for a demo user: `ROLE=user|manager|admin|none`, or
+`USER_NAME=alice|bob|manager|admin|nobody`. The demo users' password is generated into Secrets
+Manager (`/orders-api/local/seed-users`); it never appears in the repository.
 
 Other targets: `make lint` (Ruff, mypy, import-linter, cdk-nag), `make docs` (read-only Swagger
 UI on http://localhost:8080). `make help` lists them all.
