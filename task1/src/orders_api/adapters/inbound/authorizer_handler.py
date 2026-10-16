@@ -9,7 +9,7 @@ from typing import Any, Protocol
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
-from orders_api.auth.oidc import OidcKeySource
+from orders_api.auth.oidc import JwksCache
 from orders_api.auth.tokens import Identity, InvalidToken, TokenValidator, ValidatorConfig
 from orders_api.domain.access import roles_from_groups
 
@@ -27,7 +27,7 @@ def validator() -> Validator:
     global _validator
     if _validator is None:
         issuer = os.environ["TOKEN_ISSUER"]
-        _validator = TokenValidator(ValidatorConfig(issuer=issuer), OidcKeySource(issuer))
+        _validator = TokenValidator(ValidatorConfig(issuer=issuer), JwksCache(issuer))
     return _validator
 
 
