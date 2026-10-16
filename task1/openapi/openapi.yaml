@@ -139,7 +139,9 @@ components:
         pattern: '^"[0-9]+"$'
   schemas:
     CreateOrderRequest:
-      description: What a client sends to create an order. Everything else is set by the API.
+      description: >-
+        What a client sends to create an order. Everything else is set by the API. Request
+        schemas are self-contained (no `$ref`), so every gateway can use them as one model.
       type: object
       additionalProperties: false
       required: [currency, items]
@@ -152,24 +154,22 @@ components:
           minItems: 1
           maxItems: 50
           items:
-            $ref: "#/components/schemas/CreateLineItemRequest"
-    CreateLineItemRequest:
-      type: object
-      additionalProperties: false
-      required: [sku, quantity, unitPrice]
-      properties:
-        sku:
-          type: string
-          pattern: "^[A-Z0-9][A-Z0-9-]{1,31}$"
-        quantity:
-          type: integer
-          minimum: 1
-          maximum: 999
-        unitPrice:
-          type: integer
-          minimum: 0
-          maximum: 1000000
-          description: Integer minor units of the order's currency (1999 = 19.99).
+            type: object
+            additionalProperties: false
+            required: [sku, quantity, unitPrice]
+            properties:
+              sku:
+                type: string
+                pattern: "^[A-Z0-9][A-Z0-9-]{1,31}$"
+              quantity:
+                type: integer
+                minimum: 1
+                maximum: 999
+              unitPrice:
+                type: integer
+                minimum: 0
+                maximum: 1000000
+                description: Integer minor units of the order's currency (1999 = 19.99).
     Order:
       type: object
       additionalProperties: false

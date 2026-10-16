@@ -34,6 +34,23 @@ def all_schemas() -> list[tuple[str, dict[str, Any]]]:
     ]
 
 
+def request_body_models() -> list[str]:
+    return [
+        operation["requestBody"]["content"]["application/json"]["schema"]["$ref"].split("/")[-1]
+        for path_item in load_spec()["paths"].values()
+        for operation in path_item.values()
+        if isinstance(operation, dict) and "requestBody" in operation
+    ]
+
+
+@pytest.mark.parametrize("model", request_body_models())
+def test_request_body_schemas_are_self_contained(model: str) -> None:
+    """Floci 2.3.0's validator rejects every body whose model uses a `$ref` (verification.md)."""
+    schema = load_spec()["components"]["schemas"][model]
+
+    assert all("$ref" not in found for _, found in subschemas(schema, model)), model
+
+
 @pytest.mark.parametrize(("where", "schema"), all_schemas())
 def test_schemas_follow_the_draft_04_safe_rules(where: str, schema: dict[str, Any]) -> None:
     """One schema serves OpenAPI, API Gateway models and fastjsonschema (ADR 0008)."""

@@ -7,7 +7,7 @@ extensions that make the same file define the gateway's routes and error respons
 import copy
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -23,6 +23,30 @@ HTTP_METHODS = {"get", "put", "post", "delete", "options", "head", "patch"}
 BEARER_SCHEME = "bearerAuth"
 AUTHORIZER_RESULT_TTL_SECONDS = 300
 
+# Bodies are validated against their schema at the gateway, so an invalid body never invokes the
+# API function. Parameters are only checked for presence there; their format is checked in code
+# (ADR 0007).
+BODY_AND_PARAMETERS = "body-and-parameters"
+PARAMETERS = "parameters"
+REQUEST_VALIDATORS = {
+    BODY_AND_PARAMETERS: {"validateRequestBody": True, "validateRequestParameters": True},
+    PARAMETERS: {"validateRequestBody": False, "validateRequestParameters": True},
+}
+
+Target = Literal["floci", "aws"]
+
+# The request validator's message goes into `detail`. AWS Gateway Response templates allow
+# variable substitution only, no VTL, and AWS inserts this message JSON-escaped. Floci 2.3.0
+# inserts it raw (an enum list alone carries quotes) but evaluates VTL, so there it is escaped
+# explicitly; `escapeJavaScript` also escapes `'`, which JSON doesn't allow, so that is undone.
+# See docs/verification.md.
+VALIDATOR_MESSAGE = "$context.error.validationErrorString"
+VALIDATOR_MESSAGE_IN_JSON: dict[Target, str] = {
+    "aws": VALIDATOR_MESSAGE,
+    "floci": f"$util.escapeJavaScript({VALIDATOR_MESSAGE})" + """.replaceAll("\\\\'","'")""",
+}
+_DETAIL_PLACEHOLDER = "__validator_message__"
+
 
 @dataclass(frozen=True)
 class GatewayError:
@@ -31,9 +55,13 @@ class GatewayError:
 
     problem: ProblemType | None
     extra_headers: dict[str, str] = field(default_factory=dict)
+    validator_message: bool = False
+    """Whether `detail` carries the request validator's message."""
 
 
 GATEWAY_ERRORS: dict[str, GatewayError] = {
+    "BAD_REQUEST_BODY": GatewayError(ProblemType.VALIDATION_ERROR, validator_message=True),
+    "BAD_REQUEST_PARAMETERS": GatewayError(ProblemType.VALIDATION_ERROR, validator_message=True),
     "MISSING_AUTHENTICATION_TOKEN": GatewayError(ProblemType.NOT_FOUND),
     # One generic 401 for every rejected token; the reason is only logged (ADR 0003).
     "UNAUTHORIZED": GatewayError(
@@ -50,17 +78,22 @@ GATEWAY_ERRORS: dict[str, GatewayError] = {
 }
 
 
-def _problem_template(problem: ProblemType | None) -> str:
-    if problem is None:
+def _problem_template(error: GatewayError, target: Target) -> str:
+    if error.problem is None:
         # $context.error.messageString is already a quoted JSON string.
         return (
             '{"type":"about:blank","title":$context.error.messageString,'
             '"requestId":"$context.requestId"}'
         )
-    return json.dumps(problem_body(problem, request_id="$context.requestId"), separators=(",", ":"))
+    detail = _DETAIL_PLACEHOLDER if error.validator_message else None
+    body = problem_body(error.problem, detail=detail, request_id="$context.requestId")
+    # Spliced in after encoding, because json.dumps would escape the expression's own quotes.
+    return json.dumps(body, separators=(",", ":")).replace(
+        _DETAIL_PLACEHOLDER, VALIDATOR_MESSAGE_IN_JSON[target]
+    )
 
 
-def _gateway_response(error: GatewayError) -> dict[str, Any]:
+def _gateway_response(error: GatewayError, target: Target) -> dict[str, Any]:
     static_headers = {**SECURITY_HEADERS, **error.extra_headers}
     headers = {
         f"gatewayresponse.header.{name}": f"'{value}'" for name, value in static_headers.items()
@@ -69,7 +102,7 @@ def _gateway_response(error: GatewayError) -> dict[str, Any]:
     headers[f"gatewayresponse.header.{REQUEST_ID_HEADER}"] = "context.requestId"
     response: dict[str, Any] = {
         "responseParameters": headers,
-        "responseTemplates": {"application/json": _problem_template(error.problem)},
+        "responseTemplates": {"application/json": _problem_template(error, target)},
     }
     if error.problem is not None:
         response["statusCode"] = str(error.problem.status)
@@ -102,9 +135,9 @@ def _lambda_authorizer(authorizer_uri: str) -> dict[str, Any]:
 
 
 def with_aws_extensions(
-    spec: dict[str, Any], *, api_integration_uri: str, authorizer_uri: str
+    spec: dict[str, Any], *, api_integration_uri: str, authorizer_uri: str, target: Target
 ) -> dict[str, Any]:
-    """Return a copy of `spec` with the API Gateway extensions added."""
+    """Return a copy of `spec` with the API Gateway extensions added for `target`."""
     definition = copy.deepcopy(spec)
     definition["components"]["securitySchemes"][BEARER_SCHEME] = _lambda_authorizer(authorizer_uri)
     for path_item in definition["paths"].values():
@@ -116,7 +149,11 @@ def with_aws_extensions(
                     "uri": api_integration_uri,
                     "passthroughBehavior": "when_no_match",
                 }
+                operation["x-amazon-apigateway-request-validator"] = (
+                    BODY_AND_PARAMETERS if "requestBody" in operation else PARAMETERS
+                )
+    definition["x-amazon-apigateway-request-validators"] = copy.deepcopy(REQUEST_VALIDATORS)
     definition["x-amazon-apigateway-gateway-responses"] = {
-        name: _gateway_response(error) for name, error in GATEWAY_ERRORS.items()
+        name: _gateway_response(error, target) for name, error in GATEWAY_ERRORS.items()
     }
     return definition

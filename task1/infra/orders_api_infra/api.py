@@ -71,6 +71,7 @@ class Api(Construct):
                     load_spec(),
                     api_integration_uri=self._invocation_uri(self.api_function),
                     authorizer_uri=self._invocation_uri(self.authorizer_function),
+                    target=config.target,
                 )
             ),
             endpoint_types=[apigateway.EndpointType.EDGE],

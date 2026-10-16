@@ -3,16 +3,19 @@ import json
 from typing import Any
 
 from orders_api.adapters.inbound.http_headers import SECURITY_HEADERS
-from orders_api_infra.openapi_extensions import load_spec, with_aws_extensions
+from orders_api_infra.openapi_extensions import Target, load_spec, with_aws_extensions
 from orders_api_infra.paths import SPEC_PATH
 
 LAMBDA_URI = "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/fn/invocations"
 AUTHORIZER_URI = "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/auth/invocations"
 
 
-def extended(spec: dict[str, Any] | None = None) -> dict[str, Any]:
+def extended(spec: dict[str, Any] | None = None, target: Target = "aws") -> dict[str, Any]:
     return with_aws_extensions(
-        spec or load_spec(), api_integration_uri=LAMBDA_URI, authorizer_uri=AUTHORIZER_URI
+        spec or load_spec(),
+        api_integration_uri=LAMBDA_URI,
+        authorizer_uri=AUTHORIZER_URI,
+        target=target,
     )
 
 
@@ -102,6 +105,78 @@ def test_rejected_tokens_get_a_problem_401_with_www_authenticate() -> None:
     assert params["gatewayresponse.header.WWW-Authenticate"] == "'Bearer error=\"invalid_token\"'"
     body = json.loads(unauthorized["responseTemplates"]["application/json"])
     assert body["type"] == "urn:problem:orders-api:unauthorized"
+
+
+def operations_by_route(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        f"{method.upper()} {path}": operation
+        for path, path_item in spec["paths"].items()
+        for method, operation in path_item.items()
+        if method in {"get", "post", "put", "patch", "delete"}
+    }
+
+
+def test_request_validators_check_bodies_and_parameters() -> None:
+    validators = extended()["x-amazon-apigateway-request-validators"]
+
+    assert validators == {
+        "body-and-parameters": {"validateRequestBody": True, "validateRequestParameters": True},
+        "parameters": {"validateRequestBody": False, "validateRequestParameters": True},
+    }
+
+
+def test_operations_with_a_body_validate_it_at_the_gateway() -> None:
+    routes = operations_by_route(extended())
+
+    assert "requestBody" in routes["POST /api/v1/orders"]
+    for route, operation in routes.items():
+        expected = "body-and-parameters" if "requestBody" in operation else "parameters"
+        assert operation["x-amazon-apigateway-request-validator"] == expected, route
+
+
+VALIDATION_RESPONSES = ("BAD_REQUEST_BODY", "BAD_REQUEST_PARAMETERS")
+FLOCI_ESCAPED_MESSAGE = (
+    "$util.escapeJavaScript($context.error.validationErrorString)" """.replaceAll("\\\\'","'")"""
+)
+
+
+def validation_templates(target: Target) -> dict[str, str]:
+    responses = extended(target=target)["x-amazon-apigateway-gateway-responses"]
+    for name in VALIDATION_RESPONSES:
+        assert responses[name]["statusCode"] == "400"
+    return {
+        name: responses[name]["responseTemplates"]["application/json"]
+        for name in VALIDATION_RESPONSES
+    }
+
+
+def test_gateway_validation_errors_are_problem_400s_with_the_validator_message() -> None:
+    for template in validation_templates("aws").values():
+        # AWS substitutes variables only (no VTL) and inserts this message JSON-escaped.
+        assert '"detail":"$context.error.validationErrorString"' in template
+        body = json.loads(template)
+        assert body["type"] == "urn:problem:orders-api:validation-error"
+        assert body["status"] == 400
+        assert body["requestId"] == "$context.requestId"
+
+
+def test_on_floci_the_validator_message_is_escaped_with_vtl() -> None:
+    """Floci inserts the raw message, which may contain quotes, but evaluates VTL."""
+    message = """$: property 'say "hi" \\o/' is not defined in the schema"""
+    rendered_by_vtl = json.dumps(message)[1:-1]
+
+    for template in validation_templates("floci").values():
+        assert f'"detail":"{FLOCI_ESCAPED_MESSAGE}"' in template
+        body = json.loads(template.replace(FLOCI_ESCAPED_MESSAGE, rendered_by_vtl))
+        assert body["detail"] == message
+        assert body["type"] == "urn:problem:orders-api:validation-error"
+
+
+def test_only_the_validation_responses_differ_between_targets() -> None:
+    aws = extended(target="aws")["x-amazon-apigateway-gateway-responses"]
+    floci = extended(target="floci")["x-amazon-apigateway-gateway-responses"]
+
+    assert {name for name in aws if aws[name] != floci[name]} == set(VALIDATION_RESPONSES)
 
 
 def test_authorizer_failures_are_problem_503s() -> None:
