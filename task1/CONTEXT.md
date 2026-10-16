@@ -22,12 +22,32 @@ _Avoid_: Right, privilege, scope (scopes describe what a client application may 
 
 ## Orders
 
+**Order**:
+A request by its owner for a set of line items in one currency, tracked through a status lifecycle.
+_Avoid_: Purchase, transaction, basket
+
+**Line Item**:
+One product reference (SKU) on an order, with a quantity and the unit price the owner was quoted.
+_Avoid_: Position, entry, product
+
+**Order Total**:
+The sum of quantity × unit price over all line items, always computed by the API, never supplied by a client.
+_Avoid_: Amount, price
+
+**Order Status**:
+Where an order is in its lifecycle: `PENDING`, `CONFIRMED`, `SHIPPED`, `DELIVERED` or `CANCELLED`. Moves forward only; `DELIVERED` and `CANCELLED` are final.
+_Avoid_: State, stage
+
+**Status Change**:
+Moving an order from one status to an allowed next status. Requesting the status an order already has changes nothing.
+_Avoid_: Transition (fine in code, not in conversation), update
+
 **Owner**:
 The person who created an order, identified by their subject (`sub`) at the identity provider. Fixed for the order's lifetime.
 _Avoid_: Customer, creator, user (ambiguous with the `USER` role)
 
 **Cancellation**:
-A business status change that ends an order's lifecycle while keeping its record. Any owner may cancel their own order.
+The status change to `CANCELLED`, possible until an order ships. Ends the order's lifecycle while keeping its record. Any owner may cancel their own order.
 _Avoid_: Delete, remove
 
 **Deletion**:
