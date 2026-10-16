@@ -41,7 +41,7 @@ Each of the assignment's five required categories (successful requests, invalid 
 | Expired | Real, from a test-fixture client with a few-seconds lifetime (Floci only) |
 
 - **Every forged or expired token is new to the authorizer,** so its 5-minute cache never hides a result ([ADR 0003](0003-access-token-validation.md)).
-- **The fixture pool and clients exist only where the environment sets `testFixtures: true`.** The foreign pool and the untrusted client are deliberately not on the authorizer's allow-list. The **short-lived client is**: otherwise its tokens would fail the client check whether expired or not, and the expiry test would prove nothing. A control token from the same client is accepted, so expiry is the only possible cause of the second `401`.
+- **The fixture pool and clients exist only where the environment sets `testFixtures: true`.** The foreign pool and the untrusted client are deliberately not on the authorizer's allow-list. The **short-lived client is**: the expiry test first shows that a fresh token from that client is accepted, which needs a trusted client, and then that the same client's expired token is rejected. That control makes expiry the only possible cause of the second `401`.
 
 **Determinism and isolation.**
 - **Rate limits:**
