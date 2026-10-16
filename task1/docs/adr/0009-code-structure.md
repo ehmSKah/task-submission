@@ -74,7 +74,7 @@ task1/
 **Packaging.**
 - **One code bundle, two functions:** the authorizer (`orders_api.adapters.inbound.authorizer_handler.handler`) and the API function (`orders_api.adapters.inbound.api_handler.handler`).
 - **Dependencies are bundled in the zip, not a layer.** That gives one artefact per deploy, with versions pinned by `uv.lock`.
-- **Runtime:** **`arm64`**, set explicitly for both the build and the function definition, on **Python 3.13**.
+- **Runtime:** Python 3.13. The architecture is set explicitly for both the build and the function definition: **`arm64` on AWS, the host's architecture locally**, because Floci runs the host's architecture ([ADR 0010](0010-infrastructure-and-environments.md)).
 - **`openapi.yaml` ships inside the bundle,** so the function validates against the same file the gateway was built from.
 
 ## Considered options
@@ -86,7 +86,7 @@ task1/
 - **Idempotency on the whole handler (`@idempotent`).** Its key can't combine the owner's `sub` with the header, and it would apply to every route.
 - **A separate, slimmer bundle per function.** The authorizer only needs `auth/` and PyJWT, so it would cold-start faster, at the cost of two build pipelines. This is the optimisation if authorizer cold starts show up in latency.
 - **Lambda layers** (AWS's public Powertools layer, or our own). The public layer doesn't exist on Floci, and our own layer adds versioning work and can drift from the function code.
-- **`x86_64`.** CDK's default, but the host here is arm64, and Floci runs the host's architecture, so bundled native wheels (`cryptography`) would fail to import. On AWS, arm64 is also cheaper per millisecond.
+- **`x86_64` on AWS.** CDK's default, but arm64 is cheaper per millisecond on AWS. Locally the bundle follows the host, because Floci runs the host's architecture and mismatched native wheels (`cryptography`) fail to import.
 
 ## Consequences
 
