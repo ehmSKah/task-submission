@@ -65,3 +65,18 @@ def headers_of(response: dict[str, Any]) -> dict[str, str]:
     for key, values in (response.get("multiValueHeaders") or {}).items():
         merged[key] = values[-1]
     return merged
+
+
+def problem_of(
+    response: dict[str, Any], status: int | None = None, slug: str | None = None
+) -> dict[str, Any]:
+    """A Problem Details response's body, after checking its contract (ADR 0007)."""
+    if status is not None:
+        assert response["statusCode"] == status
+    assert headers_of(response)["Content-Type"] == "application/problem+json"
+    body: dict[str, Any] = json.loads(response["body"])
+    assert body["status"] == response["statusCode"]
+    assert body["requestId"] == "gw-req-1"
+    if slug is not None:
+        assert body["type"] == f"urn:problem:orders-api:{slug}"
+    return body

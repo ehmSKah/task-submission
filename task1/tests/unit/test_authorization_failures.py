@@ -2,8 +2,6 @@
 
 import io
 import json
-from datetime import UTC, datetime
-from typing import Any
 
 import pytest
 
@@ -20,8 +18,9 @@ from tests.unit.events import (
     get_order_event,
     headers_of,
     invoke,
+    problem_of,
 )
-from tests.unit.fakes import FixedClock, InMemoryOrderRepository, SequentialIds
+from tests.unit.fakes import InMemoryOrderRepository, WireApi
 
 ALICES_ORDER = an_order(owner_id="alice-sub")
 UNKNOWN_ID = "0e6bb2c6-0000-4000-8000-000000000000"
@@ -39,26 +38,13 @@ class UntouchableRepository(InMemoryOrderRepository):
 
 
 @pytest.fixture(autouse=True)
-def repository(monkeypatch: pytest.MonkeyPatch) -> InMemoryOrderRepository:
-    fake = InMemoryOrderRepository([ALICES_ORDER])
-    monkeypatch.setattr(api_handler, "_orders", fake)
-    monkeypatch.setattr(api_handler, "clock", FixedClock(datetime(2026, 10, 17, 9, 30, tzinfo=UTC)))
-    monkeypatch.setattr(api_handler, "order_ids", SequentialIds([NEW_ID]))
-    return fake
+def repository(wire_api: WireApi) -> InMemoryOrderRepository:
+    return wire_api([ALICES_ORDER], ids=[NEW_ID])
 
 
 @pytest.fixture
 def untouchable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(api_handler, "_orders", UntouchableRepository())
-
-
-def problem_of(response: dict[str, Any], status: int, slug: str) -> dict[str, Any]:
-    assert response["statusCode"] == status
-    assert headers_of(response)["Content-Type"] == "application/problem+json"
-    body: dict[str, Any] = json.loads(response["body"])
-    assert body["type"] == f"urn:problem:orders-api:{slug}"
-    assert body["status"] == status
-    return body
 
 
 def with_roles(roles: str) -> dict[str, str]:

@@ -1,7 +1,7 @@
 """In-memory stand-ins for the ports, so unit tests need no emulator (ADR 0011)."""
 
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 
 from aws_lambda_powertools.utilities.idempotency import BasePersistenceLayer
@@ -95,3 +95,7 @@ class InMemoryIdempotencyStore(BasePersistenceLayer):
                 in_progress_expiry_timestamp=int(time.time() * 1000) + 60_000,
                 payload_hash=record.payload_hash,
             )
+
+
+WireApi = Callable[..., InMemoryOrderRepository]
+"""The `wire_api` fixture: (orders=(), *, ids=()) -> the repository the API function now uses."""

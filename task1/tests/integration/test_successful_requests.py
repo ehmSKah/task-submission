@@ -17,10 +17,10 @@ def test_every_role_creates_an_order_it_owns_and_reads_it_back(
     api: httpx.Client,
     token_for: Callable[[str], str],
     subject_for: Callable[[str], str],
-    order_of: Callable[[str], dict[str, Any]],
+    create_order_as: Callable[[str], dict[str, Any]],
     user: str,
 ) -> None:
-    order = order_of(user)
+    order = create_order_as(user)
 
     assert order["ownerId"] == subject_for(user)
 
@@ -36,10 +36,10 @@ def test_staff_read_alice_s_order(
     api: httpx.Client,
     token_for: Callable[[str], str],
     subject_for: Callable[[str], str],
-    order_of: Callable[[str], dict[str, Any]],
+    create_order_as: Callable[[str], dict[str, Any]],
     staff: str,
 ) -> None:
-    alices = order_of("alice")
+    alices = create_order_as("alice")
 
     response = api.get(f"/api/v1/orders/{alices['id']}", headers=bearer(token_for(staff)))
 

@@ -1,11 +1,9 @@
 import io
 import json
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
-from orders_api.adapters.inbound import api_handler
 from orders_api.adapters.inbound.request_checks import MAX_BODY_BYTES
 from tests.unit.events import (
     NOBODY,
@@ -14,24 +12,20 @@ from tests.unit.events import (
     get_order_event,
     headers_of,
     invoke,
+    problem_of,
 )
 from tests.unit.fakes import (
-    FixedClock,
     InMemoryIdempotencyStore,
     InMemoryOrderRepository,
-    SequentialIds,
+    WireApi,
 )
 
 NEW_ID = "0e6bb2c6-0000-4000-8000-0000000000aa"
 
 
 @pytest.fixture(autouse=True)
-def repository(monkeypatch: pytest.MonkeyPatch) -> InMemoryOrderRepository:
-    fake = InMemoryOrderRepository()
-    monkeypatch.setattr(api_handler, "_orders", fake)
-    monkeypatch.setattr(api_handler, "clock", FixedClock(datetime(2026, 10, 17, 9, 30, tzinfo=UTC)))
-    monkeypatch.setattr(api_handler, "order_ids", SequentialIds([NEW_ID]))
-    return fake
+def repository(wire_api: WireApi) -> InMemoryOrderRepository:
+    return wire_api(ids=[NEW_ID])
 
 
 def test_creates_the_order_for_the_caller_with_201_and_etag(
@@ -64,14 +58,6 @@ def test_created_order_reads_back_with_the_same_body_and_etag() -> None:
     assert read["statusCode"] == 200
     assert json.loads(read["body"]) == json.loads(created["body"])
     assert headers_of(read)["ETag"] == '"1"'
-
-
-def problem_of(response: dict[str, Any]) -> dict[str, Any]:
-    assert headers_of(response)["Content-Type"] == "application/problem+json"
-    body: dict[str, Any] = json.loads(response["body"])
-    assert body["status"] == response["statusCode"]
-    assert body["requestId"] == "gw-req-1"
-    return body
 
 
 @pytest.mark.parametrize(

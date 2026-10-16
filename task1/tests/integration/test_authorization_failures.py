@@ -22,9 +22,9 @@ def without_per_request_fields(problem: dict[str, Any]) -> dict[str, Any]:
 def test_bob_gets_the_same_404_for_alice_s_order_as_for_an_unknown_one(
     api: httpx.Client,
     token_for: Callable[[str], str],
-    order_of: Callable[[str], dict[str, Any]],
+    create_order_as: Callable[[str], dict[str, Any]],
 ) -> None:
-    alices = order_of("alice")
+    alices = create_order_as("alice")
     headers = bearer(token_for("bob"))
 
     foreign = api.get(f"/api/v1/orders/{alices['id']}", headers=headers)
@@ -45,10 +45,10 @@ def test_nobody_may_not_create_an_order(api: httpx.Client, token_for: Callable[[
 def test_nobody_may_not_read_an_order_whether_or_not_it_exists(
     api: httpx.Client,
     token_for: Callable[[str], str],
-    order_of: Callable[[str], dict[str, Any]],
+    create_order_as: Callable[[str], dict[str, Any]],
     existing: bool,
 ) -> None:
-    order_id = order_of("alice")["id"] if existing else UNKNOWN_ID
+    order_id = create_order_as("alice")["id"] if existing else UNKNOWN_ID
 
     response = api.get(f"/api/v1/orders/{order_id}", headers=bearer(token_for("nobody")))
 

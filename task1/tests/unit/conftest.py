@@ -1,11 +1,35 @@
 import io
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
+from datetime import UTC, datetime
 
 import pytest
 
 from orders_api.adapters.inbound import api_handler
-from tests.unit.fakes import InMemoryIdempotencyStore
+from orders_api.domain.order import Order
+from tests.unit.fakes import (
+    FixedClock,
+    InMemoryIdempotencyStore,
+    InMemoryOrderRepository,
+    SequentialIds,
+    WireApi,
+)
+
+NOW = datetime(2026, 10, 17, 9, 30, tzinfo=UTC)
+
+
+@pytest.fixture
+def wire_api(monkeypatch: pytest.MonkeyPatch) -> WireApi:
+    """Point the API function at an in-memory repository, a fixed clock and known ids."""
+
+    def wire(orders: Iterable[Order] = (), *, ids: Iterable[str] = ()) -> InMemoryOrderRepository:
+        repository = InMemoryOrderRepository(orders)
+        monkeypatch.setattr(api_handler, "_orders", repository)
+        monkeypatch.setattr(api_handler, "clock", FixedClock(NOW))
+        monkeypatch.setattr(api_handler, "order_ids", SequentialIds(list(ids)))
+        return repository
+
+    return wire
 
 
 @pytest.fixture

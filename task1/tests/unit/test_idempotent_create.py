@@ -2,7 +2,6 @@
 
 import json
 import time
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -12,10 +11,9 @@ from orders_api.adapters.inbound.idempotency import idempotency_key
 from tests.builders import FakeLambdaContext
 from tests.unit.events import ALICE, VALID_ORDER, create_order_event, headers_of, invoke
 from tests.unit.fakes import (
-    FixedClock,
     InMemoryIdempotencyStore,
     InMemoryOrderRepository,
-    SequentialIds,
+    WireApi,
 )
 
 FIRST_ID = "0e6bb2c6-0000-4000-8000-0000000000a1"
@@ -25,12 +23,8 @@ KEY = "retry-me-7f3a"
 
 
 @pytest.fixture(autouse=True)
-def repository(monkeypatch: pytest.MonkeyPatch) -> InMemoryOrderRepository:
-    fake = InMemoryOrderRepository()
-    monkeypatch.setattr(api_handler, "_orders", fake)
-    monkeypatch.setattr(api_handler, "clock", FixedClock(datetime(2026, 10, 17, 9, 30, tzinfo=UTC)))
-    monkeypatch.setattr(api_handler, "order_ids", SequentialIds([FIRST_ID, SECOND_ID]))
-    return fake
+def repository(wire_api: WireApi) -> InMemoryOrderRepository:
+    return wire_api(ids=[FIRST_ID, SECOND_ID])
 
 
 def create_event(
