@@ -55,7 +55,7 @@ A person with several roles gets the highest tier (roles combine, [ADR 0001](000
 **When the counter store doesn't answer: fail open, with a fallback.**
 - **Time budget:** each counter call gets about **200 ms**.
 - **Throttling on a counter key** (`ProvisionedThroughputExceededException` / `ThrottlingException`) is treated as **limit exceeded → `429`**. It almost always means one client is hammering its own key, and letting it through would reward the abuse.
-- **Timeouts, network and service errors** → the request is allowed. The check falls back to an **in-memory fixed window per Lambda instance** (same limits, a bounded number of keys), and a warning log plus a `RateLimiterUnavailable` metric (alarmed in production) are emitted.
+- **Timeouts, network and service errors** → the request is allowed. The check falls back to an **in-memory fixed window per Lambda instance** (same limits, a bounded number of keys), and a structured `WARNING` log line with the fixed event name `rate_limiter_unavailable` is written (`rate_limiter_circuit_open` when the breaker opens). In production, a CloudWatch metric filter plus an alarm on those lines makes them alertable without code changes ([ADR 0012](0012-observability-and-security-baseline.md)).
 - **Circuit breaker:** after a few consecutive failures the store is skipped for about 30 seconds and only the fallback is used, so requests don't each pay the timeout during an outage. The store is retried automatically afterwards.
 
 **Edge layer: AWS WAF.**

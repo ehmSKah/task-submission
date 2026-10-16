@@ -56,7 +56,7 @@ task1/
 
 | # | Step | Possible result |
 |---|---|---|
-| 0 | Logger and metrics context; correlation id = `requestContext.requestId` | — |
+| 0 | Logger context; correlation id = `requestContext.requestId` | — |
 | 1 | `GET /api/v1/health` returns here (no identity, no rate limit) | `200` |
 | 2 | Identity from the authorizer context (`sub`, roles). If it's missing, that's a misconfiguration: fail closed | `500` + error log |
 | 3 | Rate limit: per IP, then per user | `429` |
@@ -94,4 +94,4 @@ task1/
 - **Unit tests use in-memory fakes** for the ports and need no Floci and no mocking of boto3. Integration tests exercise the real adapters on Floci.
 - **The authorizer carries the whole bundle,** so its cold start includes packages it doesn't use. That is accepted until it shows up in latency.
 - **A missing authorizer context is a `500`, not a `401`.** It can only happen through misconfiguration, so it is logged as an error and fails closed.
-- **Observability beyond basic logging** (metrics, tracing) is part of the cross-cutting concerns still to be decided. Powertools Logger, Metrics and Tracer are the natural candidates.
+- **Observability is logs only** (Powertools Logger). Custom metrics, tracing and alarms are production evolution ([ADR 0012](0012-observability-and-security-baseline.md)).

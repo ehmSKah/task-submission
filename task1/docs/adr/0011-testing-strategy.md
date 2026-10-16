@@ -23,7 +23,7 @@ Each of the assignment's five required categories (successful requests, invalid 
 | **Adapter** (`tests/adapter`) | The real outbound adapters, called directly, **against Floci** (not `moto`) | Conditional writes, both GSIs, cursor stability with equal timestamps, the atomic counter `ADD`, the SSM config source, idempotency persistence |
 | **Integration** (`tests/integration`) | HTTP against the **deployed stack**: gateway → authorizer → API function → DynamoDB | The five assignment categories through the real path; every row of the [ADR 0007](0007-validation-and-errors.md) edge-case table; gateway responses; idempotency replay and mismatch; races; pagination walks. **Every response is validated against OpenAPI** ([ADR 0008](0008-openapi-contract.md)) |
 | **Contract** (`tests/contract`) | Schemathesis against the deployed stack | Generated requests: no `5xx`, only documented status codes, responses match their schemas |
-| **Static** | The repository | Ruff, mypy, import-linter, OpenAPI lint, request schemas compile as draft-04 |
+| **Static** | The repository | Ruff, mypy, import-linter, OpenAPI lint, request schemas compile as draft-04, `cdk-nag` at synth ([ADR 0012](0012-observability-and-security-baseline.md)) |
 
 **Tokens.**
 - **Unit tests isolate each of the nine checks.** A provider can't produce some combinations, e.g. a validly signed token with the wrong issuer.
