@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import httpx
+import jwt
 import pytest
 
 from orders_api.domain.order import Order
@@ -13,6 +14,7 @@ from orders_api_infra.demo_users import access_token, demo_user
 from tests.builders import an_order
 from tests.deployment import store_order
 from tests.integration.contract import contract_checked_client
+from tests.integration.requests import NEW_ORDER, bearer
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -48,9 +50,33 @@ def token_for(endpoints: dict[str, Any]) -> Callable[[str], str]:
     return token
 
 
+@pytest.fixture(scope="session")
+def subject_for(token_for: Callable[[str], str]) -> Callable[[str], str]:
+    """A demo user's `sub`, read from their token; the authorizer verifies it, tests only read."""
+
+    def subject(user: str) -> str:
+        claims: dict[str, Any] = jwt.decode(token_for(user), options={"verify_signature": False})
+        return str(claims["sub"])
+
+    return subject
+
+
 @pytest.fixture
-def stored_order(endpoints: dict[str, Any]) -> Order:
-    """An order written straight to the table, bypassing the API."""
-    order = an_order(id=str(uuid.uuid4()))
+def stored_order(endpoints: dict[str, Any], subject_for: Callable[[str], str]) -> Order:
+    """An order of alice's, written straight to the table, bypassing the API."""
+    order = an_order(id=str(uuid.uuid4()), owner_id=subject_for("alice"))
     store_order(endpoints, order)
     return order
+
+
+@pytest.fixture
+def order_of(api: httpx.Client, token_for: Callable[[str], str]) -> Callable[[str], dict[str, Any]]:
+    """Creates an order through the API as the given demo user and returns it."""
+
+    def create(user: str) -> dict[str, Any]:
+        response = api.post("/api/v1/orders", json=NEW_ORDER, headers=bearer(token_for(user)))
+        assert response.status_code == 201, response.text
+        order: dict[str, Any] = response.json()
+        return order
+
+    return create
