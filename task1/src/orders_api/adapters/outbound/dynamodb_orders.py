@@ -60,3 +60,7 @@ class DynamoDbOrderRepository:
         response = self._table.get_item(Key={"id": order_id}, ConsistentRead=True)
         item = response.get("Item")
         return from_item(item) if item else None
+
+    def add(self, order: Order) -> None:
+        """One `PutItem` that refuses to replace an existing order with the same id."""
+        self._table.put_item(Item=to_item(order), ConditionExpression="attribute_not_exists(id)")
