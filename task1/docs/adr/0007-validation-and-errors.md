@@ -20,7 +20,7 @@ Request bodies are validated **at API Gateway** by request validators, so an inv
 ```
 - **`type`** is a stable URN identifying the error kind. It is the machine-readable code and is documented in OpenAPI.
 - **`requestId`** is API Gateway's request id (`$context.requestId`). It is in every error body, in an `X-Request-Id` header on every response, and in every log line.
-- **`errors[]`** appears only when code produced field-level errors. Each entry has a message plus either `pointer` (a JSON Pointer into the body) or `parameter` (the name of a path or query parameter). Gateway validation yields a single message, which goes into `detail`.
+- **`errors[]`** appears only when code produced field-level errors. Each entry has a `detail` plus exactly one locator: `pointer` (a JSON Pointer into the body) or `parameter` (the name of a path or query parameter). Gateway validation yields a single message, which goes into `detail`.
 - **`scope`** (`ip` or `user`) appears on `429` ([ADR 0006](0006-rate-limiting.md)).
 
 | `type` (`urn:problem:orders-api:…`) | Status |

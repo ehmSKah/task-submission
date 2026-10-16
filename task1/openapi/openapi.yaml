@@ -270,9 +270,13 @@ components:
           items:
             $ref: "#/components/schemas/FieldError"
     FieldError:
+      description: Exactly one of `pointer` or `parameter` locates the error.
       type: object
       additionalProperties: false
       required: [detail]
+      oneOf:
+        - required: [pointer]
+        - required: [parameter]
       properties:
         pointer:
           type: string

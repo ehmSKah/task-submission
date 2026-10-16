@@ -50,11 +50,14 @@ class FieldError:
     parameter: str | None = None
     """Name of a path or query parameter."""
 
+    def __post_init__(self) -> None:
+        if (self.pointer is None) == (self.parameter is None):
+            raise ValueError("A field error names exactly one location: pointer or parameter")
+
     def to_json(self) -> dict[str, str]:
-        located = {"pointer": self.pointer} if self.pointer is not None else {}
-        if self.parameter is not None:
-            located["parameter"] = self.parameter
-        return {**located, "detail": self.detail}
+        if self.pointer is not None:
+            return {"pointer": self.pointer, "detail": self.detail}
+        return {"parameter": str(self.parameter), "detail": self.detail}
 
 
 def json_pointer(path: Iterable[str | int]) -> str:

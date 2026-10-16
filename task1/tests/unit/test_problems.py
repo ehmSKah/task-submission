@@ -66,3 +66,12 @@ def test_json_pointer_escapes_tilde_and_slash() -> None:
     assert json_pointer(["items", 0, "sku"]) == "/items/0/sku"
     assert json_pointer(["a/b", "c~d"]) == "/a~1b/c~0d"
     assert json_pointer([]) == ""
+
+
+def test_a_field_error_names_exactly_one_location() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="exactly one"):
+        FieldError(detail="no location")
+    with pytest.raises(ValueError, match="exactly one"):
+        FieldError(detail="both", pointer="/items", parameter="id")
