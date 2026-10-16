@@ -28,7 +28,7 @@ Roles (`USER`, `ORDER_MANAGER`, `ADMIN`) come from the identity provider's **gro
 **Ownership.** The owner of an order is the token's `sub`, recorded at creation from the validated token and never taken from the request body. Ownership never changes. Responses expose it as `ownerId`.
 
 **Order of checks and status codes.**
-1. The caller's roles lack the permission for the action at all → `403 Forbidden`, before any data is read.
+1. The caller's roles lack the permission for the action at all → `403 Forbidden`, before any data is read. (Malformed requests fail even earlier with `400`, including a path id that isn't a UUID; see [ADR 0007](0007-validation-and-errors.md) and [ADR 0009](0009-code-structure.md).)
 2. The order doesn't exist, or the caller only has `order:read:own` and isn't the owner → `404 Not Found`. Orders a caller may not see are indistinguishable from orders that don't exist, so their existence never leaks (OWASP API1: Broken Object Level Authorization). IDs are random UUIDs as well, but the `404` doesn't rely on that.
 3. The requested status change isn't allowed from the order's current status → `409 Conflict`.
 

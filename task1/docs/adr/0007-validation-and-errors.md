@@ -45,7 +45,7 @@ Request bodies are validated **at API Gateway** by request validators, so an inv
 | Layer | Checks |
 |---|---|
 | **API Gateway request validators** | Bodies of `POST /api/v1/orders` and `PATCH /api/v1/orders/{id}/status` against their JSON Schema (draft-04) models. Covers required fields, types, ranges, patterns, enums, item counts and `additionalProperties: false`. **An invalid body never invokes the API function.** |
-| **API function, before any data access** | `Content-Type`; body size; the same body schema again (see below); query parameters; path `{id}` format; duplicate SKUs |
+| **API function, before any data access** | `Content-Type`; body size; query parameters; path `{id}` format; the same body schema again (see below); duplicate SKUs |
 | **API function, domain logic** | Status changes, ownership, idempotency and `If-Match` ([ADR 0001](0001-role-based-access-control.md), [ADR 0004](0004-order-model-and-lifecycle.md)) |
 
 **One schema, two enforcers.**
@@ -78,7 +78,7 @@ Request bodies are validated **at API Gateway** by request validators, so an inv
 | `Content-Type` isn't `application/json` on `POST`/`PATCH` | `415` | function |
 | Body over 64 KB | `413` | function |
 | Unknown query parameter; `limit` not an integer 1–100; cursor doesn't decode | `400` with `errors[]` | function |
-| Path `{id}` isn't a UUID | `404`, the same as an unknown order | function |
+| Path `{id}` doesn't match the UUID pattern declared in the OpenAPI document | `400` with `errors[]` pointing at the path parameter | function (the gateway only checks that parameters are present, not their format) |
 | Unknown path or method | `404` | gateway (`MISSING_AUTHENTICATION_TOKEN` remapped from its default `403`) |
 | `Accept` asks for something other than JSON | ignored; responses are always JSON | — |
 
@@ -104,6 +104,7 @@ Request bodies are validated **at API Gateway** by request validators, so an inv
 - **Powertools Event Handler validation** (`enable_validation=True`). It generates OpenAPI *from* the code, the opposite of the OpenAPI document being the source. Its router remains a candidate for the code structure.
 - **`422` for semantic validation errors.** The gateway answers `400` for schema errors anyway, so `422` elsewhere would make the same mistake produce two codes depending on which layer caught it. `422` is reserved for the idempotency-key mismatch.
 - **`405` with an `Allow` header for a wrong method.** The gateway can't tell a wrong method from an unknown path without extra mock routes. `404` is used instead, and `405` is a possible refinement.
+- **`404` for a malformed path id** (making it look the same as an unknown order). Considered first, but the id format is part of the published contract, so breaking it is invalid input (`400`). It leaks nothing, because the format is public, and it matches what contract tests expect for values that break a declared pattern.
 - **Dereferenceable `type` URIs** (`https://…/problems/<slug>`). RFC 9457 prefers them, but there is no docs site to point at. URNs are stable and don't pretend to be pages. Switch once docs are hosted.
 - **Merging duplicate SKUs silently.** Surprising for clients. *Rejected.*
 
