@@ -9,7 +9,7 @@ The Orders API runs on **AWS Lambda behind an API Gateway REST API (v1)**. **One
 ## Decision
 
 - **Compute:** AWS Lambda (Python).
-- **Front door:** API Gateway **REST API (v1)** with Lambda proxy integration.
+- **Front door:** API Gateway **REST API (v1)** with Lambda proxy integration, **edge-optimized endpoint**. Clients reach the API through an AWS-managed CloudFront distribution, which shortens the network path for clients spread across regions.
 - **Routes:** declared explicitly in API Gateway (`POST /api/v1/orders`, `GET /api/v1/orders`, `GET /api/v1/orders/{id}`, `PATCH /api/v1/orders/{id}/status`, `DELETE /api/v1/orders/{id}`, `GET /api/v1/health`). Unknown paths are rejected by the gateway and never reach the function. No catch-all `{proxy+}`.
 - **Functions:** a single API function ("lambdalith") with an internal router. Token validation runs in a separate Lambda authorizer in front of it ([ADR 0003](0003-access-token-validation.md)).
 - **Health:** `GET /api/v1/health` reaches the same function without an authorizer and is a **shallow** check. It reports that the function runs and does not call DynamoDB, so a database incident doesn't also fail the health check, and frequent probing costs nothing.
@@ -37,6 +37,8 @@ The Orders API runs on **AWS Lambda behind an API Gateway REST API (v1)**. **One
 - *Against:* every unknown path reaches and bills the function. Per-route authorizer settings (an unauthenticated `/health`) and gateway-side validation are harder to express.
 - *Verdict:* rejected.
 
+- **Endpoint type: regional, with our own CloudFront distribution in front.** That gives full control (caching, a CloudFront-scoped WAF, Shield Advanced), but it is one more component to run, and the per-IP keys would have to use a trusted forwarded address. *Rejected* in favour of the managed edge-optimized endpoint; it is the path to take if caching or edge-level WAF is needed. A plain *regional endpoint* without CloudFront suits clients in one region only.
+
 ## Consequences
 
 - **No shared in-memory state.** Lambda instances don't share memory and are short-lived, so anything shared across requests (rate-limit counters, idempotency records) must live in an external store. Rate limiting as a whole is decided separately.
@@ -45,6 +47,10 @@ The Orders API runs on **AWS Lambda behind an API Gateway REST API (v1)**. **One
 - **AWS lock-in, contained in code.** The Lambda handler and API Gateway event format tie this layer to AWS. The order logic and authorization rules must know nothing about Lambda or API Gateway, so a move to a container means writing a new adapter, not a rewrite. This mirrors the swappable identity provider in [ADR 0001](0001-role-based-access-control.md).
 - **One IAM role for the function** holds the union of all permissions on this service's own tables. It's acceptable while the routes share one owner and one data set. Split functions (per route, or read/write) when routes need different permissions, scaling or ownership.
 - **WAF is available for production.** Rate-based rules and managed rule sets attach directly to the REST API stage. The local Floci stack doesn't emulate WAF; production use is covered in the production-evolution notes.
+- **Edge-optimized endpoint specifics.**
+  - A custom domain needs its ACM certificate in `us-east-1`.
+  - The AWS-managed CloudFront distribution can't be configured: no caching, no WAF of our own at the edge locations.
+  - WAF still attaches as a *regional* web ACL to the API stage ([ADR 0006](0006-rate-limiting.md)).
 - **Local Floci specifics:**
   - Floci never enforces API Gateway throttling or usage plans.
   - The REST API id can't be pinned and changes on every recreate.
