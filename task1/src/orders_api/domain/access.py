@@ -10,7 +10,11 @@ class Role(StrEnum):
     ADMIN = "ADMIN"
 
 
-def roles_from_groups(groups: Iterable[str]) -> frozenset[Role]:
-    """Groups the API doesn't know are ignored."""
+def recognised_roles(names: Iterable[str]) -> frozenset[Role]:
+    """The names that are roles of this API; anything else is ignored.
+
+    Mapping a provider's groups to role names is configuration and happens in the token
+    validator (ADR 0001); this only keeps the names the API recognises.
+    """
     known = {role.value for role in Role}
-    return frozenset(Role(group) for group in groups if group in known)
+    return frozenset(Role(name) for name in names if name in known)

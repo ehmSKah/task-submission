@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from orders_api.domain.access import Role, roles_from_groups
+from orders_api.domain.access import Role, recognised_roles
 
 
 class MissingCallerIdentity(Exception):
@@ -23,4 +23,4 @@ def caller_from_event(event: dict[str, Any]) -> Caller:
     if not subject:
         raise MissingCallerIdentity
     roles = [role for role in str(context.get("roles") or "").split(",") if role]
-    return Caller(subject=str(subject), roles=roles_from_groups(roles))
+    return Caller(subject=str(subject), roles=recognised_roles(roles))
