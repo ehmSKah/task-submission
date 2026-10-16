@@ -66,7 +66,7 @@ PENDING ──► CONFIRMED ──► SHIPPED ──► DELIVERED
 **Listing** (`GET /api/v1/orders`)
 - **Visibility:** callers see their own orders unless they have `order:read:any` (ADR 0001).
 - **Order:** fixed to **newest first** (`createdAt` descending).
-- **Pagination:** cursor-based. `limit` defaults to 20, maximum 100. The response is `{ "items": [...], "nextCursor": "…" | null }`.
+- **Pagination:** cursor-based. `limit` defaults to 10, maximum 100. The response is `{ "items": [...], "nextCursor": "…" | null }`.
 - **The cursor** is opaque to clients (a base64url-encoded storage position). A cursor that doesn't decode returns `400`. Because every query is restricted to what the caller may see, a tampered cursor can at most move around inside that set.
 - **No filters or sort parameters.** Any query parameter other than `limit` and `cursor` returns `400`.
 
