@@ -69,6 +69,8 @@ PENDING ──► CONFIRMED ──► SHIPPED ──► DELIVERED
 - **Pagination:** cursor-based. `limit` defaults to 10, maximum 100. The response is `{ "items": [...], "nextCursor": "…" | null }`.
 - **The cursor** is opaque to clients (a base64url-encoded storage position). A cursor that doesn't decode returns `400`. Because every query is restricted to what the caller may see, a tampered cursor can at most move around inside that set.
 - **No filters or sort parameters.** Any query parameter other than `limit` and `cursor` returns `400`.
+- **Walking all pages:** a client gets every order it may see by following `nextCursor` until it is `null`. The last page may be empty; clients stop on `null`, not on an empty page.
+- **Stable while walking:** the cursor marks a fixed position in "newest first" order (`createdAt`, then `id` as a tie-breaker). Orders created during a walk land in front of it and are not part of that walk, so pages never repeat or skip existing orders. Deleted orders simply don't appear, and status changes don't move an order.
 
 ## Considered options
 
