@@ -58,6 +58,8 @@ class FakeProvider:
         self.requested.append(url)
         if self.offline:
             raise KeyFetchError(f"{url}: timed out")
+        if url not in self.documents:
+            raise KeyFetchError(f"{url}: 404")
         return self.documents[url]
 
     def jwks_fetches(self) -> int:
@@ -132,8 +134,37 @@ def test_keys_are_refreshed_after_one_hour(clock: FakeClock, events: RecordedEve
     assert cache.signing_key("new-key") is not None
     assert cache.signing_key("old-key") is None
     assert provider.jwks_fetches() == 2
-    # Discovery is not repeated: the JWKS location is stable.
-    assert provider.requested.count(DISCOVERY) == 1
+    # Discovery expires with the keys, so a moved JWKS location is picked up too.
+    assert provider.requested.count(DISCOVERY) == 2
+
+
+def test_a_moved_jwks_location_is_found_at_the_next_refresh(
+    clock: FakeClock, events: RecordedEvents
+) -> None:
+    provider = FakeProvider("old-key")
+    cache = cache_for(provider, clock, events)
+    cache.signing_key("old-key")
+
+    moved = f"{ISSUER}/keys-v2"
+    provider.documents[DISCOVERY] = {"issuer": ISSUER, "jwks_uri": moved}
+    provider.documents[moved] = {"keys": [jwk("new-key")]}
+    clock.advance(3600)
+
+    assert cache.signing_key("new-key") is not None
+
+
+def test_failed_discovery_falls_back_to_the_known_jwks_location(
+    clock: FakeClock, events: RecordedEvents
+) -> None:
+    provider = FakeProvider("old-key")
+    cache = cache_for(provider, clock, events)
+    cache.signing_key("old-key")
+
+    del provider.documents[DISCOVERY]
+    provider.publish("new-key")
+    clock.advance(3600)
+
+    assert cache.signing_key("new-key") is not None
 
 
 def test_an_unknown_kid_refetches_the_keys(clock: FakeClock, events: RecordedEvents) -> None:
@@ -227,7 +258,7 @@ def test_no_keys_at_all_fails_closed(clock: FakeClock, events: RecordedEvents) -
     assert events.names() == ["jwks_fetch_failed"]
 
 
-def test_without_keys_every_request_tries_again_and_recovers(
+def test_without_keys_retries_are_spaced_and_still_recover_quickly(
     clock: FakeClock, events: RecordedEvents
 ) -> None:
     provider = FakeProvider("pool-key")
@@ -235,10 +266,15 @@ def test_without_keys_every_request_tries_again_and_recovers(
     cache = cache_for(provider, clock, events)
     with pytest.raises(SigningKeysUnavailable):
         cache.signing_key("pool-key")
-
     provider.offline = False
-    clock.advance(1)
 
+    # Within the backoff, requests (e.g. random kids) don't reach the provider.
+    clock.advance(1)
+    with pytest.raises(SigningKeysUnavailable):
+        cache.signing_key("random-kid")
+    assert provider.jwks_fetches() == 0
+
+    clock.advance(4)
     assert cache.signing_key("pool-key") is not None
 
 
