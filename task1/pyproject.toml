@@ -5,14 +5,16 @@ description = "Orders REST API with Cognito authentication, role-based authoriza
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "aws-lambda-powertools>=3.20",
+    "aws-lambda-powertools[parser,validation]>=3.20",
     "pyjwt[crypto]>=2.10",
+    "pyyaml>=6.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3",
     "httpx>=0.28",
+    "openapi-core>=0.19",
     "ruff>=0.13",
     "mypy>=1.18",
     "import-linter>=2.5",

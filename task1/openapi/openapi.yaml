@@ -36,6 +36,48 @@ paths:
           $ref: "#/components/responses/BadGateway"
         "504":
           $ref: "#/components/responses/GatewayTimeout"
+  /api/v1/orders:
+    post:
+      tags: [orders]
+      operationId: createOrder
+      summary: Create an order
+      description: >-
+        Creates a `PENDING` order owned by the caller. The API computes `totalAmount`; clients
+        never send it, nor `id`, `ownerId`, `status`, timestamps or `version`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+      responses:
+        "201":
+          description: The created order.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
   /api/v1/orders/{id}:
     parameters:
       - name: id
@@ -53,12 +95,16 @@ paths:
         "200":
           description: The order.
           headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
             X-Request-Id:
               $ref: "#/components/headers/X-Request-Id"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/ValidationError"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -85,7 +131,45 @@ components:
       description: API Gateway's request id; also in every error body and in the logs.
       schema:
         type: string
+    ETag:
+      description: The order's `version` as a strong entity tag, e.g. `"1"`.
+      required: true
+      schema:
+        type: string
+        pattern: '^"[0-9]+"$'
   schemas:
+    CreateOrderRequest:
+      description: What a client sends to create an order. Everything else is set by the API.
+      type: object
+      additionalProperties: false
+      required: [currency, items]
+      properties:
+        currency:
+          type: string
+          enum: [EUR, USD, GBP]
+        items:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            $ref: "#/components/schemas/CreateLineItemRequest"
+    CreateLineItemRequest:
+      type: object
+      additionalProperties: false
+      required: [sku, quantity, unitPrice]
+      properties:
+        sku:
+          type: string
+          pattern: "^[A-Z0-9][A-Z0-9-]{1,31}$"
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 999
+        unitPrice:
+          type: integer
+          minimum: 0
+          maximum: 1000000
+          description: Integer minor units of the order's currency (1999 = 19.99).
     Order:
       type: object
       additionalProperties: false
@@ -93,7 +177,8 @@ components:
       properties:
         id:
           type: string
-          description: Server-generated UUID v4.
+          description: Server-generated UUID v4, lowercase.
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
         ownerId:
           type: string
           description: The owner's subject (`sub`) at the identity provider.
@@ -112,10 +197,12 @@ components:
           description: Sum of quantity × unit price, in minor units; computed by the API.
         createdAt:
           type: string
-          description: ISO-8601 UTC with milliseconds.
+          description: ISO-8601 UTC with fixed-width milliseconds, e.g. `2026-10-17T09:30:00.123Z`.
+          pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
         updatedAt:
           type: string
-          description: ISO-8601 UTC with milliseconds.
+          description: ISO-8601 UTC with fixed-width milliseconds, e.g. `2026-10-17T09:30:00.123Z`.
+          pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
         version:
           type: integer
           description: Incremented on every change; also sent as the `ETag`.
@@ -175,6 +262,26 @@ components:
           type: string
         requestId:
           type: string
+        errors:
+          description: >-
+            Field-level errors, present only when the API function found them (gateway
+            validation reports a single message in `detail`).
+          type: array
+          items:
+            $ref: "#/components/schemas/FieldError"
+    FieldError:
+      type: object
+      additionalProperties: false
+      required: [detail]
+      properties:
+        pointer:
+          type: string
+          description: JSON Pointer (RFC 6901) to the offending part of the request body.
+        parameter:
+          type: string
+          description: Name of the offending path or query parameter.
+        detail:
+          type: string
   responses:
     Unauthorized:
       description: Missing, malformed, invalid or expired access token. The body never says which.
@@ -227,6 +334,35 @@ components:
             $ref: "#/components/schemas/Problem"
     GatewayTimeout:
       description: The API function did not answer in time.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ValidationError:
+      description: >-
+        The request breaks the contract: a body that fails its schema (unknown fields included),
+        isn't JSON or is empty; duplicate SKUs; a malformed path parameter.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    PayloadTooLarge:
+      description: The request body is larger than 64 KB.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    UnsupportedMediaType:
+      description: The request body isn't sent as `application/json`.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
