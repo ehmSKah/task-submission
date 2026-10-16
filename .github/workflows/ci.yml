@@ -1,0 +1,80 @@
+# Static checks, unit tests, then the integration suite against Floci (ADR 0011).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: task1
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: task1/infra/package-lock.json
+      - run: make install
+      - run: make lint
+
+  unit:
+    needs: [static]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run pytest tests/unit --junitxml=build/junit-unit.xml
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-unit
+          path: task1/build/junit-unit.xml
+
+  floci:
+    needs: [unit]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: task1/infra/package-lock.json
+      # Avoids the 10+ s image pull on the first Lambda invoke.
+      - run: docker pull -q public.ecr.aws/lambda/python:3.13
+      - run: make up
+      - run: uv run pytest tests/integration -m integration --junitxml=build/junit-integration.xml
+      - if: failure()
+        run: |
+          docker logs orders-api-floci-1 > build/floci.log 2>&1 || true
+          for c in $(docker ps -aq --filter label=floci=true); do
+            docker logs "$c" > "build/$(docker inspect -f '{{.Name}}' "$c" | tr -d /).log" 2>&1 || true
+          done
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: floci-run
+          path: |
+            task1/build/junit-integration.xml
+            task1/build/*.log
+            task1/build/endpoints.json
+      - if: always()
+        run: make down
