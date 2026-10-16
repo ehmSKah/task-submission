@@ -27,6 +27,10 @@ class FakeLambdaContext:
     memory_limit_in_mb: int = 256
     invoked_function_arn: str = "arn:aws:lambda:us-east-1:000000000000:function:orders-api"
     aws_request_id: str = "lambda-req-1"
+    remaining_time_in_millis: int = 9_000
+
+    def get_remaining_time_in_millis(self) -> int:
+        return self.remaining_time_in_millis
 
 
 def rest_event(method: str, path: str, resource: str | None = None) -> dict[str, Any]:
