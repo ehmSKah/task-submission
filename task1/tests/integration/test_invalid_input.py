@@ -99,6 +99,14 @@ def test_wrong_content_type_is_415(
     assert_problem(response, 415, "unsupported-media-type")
 
 
+def test_missing_content_type_is_415(api: httpx.Client, alice: dict[str, str]) -> None:
+    """The gateway validates such a body as JSON; the function still insists on the header."""
+    response = api.post(ORDERS, content=json.dumps(NEW_ORDER), headers=alice)
+
+    assert "Content-Type" not in response.request.headers
+    assert_problem(response, 415, "unsupported-media-type")
+
+
 def test_oversized_body_is_413(api: httpx.Client, alice: dict[str, str]) -> None:
     """Whitespace keeps the body valid, so it passes the gateway and reaches the size check."""
     content = json.dumps(NEW_ORDER)
