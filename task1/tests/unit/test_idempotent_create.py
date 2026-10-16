@@ -153,7 +153,7 @@ def test_a_duplicate_while_the_first_is_still_in_progress_is_a_409(
 def test_the_in_progress_record_is_bounded_by_the_lambdas_remaining_time(
     idempotency_store: InMemoryIdempotencyStore,
 ) -> None:
-    before_ms = time.time() * 1000
+    before_ms = int(time.time() * 1000)  # Powertools stores whole milliseconds
 
     api_handler.handler(create_event(), FakeLambdaContext(remaining_time_in_millis=4_000))
 
