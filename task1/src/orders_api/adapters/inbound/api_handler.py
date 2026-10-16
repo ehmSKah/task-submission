@@ -9,18 +9,32 @@ from aws_lambda_powertools import Logger
 from aws_lambda_powertools.event_handler import APIGatewayRestResolver, Response
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
+from orders_api.adapters.inbound.caller import MissingCallerIdentity, caller_from_event
 from orders_api.adapters.inbound.http_headers import (
     JSON_MEDIA_TYPE,
     PROBLEM_JSON_MEDIA_TYPE,
     REQUEST_ID_HEADER,
     SECURITY_HEADERS,
 )
+from orders_api.adapters.inbound.order_json import order_to_json
 from orders_api.adapters.inbound.problems import ProblemType, problem_body
+from orders_api.adapters.outbound.dynamodb_orders import DynamoDbOrderRepository
+from orders_api.application.orders import OrderNotFound, OrderRepository, get_order
 
 UNEXPECTED_ERROR_DETAIL = "An unexpected error occurred"
 
 logger = Logger(service="orders-api")
 app = APIGatewayRestResolver()
+
+_orders: OrderRepository | None = None
+
+
+def orders() -> OrderRepository:
+    """The order repository, created once per Lambda instance."""
+    global _orders
+    if _orders is None:
+        _orders = DynamoDbOrderRepository(os.environ["ORDERS_TABLE"])
+    return _orders
 
 
 def health_status() -> dict[str, str]:
@@ -31,6 +45,16 @@ def health_status() -> dict[str, str]:
 @app.get("/api/v1/health")
 def get_health() -> Response[str]:
     return Response(status_code=200, content_type=JSON_MEDIA_TYPE, body=json.dumps(health_status()))
+
+
+@app.get("/api/v1/orders/<order_id>")
+def get_order_by_id(order_id: str) -> Response[str]:
+    caller = caller_from_event(app.current_event.raw_event)
+    logger.append_keys(sub=caller.subject, roles=sorted(caller.roles))
+    order = get_order(orders(), order_id)
+    return Response(
+        status_code=200, content_type=JSON_MEDIA_TYPE, body=json.dumps(order_to_json(order))
+    )
 
 
 def problem_response(problem: ProblemType, detail: str | None = None) -> Response[str]:
@@ -48,6 +72,17 @@ def problem_response(problem: ProblemType, detail: str | None = None) -> Respons
 @app.not_found
 def not_found(_: Exception) -> Response[str]:
     return problem_response(ProblemType.NOT_FOUND)
+
+
+@app.exception_handler(OrderNotFound)  # type: ignore[untyped-decorator]  # Powertools leaves it untyped
+def order_not_found(_: OrderNotFound) -> Response[str]:
+    return problem_response(ProblemType.NOT_FOUND)
+
+
+@app.exception_handler(MissingCallerIdentity)  # type: ignore[untyped-decorator]
+def missing_caller_identity(_: MissingCallerIdentity) -> Response[str]:
+    logger.error("authorizer_context_missing")
+    return problem_response(ProblemType.INTERNAL_ERROR, UNEXPECTED_ERROR_DETAIL)
 
 
 @app.exception_handler(Exception)  # type: ignore[untyped-decorator]  # Powertools leaves it untyped
@@ -91,7 +126,7 @@ def _with_contract_headers(response: dict[str, Any], request_id: str) -> dict[st
     return response
 
 
-@logger.inject_lambda_context
+@logger.inject_lambda_context(clear_state=True)
 def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     request_id = (event.get("requestContext") or {}).get("requestId", "")
     logger.append_keys(requestId=request_id, env=os.environ.get("ORDERS_API_ENV", "unknown"))

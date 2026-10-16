@@ -1,46 +1,13 @@
 import io
 import json
-import logging
 from collections.abc import Iterator
-from dataclasses import dataclass
 from typing import Any
 
 import pytest
 
 from orders_api.adapters.inbound import api_handler
 from orders_api.adapters.inbound.http_headers import SECURITY_HEADERS
-
-
-@dataclass
-class FakeLambdaContext:
-    function_name: str = "orders-api"
-    memory_limit_in_mb: int = 256
-    invoked_function_arn: str = "arn:aws:lambda:us-east-1:000000000000:function:orders-api"
-    aws_request_id: str = "lambda-req-1"
-
-
-def rest_event(method: str, path: str, resource: str | None = None) -> dict[str, Any]:
-    return {
-        "resource": resource or path,
-        "path": path,
-        "httpMethod": method,
-        "headers": {"Accept": "application/json"},
-        "multiValueHeaders": {"Accept": ["application/json"]},
-        "queryStringParameters": None,
-        "multiValueQueryStringParameters": None,
-        "pathParameters": None,
-        "stageVariables": None,
-        "requestContext": {
-            "requestId": "gw-req-1",
-            "resourcePath": resource or path,
-            "httpMethod": method,
-            "path": f"/live{path}",
-            "stage": "live",
-            "identity": {"sourceIp": "203.0.113.7"},
-        },
-        "body": None,
-        "isBase64Encoded": False,
-    }
+from tests.builders import FakeLambdaContext, rest_event
 
 
 def headers_of(response: dict[str, Any]) -> dict[str, str]:
@@ -118,17 +85,6 @@ def test_error_outside_routing_is_still_a_problem_500(monkeypatch: pytest.Monkey
     assert body["type"] == "urn:problem:orders-api:internal-error"
     assert body["requestId"] == "gw-req-1"
     assert "exploded" not in response["body"]
-
-
-@pytest.fixture
-def log_output() -> Iterator[io.StringIO]:
-    """Capture the API function's structured log output (Powertools binds stdout at import)."""
-    stream = io.StringIO()
-    capture = logging.StreamHandler(stream)
-    capture.setFormatter(api_handler.logger.registered_formatter)
-    api_handler.logger.addHandler(capture)
-    yield stream
-    api_handler.logger.removeHandler(capture)
 
 
 def test_log_lines_carry_request_id_env_and_problem_type(
