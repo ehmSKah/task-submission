@@ -72,3 +72,22 @@ def test_log_retention_must_be_a_supported_period(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError):
         load_config("odd", tmp_path)
+
+
+def test_floci_needs_the_issuer_base_url(tmp_path: Path) -> None:
+    text = (CONFIG_DIR / "local.yaml").read_text()
+    (tmp_path / "noissuer.yaml").write_text(
+        "\n".join(line for line in text.splitlines() if "flociIssuerBaseUrl" not in line)
+    )
+
+    with pytest.raises(ValidationError, match="flociIssuerBaseUrl"):
+        load_config("noissuer", tmp_path)
+
+
+def test_floci_settings_are_rejected_for_aws_targets(tmp_path: Path) -> None:
+    (tmp_path / "awsish.yaml").write_text(
+        (CONFIG_DIR / "local.yaml").read_text().replace("target: floci", "target: aws")
+    )
+
+    with pytest.raises(ValidationError, match="only applies when target is floci"):
+        load_config("awsish", tmp_path)

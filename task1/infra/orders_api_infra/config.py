@@ -5,8 +5,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
+import aws_cdk as cdk
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from orders_api_infra.paths import CONFIG_DIR
 
@@ -38,6 +39,13 @@ class EnvConfig(BaseModel):
     log_level: Literal["DEBUG", "INFO", "WARNING"] = Field(alias="logLevel")
     log_retention_days: LogRetentionDays = Field(alias="logRetentionDays")
     removal_policy: Literal["destroy", "retain"] = Field(alias="removalPolicy")
+    # Whether demo users may be seeded; never in production (ADR 0010).
+    seed_users: bool = Field(alias="seedUsers")
+    # Floci only: the issuer host tokens carry (FLOCI_HOSTNAME), reachable from Lambda
+    # containers. On AWS the issuer comes from the user pool itself.
+    floci_issuer_base_url: str | None = Field(default=None, alias="flociIssuerBaseUrl")
+    # Floci only: a pinned user pool id, so the issuer stays the same across deploys.
+    floci_user_pool_id: str | None = Field(default=None, alias="flociUserPoolId")
 
     @property
     def stack_name(self) -> str:
@@ -47,6 +55,23 @@ class EnvConfig(BaseModel):
     def retains_data(self) -> bool:
         """Production keeps data and protects the stack; dev environments are disposable."""
         return self.removal_policy == "retain"
+
+    @property
+    def data_removal_policy(self) -> "cdk.RemovalPolicy":
+        return cdk.RemovalPolicy.RETAIN if self.retains_data else cdk.RemovalPolicy.DESTROY
+
+    @model_validator(mode="after")
+    def _floci_settings_match_the_target(self) -> "EnvConfig":
+        floci_settings = {
+            "flociIssuerBaseUrl": self.floci_issuer_base_url,
+            "flociUserPoolId": self.floci_user_pool_id,
+        }
+        for key, value in floci_settings.items():
+            if self.target == "floci" and not value:
+                raise ValueError(f"{key} is required when target is floci")
+            if self.target == "aws" and value:
+                raise ValueError(f"{key} only applies when target is floci")
+        return self
 
     def resolved_architecture(self, machine: str | None = None) -> Architecture:
         if self.lambda_architecture != "host":

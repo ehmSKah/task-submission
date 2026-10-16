@@ -7,6 +7,9 @@ info:
     limiting. Every error is an RFC 9457 Problem Details document.
 tags:
   - name: health
+  - name: orders
+security:
+  - bearerAuth: []
 paths:
   /api/v1/health:
     get:
@@ -33,13 +36,101 @@ paths:
           $ref: "#/components/responses/BadGateway"
         "504":
           $ref: "#/components/responses/GatewayTimeout"
+  /api/v1/orders/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The order's id (UUID v4).
+        schema:
+          type: string
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    get:
+      tags: [orders]
+      operationId: getOrder
+      summary: Retrieve an order
+      responses:
+        "200":
+          description: The order.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        An access token from the identity provider (Amazon Cognito), sent as
+        `Authorization: Bearer <token>`.
   headers:
     X-Request-Id:
       description: API Gateway's request id; also in every error body and in the logs.
       schema:
         type: string
   schemas:
+    Order:
+      type: object
+      additionalProperties: false
+      required: [id, ownerId, status, currency, items, totalAmount, createdAt, updatedAt, version]
+      properties:
+        id:
+          type: string
+          description: Server-generated UUID v4.
+        ownerId:
+          type: string
+          description: The owner's subject (`sub`) at the identity provider.
+        status:
+          type: string
+          enum: [PENDING, CONFIRMED, SHIPPED, DELIVERED, CANCELLED]
+        currency:
+          type: string
+          enum: [EUR, USD, GBP]
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/LineItem"
+        totalAmount:
+          type: integer
+          description: Sum of quantity × unit price, in minor units; computed by the API.
+        createdAt:
+          type: string
+          description: ISO-8601 UTC with milliseconds.
+        updatedAt:
+          type: string
+          description: ISO-8601 UTC with milliseconds.
+        version:
+          type: integer
+          description: Incremented on every change; also sent as the `ETag`.
+    LineItem:
+      type: object
+      additionalProperties: false
+      required: [sku, quantity, unitPrice]
+      properties:
+        sku:
+          type: string
+        quantity:
+          type: integer
+        unitPrice:
+          type: integer
+          description: Integer minor units of the order's currency (1999 = 19.99).
     Health:
       type: object
       additionalProperties: false
@@ -85,6 +176,28 @@ components:
         requestId:
           type: string
   responses:
+    Unauthorized:
+      description: Missing, malformed, invalid or expired access token. The body never says which.
+      headers:
+        WWW-Authenticate:
+          description: '`Bearer error="invalid_token"` (RFC 6750).'
+          schema:
+            type: string
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ServiceUnavailable:
+      description: The identity provider's signing keys can't be reached.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
     NotFound:
       description: Unknown path or method, or a resource the caller can't see.
       headers:
