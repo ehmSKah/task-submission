@@ -11,7 +11,7 @@ The Orders API runs on **AWS Lambda behind an API Gateway REST API (v1)**. **One
 - **Compute:** AWS Lambda (Python).
 - **Front door:** API Gateway **REST API (v1)** with Lambda proxy integration.
 - **Routes:** declared explicitly in API Gateway (`POST /api/v1/orders`, `GET /api/v1/orders`, `GET /api/v1/orders/{id}`, `PATCH /api/v1/orders/{id}/status`, `DELETE /api/v1/orders/{id}`, `GET /api/v1/health`). Unknown paths are rejected by the gateway and never reach the function. No catch-all `{proxy+}`.
-- **Functions:** a single function ("lambdalith") with an internal router.
+- **Functions:** a single API function ("lambdalith") with an internal router. Token validation runs in a separate Lambda authorizer in front of it ([ADR 0003](0003-access-token-validation.md)).
 - **Health:** `GET /api/v1/health` reaches the same function without an authorizer and is a **shallow** check. It reports that the function runs and does not call DynamoDB, so a database incident doesn't also fail the health check, and frequent probing costs nothing.
 
 ## Considered options
