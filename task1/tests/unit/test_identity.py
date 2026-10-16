@@ -89,6 +89,17 @@ def test_fixtures_are_a_foreign_pool_an_untrusted_and_a_short_lived_client(
         assert name in outputs
 
 
+def _refs(value: Any) -> list[str]:
+    """Every `Ref` inside a resolved CloudFormation value, whatever its Fn::Join shape."""
+    if isinstance(value, dict):
+        if "Ref" in value:
+            return [value["Ref"]]
+        return [ref for item in value.values() for ref in _refs(item)]
+    if isinstance(value, list):
+        return [ref for item in value for ref in _refs(item)]
+    return []
+
+
 def test_only_the_app_client_and_the_short_lived_client_are_allowed(
     with_fixtures: tuple[cdk.Stack, Identity, Template],
 ) -> None:
@@ -97,8 +108,7 @@ def test_only_the_app_client_and_the_short_lived_client_are_allowed(
 
     allowed = stack.resolve(identity.authorizer_environment["TOKEN_ALLOWED_CLIENTS"])
 
-    refs = [part["Ref"] for part in allowed["Fn::Join"][1]]
-    assert sorted(refs) == sorted(
+    assert sorted(_refs(allowed)) == sorted(
         stack.get_logical_id(client.node.default_child)  # type: ignore[arg-type]
         for client in (identity.client, identity.fixtures.short_lived_client)
     )

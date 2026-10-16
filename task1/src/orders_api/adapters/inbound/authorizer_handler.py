@@ -15,7 +15,7 @@ from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from orders_api.auth.oidc import JwksCache, SigningKeysUnavailable
 from orders_api.auth.tokens import Identity, InvalidToken, TokenValidator, ValidatorConfig
-from orders_api.domain.access import roles_from_groups
+from orders_api.domain.access import recognised_roles
 
 logger = Logger(service="orders-api")
 
@@ -43,17 +43,51 @@ def _items(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+# The authorizer's provider settings travel as environment variables. This module both writes
+# (for the infrastructure) and reads them, so the names live in one place.
+ISSUER = "TOKEN_ISSUER"
+JWKS_URI = "TOKEN_JWKS_URI"
+TYPE_CLAIM = "TOKEN_TYPE_CLAIM"
+TYPE_VALUE = "TOKEN_TYPE_VALUE"
+CLIENT_CLAIM = "TOKEN_CLIENT_CLAIM"
+ALLOWED_CLIENTS = "TOKEN_ALLOWED_CLIENTS"
+ROLES_CLAIM = "TOKEN_ROLES_CLAIM"
+GROUP_ROLES = "TOKEN_GROUP_ROLES"
+
+
+def environment_for(settings: ValidatorConfig) -> dict[str, str]:
+    """The environment variables `config_from_environment` reads back as `settings`.
+
+    Values may be CDK tokens; joining them in a string is resolved at deploy time.
+    """
+    environment = {
+        ISSUER: settings.issuer,
+        TYPE_CLAIM: settings.token_type_claim,
+        TYPE_VALUE: settings.token_type_value,
+        CLIENT_CLAIM: settings.client_claim,
+        ALLOWED_CLIENTS: ",".join(sorted(settings.allowed_clients)),
+        ROLES_CLAIM: settings.roles_claim,
+    }
+    if settings.jwks_uri:
+        environment[JWKS_URI] = settings.jwks_uri
+    if settings.group_roles:
+        environment[GROUP_ROLES] = ",".join(
+            f"{group}={role}" for group, role in sorted(settings.group_roles.items())
+        )
+    return environment
+
+
 def config_from_environment(environ: Mapping[str, str]) -> ValidatorConfig:
     """The identity provider's settings; a missing one fails closed (`KeyError` -> `503`)."""
-    group_roles = dict(pair.split("=", 1) for pair in _items(environ.get("TOKEN_GROUP_ROLES", "")))
+    group_roles = dict(pair.split("=", 1) for pair in _items(environ.get(GROUP_ROLES, "")))
     return ValidatorConfig(
-        issuer=environ["TOKEN_ISSUER"],
-        jwks_uri=environ.get("TOKEN_JWKS_URI") or None,
-        token_type_claim=environ["TOKEN_TYPE_CLAIM"],
-        token_type_value=environ["TOKEN_TYPE_VALUE"],
-        client_claim=environ["TOKEN_CLIENT_CLAIM"],
-        allowed_clients=frozenset(_items(environ["TOKEN_ALLOWED_CLIENTS"])),
-        roles_claim=environ["TOKEN_ROLES_CLAIM"],
+        issuer=environ[ISSUER],
+        jwks_uri=environ.get(JWKS_URI) or None,
+        token_type_claim=environ[TYPE_CLAIM],
+        token_type_value=environ[TYPE_VALUE],
+        client_claim=environ[CLIENT_CLAIM],
+        allowed_clients=frozenset(_items(environ[ALLOWED_CLIENTS])),
+        roles_claim=environ[ROLES_CLAIM],
         group_roles={group.strip(): role.strip() for group, role in group_roles.items()} or None,
     )
 
@@ -106,7 +140,7 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
                 "reason": rejection.reason.value,
                 "kid": rejection.kid,
                 "iss": rejection.issuer,
-                "client_id": rejection.client_id,
+                "clientId": rejection.client_id,
                 "keysFetched": _keys_fetched,
             },
         )
@@ -114,13 +148,13 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     except SigningKeysUnavailable:
         logger.error("signing_keys_unavailable")
         raise
-    roles = sorted(roles_from_groups(identity.roles))
+    roles = sorted(recognised_roles(identity.roles))
     logger.info(
         "token_accepted",
         extra={
             "sub": identity.subject,
             "roles": roles,
-            "client_id": identity.client_id,
+            "clientId": identity.client_id,
             "keysFetched": _keys_fetched,
         },
     )

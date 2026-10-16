@@ -7,9 +7,7 @@ extensions that make the same file define the gateway's routes and error respons
 import copy
 import json
 from dataclasses import dataclass, field
-from typing import Any, Literal
-
-import yaml
+from typing import Any
 
 from orders_api.adapters.inbound.http_headers import (
     PROBLEM_JSON_MEDIA_TYPE,
@@ -17,7 +15,8 @@ from orders_api.adapters.inbound.http_headers import (
     SECURITY_HEADERS,
 )
 from orders_api.adapters.inbound.problems import ProblemType, problem_body
-from orders_api_infra.paths import SPEC_PATH
+from orders_api.contract import load_contract
+from orders_api_infra.config import Target
 
 HTTP_METHODS = {"get", "put", "post", "delete", "options", "head", "patch"}
 BEARER_SCHEME = "bearerAuth"
@@ -32,8 +31,6 @@ REQUEST_VALIDATORS = {
     BODY_AND_PARAMETERS: {"validateRequestBody": True, "validateRequestParameters": True},
     PARAMETERS: {"validateRequestBody": False, "validateRequestParameters": True},
 }
-
-Target = Literal["floci", "aws"]
 
 # The request validator's message goes into `detail`. AWS Gateway Response templates allow
 # variable substitution only, no VTL, and AWS inserts this message JSON-escaped. Floci 2.3.0
@@ -110,9 +107,8 @@ def _gateway_response(error: GatewayError, target: Target) -> dict[str, Any]:
 
 
 def load_spec() -> dict[str, Any]:
-    """The clean, published OpenAPI document."""
-    spec: dict[str, Any] = yaml.safe_load(SPEC_PATH.read_text())
-    return spec
+    """The clean, published OpenAPI document (a private copy of the function's own contract)."""
+    return copy.deepcopy(load_contract())
 
 
 def _lambda_authorizer(authorizer_uri: str) -> dict[str, Any]:

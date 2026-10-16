@@ -12,7 +12,9 @@ from orders_api.auth.tokens import Identity, InvalidToken, Reason
 from tests.builders import FakeLambdaContext
 
 METHOD_ARN = "arn:aws:execute-api:us-east-1:000000000000:abc123/live/GET/api/v1/orders/42"
-ALICE = Identity(subject="alice-sub", roles=("USER", "marketing"), client_id="orders-api-client")
+ALICE_IDENTITY = Identity(
+    subject="alice-sub", roles=("USER", "marketing"), client_id="orders-api-client"
+)
 
 
 class StubValidator:
@@ -70,7 +72,7 @@ def log_lines(stream: io.StringIO) -> list[dict[str, Any]]:
 
 
 def test_valid_token_allows_the_whole_api_and_passes_identity(use_validator: Any) -> None:
-    stub = use_validator(ALICE)
+    stub = use_validator(ALICE_IDENTITY)
 
     result = authorize(event("Bearer token-1"))
 
@@ -85,7 +87,7 @@ def test_valid_token_allows_the_whole_api_and_passes_identity(use_validator: Any
 
 @pytest.mark.parametrize("name", ["Authorization", "authorization", "AUTHORIZATION"])
 def test_the_header_is_found_in_any_case(use_validator: Any, name: str) -> None:
-    stub = use_validator(ALICE)
+    stub = use_validator(ALICE_IDENTITY)
 
     authorize(event("Bearer token-1", header_name=name))
 
@@ -147,7 +149,7 @@ def test_a_rejection_logs_reason_kid_issuer_and_client_but_never_the_token(
     assert line["reason"] == "client_not_allowed"
     assert line["kid"] == "us-east-1_pool"
     assert line["iss"] == "http://floci:4566/us-east-1_pool"
-    assert line["client_id"] == "orders-api-untrusted-client"
+    assert line["clientId"] == "orders-api-untrusted-client"
     assert line["keysFetched"] is False
     assert "secret-token-value" not in authorizer_logs.getvalue()
 
@@ -155,7 +157,7 @@ def test_a_rejection_logs_reason_kid_issuer_and_client_but_never_the_token(
 def test_an_acceptance_logs_subject_roles_and_client(
     use_validator: Any, authorizer_logs: io.StringIO
 ) -> None:
-    use_validator(ALICE)
+    use_validator(ALICE_IDENTITY)
 
     authorize(event("Bearer secret-token-value"))
 
@@ -163,14 +165,14 @@ def test_an_acceptance_logs_subject_roles_and_client(
     assert line["message"] == "token_accepted"
     assert line["sub"] == "alice-sub"
     assert line["roles"] == ["USER"]
-    assert line["client_id"] == "orders-api-client"
+    assert line["clientId"] == "orders-api-client"
     assert "secret-token-value" not in authorizer_logs.getvalue()
 
 
 def test_key_events_are_logged_and_mark_the_request_as_having_fetched_keys(
     use_validator: Any, authorizer_logs: io.StringIO
 ) -> None:
-    use_validator(ALICE, fetch_keys=True)
+    use_validator(ALICE_IDENTITY, fetch_keys=True)
 
     authorize(event("Bearer token-1"))
 
@@ -180,7 +182,7 @@ def test_key_events_are_logged_and_mark_the_request_as_having_fetched_keys(
     assert refetch["requestId"] == "gw-req-9"
     assert decision["keysFetched"] is True
 
-    use_validator(ALICE)
+    use_validator(ALICE_IDENTITY)
     authorize(event("Bearer token-2"))
     assert log_lines(authorizer_logs)[-1]["keysFetched"] is False
 
@@ -233,3 +235,22 @@ def test_a_missing_provider_setting_fails_closed() -> None:
 
     with pytest.raises(KeyError):
         authorizer_handler.config_from_environment(incomplete)
+
+
+def test_the_environment_written_by_infra_reads_back_as_the_same_settings() -> None:
+    from orders_api.auth.tokens import ValidatorConfig
+
+    settings = ValidatorConfig(
+        issuer="http://floci:4566/us-east-1_pool",
+        token_type_claim="token_use",
+        token_type_value="access",
+        client_claim="client_id",
+        allowed_clients=frozenset({"client-a", "client-b"}),
+        roles_claim="realm_access.roles",
+        group_roles={"shop-admins": "ADMIN"},
+        jwks_uri="http://floci:4566/us-east-1_pool/.well-known/jwks.json",
+    )
+
+    environment = authorizer_handler.environment_for(settings)
+
+    assert authorizer_handler.config_from_environment(environment) == settings

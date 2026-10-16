@@ -9,14 +9,8 @@ import argparse
 import json
 
 from orders_api_infra.config import EnvConfig, load_config
+from orders_api_infra.identity import FIXTURE_OUTPUTS
 from orders_api_infra.paths import BUILD_DIR
-
-TEST_FIXTURE_OUTPUTS = {
-    "FixtureForeignUserPoolId": "fixtureForeignUserPoolId",
-    "FixtureForeignClientId": "fixtureForeignClientId",
-    "FixtureUntrustedClientId": "fixtureUntrustedClientId",
-    "FixtureShortLivedClientId": "fixtureShortLivedClientId",
-}
 
 
 def api_base_url(config: EnvConfig, outputs: dict[str, str], floci_url: str) -> str:
@@ -49,7 +43,7 @@ def write(env: str, floci_url: str) -> dict[str, str]:
     if "SeedUsersSecretName" in outputs:
         endpoints["seedUsersSecret"] = outputs["SeedUsersSecretName"]
     # Present only where the environment sets testFixtures (ADR 0011).
-    for output, key in TEST_FIXTURE_OUTPUTS.items():
+    for output, key in FIXTURE_OUTPUTS.items():
         if output in outputs:
             endpoints[key] = outputs[output]
     (BUILD_DIR / "endpoints.json").write_text(json.dumps(endpoints, indent=2) + "\n")

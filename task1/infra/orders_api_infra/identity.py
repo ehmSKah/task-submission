@@ -9,6 +9,8 @@ from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_secretsmanager as secretsmanager
 from constructs import Construct
 
+from orders_api.adapters.inbound.authorizer_handler import environment_for
+from orders_api.auth.tokens import ValidatorConfig
 from orders_api.domain.access import Role
 from orders_api_infra.config import EnvConfig
 
@@ -17,13 +19,12 @@ UNTRUSTED_CLIENT_NAME = "orders-api-untrusted-client"
 SHORT_LIVED_CLIENT_NAME = "orders-api-short-lived-client"
 FOREIGN_CLIENT_NAME = "orders-api-foreign-client"
 
-# Cognito's access tokens, described for the provider-agnostic validator (ADR 0003). The groups
-# are named after the roles, so no group -> role mapping is needed (ADR 0001).
-COGNITO_TOKEN_PROFILE = {
-    "TOKEN_TYPE_CLAIM": "token_use",
-    "TOKEN_TYPE_VALUE": "access",
-    "TOKEN_CLIENT_CLAIM": "client_id",
-    "TOKEN_ROLES_CLAIM": "cognito:groups",
+# The test-only resources' stack outputs, and their keys in build/endpoints.json (ADR 0011).
+FIXTURE_OUTPUTS = {
+    "FixtureForeignUserPoolId": "fixtureForeignUserPoolId",
+    "FixtureForeignClientId": "fixtureForeignClientId",
+    "FixtureUntrustedClientId": "fixtureUntrustedClientId",
+    "FixtureShortLivedClientId": "fixtureShortLivedClientId",
 }
 
 
@@ -91,16 +92,18 @@ class Identity(Construct):
         if self.fixtures is not None:
             # Trusted, so that its expired tokens are rejected for their time alone (ADR 0011).
             allowed_clients.append(self.fixtures.short_lived_client.user_pool_client_id)
-        # The authorizer's provider settings, as its environment (ADR 0003).
-        self.authorizer_environment: dict[str, str] = {
-            "TOKEN_ISSUER": self.issuer,
-            "TOKEN_ALLOWED_CLIENTS": (
-                cdk.Fn.join(",", allowed_clients)
-                if len(allowed_clients) > 1
-                else allowed_clients[0]
-            ),
-            **COGNITO_TOKEN_PROFILE,
-        }
+        # Cognito's access tokens, described for the provider-agnostic validator (ADR 0003).
+        # The groups are named after the roles, so no group -> role mapping is needed (ADR 0001).
+        self.authorizer_environment = environment_for(
+            ValidatorConfig(
+                issuer=self.issuer,
+                token_type_claim="token_use",
+                token_type_value="access",
+                client_claim="client_id",
+                allowed_clients=frozenset(allowed_clients),
+                roles_claim="cognito:groups",
+            )
+        )
 
         self.seed_users_secret: secretsmanager.Secret | None = None
         if config.seed_users:
@@ -177,13 +180,14 @@ class TestFixtures(Construct):
             access_token="seconds", id_token="seconds", refresh_token="days"
         )
 
-        for key, value in {
+        values = {
             "FixtureForeignUserPoolId": self.foreign_user_pool.user_pool_id,
             "FixtureForeignClientId": self.foreign_client.user_pool_client_id,
             "FixtureUntrustedClientId": self.untrusted_client.user_pool_client_id,
             "FixtureShortLivedClientId": self.short_lived_client.user_pool_client_id,
-        }.items():
-            cdk.CfnOutput(self, key, value=value, key=key)
+        }
+        for output in FIXTURE_OUTPUTS:
+            cdk.CfnOutput(self, output, value=values[output], key=output)
 
     def _client(
         self, user_pool: cognito.UserPool, construct_id: str, name: str

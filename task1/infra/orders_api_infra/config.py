@@ -11,6 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from orders_api_infra.paths import CONFIG_DIR
 
+# Where an environment runs: the Floci emulator, or real AWS.
+Target = Literal["floci", "aws"]
+
 # The CloudWatch retention periods this project uses.
 LogRetentionDays = Literal[1, 3, 7, 14, 30, 90]
 
@@ -29,7 +32,7 @@ class EnvConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
 
     name: str
-    target: Literal["floci", "aws"]
+    target: Target
     account: str
     region: str
     stage_name: str = Field(alias="stageName")

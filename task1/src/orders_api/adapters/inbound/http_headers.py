@@ -4,7 +4,10 @@ The infrastructure reuses these values for API Gateway's Gateway Responses and W
 response, so the Lambda and the edge stay identical.
 """
 
-JSON_MEDIA_TYPE = "application/json"
+from orders_api.contract import JSON_MEDIA_TYPE
+
+__all__ = ["JSON_MEDIA_TYPE", "PROBLEM_JSON_MEDIA_TYPE", "REQUEST_ID_HEADER", "SECURITY_HEADERS"]
+
 PROBLEM_JSON_MEDIA_TYPE = "application/problem+json"
 
 SECURITY_HEADERS: dict[str, str] = {

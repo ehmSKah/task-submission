@@ -27,6 +27,7 @@ from jwt.algorithms import RSAAlgorithm
 
 from orders_api_infra.config import EnvConfig, load_config
 from orders_api_infra.demo_users import demo_password, demo_user
+from orders_api_infra.identity import FIXTURE_OUTPUTS
 from tests.deployment import FLOCI_URL
 from tests.integration.assertions import assert_problem
 
@@ -108,12 +109,7 @@ def sign_in_alice(config: EnvConfig) -> SignIn:
 
 @pytest.fixture(scope="module")
 def fixture_ids(endpoints: dict[str, Any]) -> dict[str, str]:
-    keys = (
-        "fixtureForeignUserPoolId",
-        "fixtureForeignClientId",
-        "fixtureUntrustedClientId",
-        "fixtureShortLivedClientId",
-    )
+    keys = tuple(FIXTURE_OUTPUTS.values())
     if not all(key in endpoints for key in keys):
         pytest.skip("this environment has no token test fixtures (testFixtures: false)")
     return {key: endpoints[key] for key in keys}
