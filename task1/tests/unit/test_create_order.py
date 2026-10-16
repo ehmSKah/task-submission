@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from orders_api.application.orders import create_order, get_order
+from orders_api.application.orders import create_order
 from orders_api.domain.order import LineItem, NewOrder, OrderStatus
 from tests.unit.fakes import FixedClock, InMemoryOrderRepository, SequentialIds
 
@@ -27,7 +27,7 @@ def test_creates_a_pending_order_for_the_caller_and_stores_it() -> None:
     assert order.items == REQUEST.items
     assert order.total_amount == 4498
     assert order.created_at == order.updated_at == "2026-10-17T09:30:00.123Z"
-    assert get_order(repository, order.id) == order
+    assert repository.get(order.id) == order
 
 
 def test_every_order_gets_a_new_id() -> None:
@@ -40,5 +40,5 @@ def test_every_order_gets_a_new_id() -> None:
     second = create_order(repository, FixedClock(NOW), ids, owner_id="alice-sub", request=REQUEST)
 
     assert first.id != second.id
-    assert get_order(repository, first.id) == first
-    assert get_order(repository, second.id) == second
+    assert repository.get(first.id) == first
+    assert repository.get(second.id) == second

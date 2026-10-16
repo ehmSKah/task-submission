@@ -27,10 +27,13 @@ from orders_api.application.orders import (
     IdGenerator,
     OrderNotFound,
     OrderRepository,
+    check_may_create,
+    check_may_read,
     create_order,
     get_order,
 )
 from orders_api.domain.order import Order
+from orders_api.domain.permissions import PermissionDenied
 
 UNEXPECTED_ERROR_DETAIL = "An unexpected error occurred"
 
@@ -82,14 +85,17 @@ def order_response(order: Order, status_code: int) -> Response[str]:
 def post_order() -> Response[str]:
     caller = identified_caller()
     request = new_order_from(app.current_event)
+    check_may_create(caller)
     order = create_order(orders(), clock, order_ids, owner_id=caller.subject, request=request)
     return order_response(order, 201)
 
 
 @app.get("/api/v1/orders/<order_id>")
 def get_order_by_id(order_id: str) -> Response[str]:
-    identified_caller()
-    return order_response(get_order(orders(), valid_order_id(order_id)), 200)
+    caller = identified_caller()
+    order_id = valid_order_id(order_id)
+    check_may_read(caller)
+    return order_response(get_order(orders(), caller, order_id), 200)
 
 
 def problem_response(
@@ -115,6 +121,13 @@ def not_found(_: Exception) -> Response[str]:
 @app.exception_handler(InvalidRequest)  # type: ignore[untyped-decorator]
 def invalid_request(error: InvalidRequest) -> Response[str]:
     return problem_response(error.problem, error.detail, error.errors)
+
+
+@app.exception_handler(PermissionDenied)  # type: ignore[untyped-decorator]
+def permission_denied(error: PermissionDenied) -> Response[str]:
+    """Names only the caller's own missing permission; says nothing about any order."""
+    needed = " or ".join(sorted(error.needed))
+    return problem_response(ProblemType.FORBIDDEN, f"Missing permission: {needed}")
 
 
 @app.exception_handler(OrderNotFound)  # type: ignore[untyped-decorator]  # Powertools leaves it untyped

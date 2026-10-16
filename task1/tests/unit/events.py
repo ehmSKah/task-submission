@@ -8,6 +8,11 @@ from orders_api.adapters.inbound import api_handler
 from tests.builders import FakeLambdaContext, rest_event
 
 ALICE = {"principalId": "alice-sub", "sub": "alice-sub", "roles": "USER"}
+BOB = {"principalId": "bob-sub", "sub": "bob-sub", "roles": "USER"}
+MANAGER = {"principalId": "manager-sub", "sub": "manager-sub", "roles": "ORDER_MANAGER"}
+ADMIN = {"principalId": "admin-sub", "sub": "admin-sub", "roles": "ADMIN"}
+# A valid token without any recognised role (ADR 0001).
+NOBODY = {"principalId": "nobody-sub", "sub": "nobody-sub", "roles": ""}
 
 VALID_ORDER: dict[str, Any] = {
     "currency": "EUR",
