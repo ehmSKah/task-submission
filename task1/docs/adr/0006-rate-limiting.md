@@ -90,7 +90,7 @@ A person with several roles gets the highest tier (roles combine, [ADR 0001](000
 
 - **Floods of invalid tokens are not limited locally.** On Floci, WAF is deployed and validated but **not enforced** (Floci emulates WAF's management API only). On AWS, the same CDK stack enforces it.
 - **Boundary burst:** a client can send up to twice its limit in a short burst across a window boundary. This is the documented trade-off of fixed windows.
-- **Cost and latency:** two DynamoDB writes per request, about $2.50 per million requests (on the order of the REST API's own price) and about 10–20 ms of added latency. **Hot keys:** a single abusive IP concentrates on one partition key (about 1,000 writes/s, and rejected writes still consume capacity). WAF absorbs that in production.
+- **Cost and latency:** two DynamoDB writes per request, on the order of the REST API's own price per million requests (the exact figure is in the cost model, from current AWS pricing; [ADR 0013](0013-production-readiness-and-evolution.md)), and about 10–20 ms of added latency. **Hot keys:** a single abusive IP concentrates on one partition key (about 1,000 writes/s, and rejected writes still consume capacity). WAF absorbs that in production.
 - **Limits are approximate during a counter-store outage:** with the in-memory fallback, the effective limit is the configured limit times the number of warm Lambda instances.
 - **To verify on the first real AWS deploy:**
   - that WAF's `IP` key and `sourceIp` both see the client's address for the edge-optimized endpoint. This is stated in an AWS re:Post expert article, but not clearly in the official documentation.
