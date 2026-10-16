@@ -9,7 +9,7 @@ from aws_lambda_powertools import Logger
 from aws_lambda_powertools.event_handler import APIGatewayRestResolver, Response
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
-from orders_api.adapters.inbound.caller import MissingCallerIdentity, caller_from_event
+from orders_api.adapters.inbound.caller import Caller, MissingCallerIdentity, caller_from_event
 from orders_api.adapters.inbound.http_headers import (
     JSON_MEDIA_TYPE,
     PROBLEM_JSON_MEDIA_TYPE,
@@ -17,9 +17,20 @@ from orders_api.adapters.inbound.http_headers import (
     SECURITY_HEADERS,
 )
 from orders_api.adapters.inbound.order_json import order_to_json
-from orders_api.adapters.inbound.problems import ProblemType, problem_body
+from orders_api.adapters.inbound.order_requests import new_order_from, valid_order_id
+from orders_api.adapters.inbound.problems import FieldError, ProblemType, problem_body
+from orders_api.adapters.inbound.request_checks import InvalidRequest
 from orders_api.adapters.outbound.dynamodb_orders import DynamoDbOrderRepository
-from orders_api.application.orders import OrderNotFound, OrderRepository, get_order
+from orders_api.adapters.outbound.system import RandomOrderIds, SystemClock
+from orders_api.application.orders import (
+    Clock,
+    IdGenerator,
+    OrderNotFound,
+    OrderRepository,
+    create_order,
+    get_order,
+)
+from orders_api.domain.order import Order
 
 UNEXPECTED_ERROR_DETAIL = "An unexpected error occurred"
 
@@ -27,6 +38,8 @@ logger = Logger(service="orders-api")
 app = APIGatewayRestResolver()
 
 _orders: OrderRepository | None = None
+clock: Clock = SystemClock()
+order_ids: IdGenerator = RandomOrderIds()
 
 
 def orders() -> OrderRepository:
@@ -47,22 +60,47 @@ def get_health() -> Response[str]:
     return Response(status_code=200, content_type=JSON_MEDIA_TYPE, body=json.dumps(health_status()))
 
 
-@app.get("/api/v1/orders/<order_id>")
-def get_order_by_id(order_id: str) -> Response[str]:
+def identified_caller() -> Caller:
+    """Step 2 of the request pipeline: the authorizer's identity, or fail closed (ADR 0009)."""
     caller = caller_from_event(app.current_event.raw_event)
     logger.append_keys(sub=caller.subject, roles=sorted(caller.roles))
-    order = get_order(orders(), order_id)
+    return caller
+
+
+def order_response(order: Order, status_code: int) -> Response[str]:
+    """An order in its published shape, with its version as the `ETag` (ADR 0004)."""
+    logger.append_keys(orderId=order.id)
     return Response(
-        status_code=200, content_type=JSON_MEDIA_TYPE, body=json.dumps(order_to_json(order))
+        status_code=status_code,
+        content_type=JSON_MEDIA_TYPE,
+        body=json.dumps(order_to_json(order)),
+        headers={"ETag": f'"{order.version}"'},
     )
 
 
-def problem_response(problem: ProblemType, detail: str | None = None) -> Response[str]:
+@app.post("/api/v1/orders")
+def post_order() -> Response[str]:
+    caller = identified_caller()
+    request = new_order_from(app.current_event)
+    order = create_order(orders(), clock, order_ids, owner_id=caller.subject, request=request)
+    return order_response(order, 201)
+
+
+@app.get("/api/v1/orders/<order_id>")
+def get_order_by_id(order_id: str) -> Response[str]:
+    identified_caller()
+    return order_response(get_order(orders(), valid_order_id(order_id)), 200)
+
+
+def problem_response(
+    problem: ProblemType, detail: str | None = None, errors: tuple[FieldError, ...] = ()
+) -> Response[str]:
     body = problem_body(
         problem,
         detail=detail,
         instance=app.current_event.path,
         request_id=app.current_event.request_context.request_id,
+        errors=errors,
     )
     return Response(
         status_code=problem.status, content_type=PROBLEM_JSON_MEDIA_TYPE, body=json.dumps(body)
@@ -72,6 +110,11 @@ def problem_response(problem: ProblemType, detail: str | None = None) -> Respons
 @app.not_found
 def not_found(_: Exception) -> Response[str]:
     return problem_response(ProblemType.NOT_FOUND)
+
+
+@app.exception_handler(InvalidRequest)  # type: ignore[untyped-decorator]
+def invalid_request(error: InvalidRequest) -> Response[str]:
+    return problem_response(error.problem, error.detail, error.errors)
 
 
 @app.exception_handler(OrderNotFound)  # type: ignore[untyped-decorator]  # Powertools leaves it untyped

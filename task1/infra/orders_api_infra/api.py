@@ -56,7 +56,10 @@ class Api(Construct):
             environment={"ORDERS_TABLE": orders_table.table_name},
         )
         self.api_function.add_to_role_policy(
-            iam.PolicyStatement(actions=["dynamodb:GetItem"], resources=[orders_table.table_arn])
+            iam.PolicyStatement(
+                actions=["dynamodb:GetItem", "dynamodb:PutItem"],
+                resources=[orders_table.table_arn],
+            )
         )
 
         self.rest_api = apigateway.SpecRestApi(
@@ -68,6 +71,7 @@ class Api(Construct):
                     load_spec(),
                     api_integration_uri=self._invocation_uri(self.api_function),
                     authorizer_uri=self._invocation_uri(self.authorizer_function),
+                    target=config.target,
                 )
             ),
             endpoint_types=[apigateway.EndpointType.EDGE],

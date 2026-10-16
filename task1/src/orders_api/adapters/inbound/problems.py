@@ -1,5 +1,7 @@
 """RFC 9457 Problem Details: the one error shape every layer returns (ADR 0007)."""
 
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -38,12 +40,35 @@ class ProblemType(Enum):
         return URN_PREFIX + self.slug
 
 
+@dataclass(frozen=True)
+class FieldError:
+    """One field-level error found by code: in the body (`pointer`) or a parameter."""
+
+    detail: str
+    pointer: str | None = None
+    """JSON Pointer (RFC 6901) into the request body."""
+    parameter: str | None = None
+    """Name of a path or query parameter."""
+
+    def to_json(self) -> dict[str, str]:
+        located = {"pointer": self.pointer} if self.pointer is not None else {}
+        if self.parameter is not None:
+            located["parameter"] = self.parameter
+        return {**located, "detail": self.detail}
+
+
+def json_pointer(path: Iterable[str | int]) -> str:
+    """RFC 6901: `~` and `/` inside a segment are escaped as `~0` and `~1`."""
+    return "".join("/" + str(segment).replace("~", "~0").replace("/", "~1") for segment in path)
+
+
 def problem_body(
     problem: ProblemType,
     *,
     request_id: str,
     instance: str | None = None,
     detail: str | None = None,
+    errors: Sequence[FieldError] = (),
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "type": problem.urn,
@@ -55,4 +80,6 @@ def problem_body(
     if instance is not None:
         body["instance"] = instance
     body["requestId"] = request_id
+    if errors:
+        body["errors"] = [error.to_json() for error in errors]
     return body

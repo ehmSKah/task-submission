@@ -12,6 +12,7 @@ from orders_api_infra.config import load_config
 from orders_api_infra.demo_users import access_token, demo_user
 from tests.builders import an_order
 from tests.deployment import store_order
+from tests.integration.contract import contract_checked_client
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -28,7 +29,8 @@ def _only_on_floci(request: pytest.FixtureRequest, endpoints: dict[str, Any]) ->
 
 @pytest.fixture(scope="session")
 def api(endpoints: dict[str, Any]) -> Iterator[httpx.Client]:
-    with httpx.Client(base_url=endpoints["apiUrl"], timeout=30) as client:
+    """Every response through this client is validated against the OpenAPI document."""
+    with contract_checked_client(endpoints["apiUrl"], timeout=30) as client:
         yield client
 
 
@@ -48,7 +50,7 @@ def token_for(endpoints: dict[str, Any]) -> Callable[[str], str]:
 
 @pytest.fixture
 def stored_order(endpoints: dict[str, Any]) -> Order:
-    """An order written straight to the table, until the API can create orders itself."""
+    """An order written straight to the table, bypassing the API."""
     order = an_order(id=str(uuid.uuid4()))
     store_order(endpoints, order)
     return order
