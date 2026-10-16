@@ -48,6 +48,7 @@ addopts = "-ra --strict-markers"
 markers = [
     "integration: HTTP tests against the deployed stack (needs build/endpoints.json)",
     "adapter: outbound adapters against the emulator (needs build/endpoints.json)",
+    "floci_only: needs Floci behaviour AWS can't reproduce; skipped on other targets",
 ]
 
 [tool.ruff]

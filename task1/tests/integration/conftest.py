@@ -19,6 +19,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         item.add_marker(pytest.mark.integration)
 
 
+@pytest.fixture(autouse=True)
+def _only_on_floci(request: pytest.FixtureRequest, endpoints: dict[str, Any]) -> None:
+    """`floci_only` tests need emulator behaviour, e.g. second-long tokens (ADR 0011)."""
+    if request.node.get_closest_marker("floci_only") and endpoints["target"] != "floci":
+        pytest.skip("runs against Floci only")
+
+
 @pytest.fixture(scope="session")
 def api(endpoints: dict[str, Any]) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=endpoints["apiUrl"], timeout=30) as client:
