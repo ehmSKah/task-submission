@@ -5,8 +5,6 @@ from typing import Any
 from orders_api.domain.access import recognised_roles
 from orders_api.domain.permissions import Caller
 
-__all__ = ["Caller", "MissingCallerIdentity", "caller_from_event"]
-
 
 class MissingCallerIdentity(Exception):
     """The authorizer context is absent: a misconfiguration, so the request fails closed."""

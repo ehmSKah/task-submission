@@ -20,7 +20,8 @@ from aws_lambda_powertools.utilities.idempotency.exceptions import (
     IdempotencyValidationError,
 )
 
-from orders_api.adapters.inbound.idempotency import KEY_PREFIX, dynamodb_store, run_once
+from orders_api.adapters.inbound.idempotency import KEY_PREFIX, run_once
+from orders_api.adapters.outbound.dynamodb_idempotency import dynamodb_store
 from orders_api.domain.order import LineItem, NewOrder
 from tests.builders import FakeLambdaContext
 

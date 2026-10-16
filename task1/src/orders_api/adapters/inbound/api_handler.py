@@ -14,18 +14,19 @@ from aws_lambda_powertools.utilities.idempotency.exceptions import (
 )
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
-from orders_api.adapters.inbound.caller import Caller, MissingCallerIdentity, caller_from_event
+from orders_api.adapters.inbound.caller import MissingCallerIdentity, caller_from_event
 from orders_api.adapters.inbound.http_headers import (
     JSON_MEDIA_TYPE,
     PROBLEM_JSON_MEDIA_TYPE,
     REQUEST_ID_HEADER,
     SECURITY_HEADERS,
 )
-from orders_api.adapters.inbound.idempotency import dynamodb_store, idempotency_key, run_once
+from orders_api.adapters.inbound.idempotency import idempotency_key, run_once
 from orders_api.adapters.inbound.order_json import order_to_json
 from orders_api.adapters.inbound.order_requests import ORDERS_PATH, new_order_from, valid_order_id
 from orders_api.adapters.inbound.problems import FieldError, ProblemType, problem_body
 from orders_api.adapters.inbound.request_checks import InvalidRequest
+from orders_api.adapters.outbound.dynamodb_idempotency import dynamodb_store
 from orders_api.adapters.outbound.dynamodb_orders import DynamoDbOrderRepository
 from orders_api.adapters.outbound.system import RandomOrderIds, SystemClock
 from orders_api.application.orders import (
@@ -39,7 +40,7 @@ from orders_api.application.orders import (
     get_order,
 )
 from orders_api.domain.order import Order
-from orders_api.domain.permissions import PermissionDenied
+from orders_api.domain.permissions import Caller, PermissionDenied
 
 UNEXPECTED_ERROR_DETAIL = "An unexpected error occurred"
 

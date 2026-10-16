@@ -15,7 +15,6 @@ from typing import Any
 from aws_lambda_powertools.event_handler import Response
 from aws_lambda_powertools.utilities.idempotency import (
     BasePersistenceLayer,
-    DynamoDBPersistenceLayer,
     IdempotencyConfig,
     idempotent_function,
 )
@@ -45,11 +44,6 @@ def idempotency_key(headers: Mapping[str, str] | None) -> str | None:
     """The `Idempotency-Key` header in any casing: REST APIs pass the client's (ADR 0009)."""
     wanted = IDEMPOTENCY_KEY_HEADER.lower()
     return next((value for name, value in (headers or {}).items() if name.lower() == wanted), None)
-
-
-def dynamodb_store(table_name: str) -> BasePersistenceLayer:
-    """The idempotency table in Powertools' default layout: key `id`, TTL `expiration`."""
-    return DynamoDBPersistenceLayer(table_name=table_name)
 
 
 def _response_to_dict(response: Response[str]) -> dict[str, Any]:
