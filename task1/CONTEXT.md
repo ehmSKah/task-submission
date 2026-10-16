@@ -16,6 +16,10 @@ _Avoid_: Group (the identity provider's mechanism for carrying a role), user typ
 The identity provider's way of tagging a person, from which their roles are derived. Only meaningful at the boundary with the identity provider.
 _Avoid_: Using "group" to mean a role inside the API
 
+**Caller**:
+The person making a request, as the identity provider has established them: their subject and their recognised roles.
+_Avoid_: Principal (an AWS policy term), current user
+
 **Permission**:
 A single allowed action on orders, granted to a role. Access checks ask about permissions, never about roles directly.
 _Avoid_: Right, privilege, scope (scopes describe what a client application may do, not what a person may do)

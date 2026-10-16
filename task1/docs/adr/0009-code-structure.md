@@ -33,7 +33,7 @@ task1/
 │   ├── auth/                 # OIDC validator + JWKS cache, no Lambda imports
 │   ├── adapters/
 │   │   ├── inbound/          # api_handler (Powertools router + middleware), authorizer_handler
-│   │   └── outbound/         # DynamoDB order repository and counters, SSM config source, idempotency wiring
+│   │   └── outbound/         # DynamoDB order repository and counters, SSM config source, idempotency persistence
 │   └── contract/             # loads request schemas from openapi.yaml for Powertools Validation
 ├── infra/                    # CDK app (Python)
 └── tests/  unit/  integration/  contract/
@@ -44,7 +44,8 @@ task1/
 - **Body validation:** **Powertools Validation** against the OpenAPI request schemas, then **Powertools Parser** into Pydantic models that carry types only.
 - **Idempotency:** **Powertools Idempotency** (`@idempotent_function`) wraps the call to `create_order` in the adapter layer, for `POST /api/v1/orders` only.
   - **Key:** `{owner: sub, key: Idempotency-Key}`. The header name is looked up case-insensitively first, because REST APIs pass the client's casing.
-  - **Fingerprint:** payload validation hashes the body.
+  - **Fingerprint:** payload validation hashes the parsed order, not the raw body (ADR 0004).
+  - **Where it lives:** the wrapper that reads the header and replays responses is an inbound adapter; the DynamoDB persistence layer is an outbound adapter.
   - **Missing header:** `raise_on_no_idempotency_key=False`, so the request runs normally.
   - **Expiry:** 24 h. In-progress records are bounded by the Lambda's remaining time (`register_lambda_context`).
   - **What is stored:** the serialised `201` response.

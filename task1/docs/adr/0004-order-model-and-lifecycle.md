@@ -54,7 +54,9 @@ PENDING ──► CONFIRMED ──► SHIPPED ──► DELIVERED
 
 **Retried creates**
 - **The header:** `POST` accepts an optional `Idempotency-Key` header (IETF draft *The Idempotency-Key HTTP Header Field*).
-- **What is remembered, and for how long:** the key, a fingerprint of the request body and the original response, for 24 hours.
+- **What is remembered, and for how long:** the key, a fingerprint of the request and the original response, for 24 hours. The fingerprint is taken from the **parsed** order, so whitespace and the order of JSON keys don't make a retry look like a different request; anything that changes the order (including the order of line items) does. Unknown fields are rejected before this point, so nothing is lost by hashing the parsed form.
+- **An empty header value counts as no header.** A request with `Idempotency-Key:` and nothing after it runs normally.
+- **Ordering with validation:** the key is only looked at after the request is valid and permitted (ADR 0009). A retry whose body is invalid gets `400`, and one from a caller without `order:create` gets `403`; neither leaves an idempotency record.
 - **Scope:** keys are **scoped per owner** (`sub`), so two users' keys never collide or reveal each other's orders.
 
 | Same key, and … | Result |
