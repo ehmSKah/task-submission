@@ -61,6 +61,7 @@ jobs:
       # Avoids the 10+ s image pull on the first Lambda invoke.
       - run: docker pull -q public.ecr.aws/lambda/python:3.13
       - run: make up
+      - run: uv run pytest tests/adapter -m adapter --junitxml=build/junit-adapter.xml
       - run: uv run pytest tests/integration -m integration --junitxml=build/junit-integration.xml
       - if: failure()
         run: |
@@ -73,6 +74,7 @@ jobs:
         with:
           name: floci-run
           path: |
+            task1/build/junit-adapter.xml
             task1/build/junit-integration.xml
             task1/build/*.log
             task1/build/endpoints.json

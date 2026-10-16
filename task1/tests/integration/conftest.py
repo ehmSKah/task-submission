@@ -1,13 +1,17 @@
 """Integration tests run over HTTP against the deployed stack named in build/endpoints.json."""
 
-import json
-from collections.abc import Iterator
-from pathlib import Path
+import uuid
+from collections.abc import Callable, Iterator
+from typing import Any
 
 import httpx
 import pytest
 
-ENDPOINTS = Path(__file__).parents[2] / "build" / "endpoints.json"
+from orders_api.domain.order import Order
+from orders_api_infra.config import load_config
+from orders_api_infra.demo_users import access_token, demo_user
+from tests.builders import an_order
+from tests.deployment import store_order
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -16,9 +20,28 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 
 @pytest.fixture(scope="session")
-def api() -> Iterator[httpx.Client]:
-    if not ENDPOINTS.is_file():
-        pytest.fail("build/endpoints.json is missing: run `make up` first")
-    base_url = json.loads(ENDPOINTS.read_text())["apiUrl"]
-    with httpx.Client(base_url=base_url, timeout=30) as client:
+def api(endpoints: dict[str, Any]) -> Iterator[httpx.Client]:
+    with httpx.Client(base_url=endpoints["apiUrl"], timeout=30) as client:
         yield client
+
+
+@pytest.fixture(scope="session")
+def token_for(endpoints: dict[str, Any]) -> Callable[[str], str]:
+    """A real access token from the environment's Cognito, per demo user, fetched once."""
+    config = load_config(endpoints["env"])
+    tokens: dict[str, str] = {}
+
+    def token(user: str) -> str:
+        if user not in tokens:
+            tokens[user] = access_token(config, demo_user(user))
+        return tokens[user]
+
+    return token
+
+
+@pytest.fixture
+def stored_order(endpoints: dict[str, Any]) -> Order:
+    """An order written straight to the table, until the API can create orders itself."""
+    order = an_order(id=str(uuid.uuid4()))
+    store_order(endpoints, order)
+    return order
