@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "aws-lambda-powertools>=3.20",
+    "pyjwt[crypto]>=2.10",
 ]
 
 [dependency-groups]
@@ -17,6 +18,8 @@ dev = [
     "import-linter>=2.5",
     "pyyaml>=6.0",
     "types-PyYAML",
+    "boto3>=1.40",
+    "boto3-stubs[dynamodb,cognito-idp,secretsmanager,cloudformation]>=1.40",
 ]
 infra = [
     "aws-cdk-lib>=2.220",
@@ -44,6 +47,7 @@ pythonpath = ["infra"]
 addopts = "-ra --strict-markers"
 markers = [
     "integration: HTTP tests against the deployed stack (needs build/endpoints.json)",
+    "adapter: outbound adapters against the emulator (needs build/endpoints.json)",
 ]
 
 [tool.ruff]
