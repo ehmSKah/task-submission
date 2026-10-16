@@ -1,4 +1,7 @@
-"""The Identity construct: Cognito user pool, public app client, role groups (ADRs 0001, 0010)."""
+"""The Identity construct: Cognito user pool, public app client, role groups (ADRs 0001, 0010).
+
+It also owns what the authorizer must know about this identity provider (ADR 0003).
+"""
 
 import aws_cdk as cdk
 from aws_cdk import aws_cognito as cognito
@@ -9,6 +12,25 @@ from orders_api.domain.access import Role
 from orders_api_infra.config import EnvConfig
 
 APP_CLIENT_NAME = "orders-api-client"
+
+# Cognito's access tokens, described for the provider-agnostic validator (ADR 0003). The groups
+# are named after the roles, so no group -> role mapping is needed (ADR 0001).
+COGNITO_TOKEN_PROFILE = {
+    "TOKEN_TYPE_CLAIM": "token_use",
+    "TOKEN_TYPE_VALUE": "access",
+    "TOKEN_CLIENT_CLAIM": "client_id",
+    "TOKEN_ROLES_CLAIM": "cognito:groups",
+}
+
+
+def _password_policy() -> cognito.PasswordPolicy:
+    return cognito.PasswordPolicy(
+        min_length=12,
+        require_lowercase=True,
+        require_uppercase=True,
+        require_digits=True,
+        require_symbols=True,
+    )
 
 
 class Identity(Construct):
@@ -21,13 +43,7 @@ class Identity(Construct):
             self_sign_up_enabled=False,
             sign_in_aliases=cognito.SignInAliases(email=True),
             account_recovery=cognito.AccountRecovery.NONE,
-            password_policy=cognito.PasswordPolicy(
-                min_length=12,
-                require_lowercase=True,
-                require_uppercase=True,
-                require_digits=True,
-                require_symbols=True,
-            ),
+            password_policy=_password_policy(),
             removal_policy=config.data_removal_policy,
         )
         if config.floci_user_pool_id:
@@ -61,6 +77,13 @@ class Identity(Construct):
             if config.floci_issuer_base_url
             else self.user_pool.user_pool_provider_url
         )
+
+        # The authorizer's provider settings, as its environment (ADR 0003).
+        self.authorizer_environment: dict[str, str] = {
+            "TOKEN_ISSUER": self.issuer,
+            "TOKEN_ALLOWED_CLIENTS": self.client.user_pool_client_id,
+            **COGNITO_TOKEN_PROFILE,
+        }
 
         self.seed_users_secret: secretsmanager.Secret | None = None
         if config.seed_users:

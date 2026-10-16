@@ -23,6 +23,6 @@ class OrdersApiStack(cdk.Stack):
             self,
             "Api",
             config=config,
-            token_issuer=self.identity.issuer,
+            authorizer_environment=self.identity.authorizer_environment,
             orders_table=self.data.orders_table,
         )

@@ -35,7 +35,7 @@ class Api(Construct):
         construct_id: str,
         *,
         config: EnvConfig,
-        token_issuer: str,
+        authorizer_environment: dict[str, str],
         orders_table: dynamodb.ITable,
     ) -> None:
         super().__init__(scope, construct_id)
@@ -47,7 +47,7 @@ class Api(Construct):
             "AuthorizerFunction",
             handler=f"{HANDLERS}.authorizer_handler.handler",
             timeout_seconds=5,
-            environment={"TOKEN_ISSUER": token_issuer},
+            environment=authorizer_environment,
         )
         self.api_function = self._function(
             "ApiFunction",
