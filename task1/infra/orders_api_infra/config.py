@@ -41,6 +41,14 @@ class EnvConfig(BaseModel):
     removal_policy: Literal["destroy", "retain"] = Field(alias="removalPolicy")
     # Whether demo users may be seeded; never in production (ADR 0010).
     seed_users: bool = Field(alias="seedUsers")
+    # Test-only Cognito resources: a foreign user pool, an untrusted app client and a
+    # short-lived client for expiry tests. Never in production (ADRs 0010 and 0011).
+    test_fixtures: bool = Field(default=False, alias="testFixtures")
+    # The short-lived client's access-token lifetime. AWS's minimum is 5 minutes; Floci accepts
+    # seconds when FLOCI_SERVICES_COGNITO_ENFORCE_TOKEN_VALIDITY_LIMITS is false.
+    fixture_token_validity_seconds: int = Field(
+        default=300, ge=1, alias="fixtureTokenValiditySeconds"
+    )
     # Floci only: the issuer host tokens carry (FLOCI_HOSTNAME), reachable from Lambda
     # containers. On AWS the issuer comes from the user pool itself.
     floci_issuer_base_url: str | None = Field(default=None, alias="flociIssuerBaseUrl")

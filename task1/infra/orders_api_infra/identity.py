@@ -1,6 +1,7 @@
 """The Identity construct: Cognito user pool, public app client, role groups (ADRs 0001, 0010).
 
-It also owns what the authorizer must know about this identity provider (ADR 0003).
+It also owns what the authorizer must know about this identity provider (ADR 0003) and, where
+the environment sets `testFixtures`, the test-only Cognito resources (ADR 0011).
 """
 
 import aws_cdk as cdk
@@ -12,6 +13,9 @@ from orders_api.domain.access import Role
 from orders_api_infra.config import EnvConfig
 
 APP_CLIENT_NAME = "orders-api-client"
+UNTRUSTED_CLIENT_NAME = "orders-api-untrusted-client"
+SHORT_LIVED_CLIENT_NAME = "orders-api-short-lived-client"
+FOREIGN_CLIENT_NAME = "orders-api-foreign-client"
 
 # Cognito's access tokens, described for the provider-agnostic validator (ADR 0003). The groups
 # are named after the roles, so no group -> role mapping is needed (ADR 0001).
@@ -78,10 +82,23 @@ class Identity(Construct):
             else self.user_pool.user_pool_provider_url
         )
 
+        self.fixtures = (
+            TestFixtures(self, "TestFixtures", config=config, user_pool=self.user_pool)
+            if config.test_fixtures
+            else None
+        )
+        allowed_clients = [self.client.user_pool_client_id]
+        if self.fixtures is not None:
+            # Trusted, so that its expired tokens are rejected for their time alone (ADR 0011).
+            allowed_clients.append(self.fixtures.short_lived_client.user_pool_client_id)
         # The authorizer's provider settings, as its environment (ADR 0003).
         self.authorizer_environment: dict[str, str] = {
             "TOKEN_ISSUER": self.issuer,
-            "TOKEN_ALLOWED_CLIENTS": self.client.user_pool_client_id,
+            "TOKEN_ALLOWED_CLIENTS": (
+                cdk.Fn.join(",", allowed_clients)
+                if len(allowed_clients) > 1
+                else allowed_clients[0]
+            ),
             **COGNITO_TOKEN_PROFILE,
         }
 
@@ -114,3 +131,69 @@ class Identity(Construct):
             self, "UserPoolClientId", value=self.client.user_pool_client_id, key="UserPoolClientId"
         )
         cdk.CfnOutput(self, "TokenIssuer", value=self.issuer, key="TokenIssuer")
+
+
+class TestFixtures(Construct):
+    """Test-only Cognito resources for the invalid-token tests (ADR 0011).
+
+    - a foreign user pool with its own client: real tokens with another issuer and key
+    - an untrusted client in our pool: real tokens whose client is not on the allow-list
+    - a short-lived client in our pool: real tokens that expire within seconds on Floci
+    """
+
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        *,
+        config: EnvConfig,
+        user_pool: cognito.UserPool,
+    ) -> None:
+        super().__init__(scope, construct_id)
+        self.foreign_user_pool = cognito.UserPool(
+            self,
+            "ForeignUserPool",
+            user_pool_name=f"orders-api-{config.name}-foreign",
+            self_sign_up_enabled=False,
+            sign_in_aliases=cognito.SignInAliases(email=True),
+            account_recovery=cognito.AccountRecovery.NONE,
+            password_policy=_password_policy(),
+            removal_policy=cdk.RemovalPolicy.DESTROY,
+        )
+        self.foreign_client = self._client(
+            self.foreign_user_pool, "ForeignClient", FOREIGN_CLIENT_NAME
+        )
+        self.untrusted_client = self._client(user_pool, "UntrustedClient", UNTRUSTED_CLIENT_NAME)
+        self.short_lived_client = self._client(
+            user_pool, "ShortLivedClient", SHORT_LIVED_CLIENT_NAME
+        )
+        # CDK refuses lifetimes below AWS's 5-minute minimum, so they go on the L1 resource.
+        short_lived = self.short_lived_client.node.default_child
+        assert isinstance(short_lived, cognito.CfnUserPoolClient)
+        short_lived.access_token_validity = config.fixture_token_validity_seconds
+        short_lived.id_token_validity = config.fixture_token_validity_seconds
+        short_lived.refresh_token_validity = 1
+        short_lived.token_validity_units = cognito.CfnUserPoolClient.TokenValidityUnitsProperty(
+            access_token="seconds", id_token="seconds", refresh_token="days"
+        )
+
+        for key, value in {
+            "FixtureForeignUserPoolId": self.foreign_user_pool.user_pool_id,
+            "FixtureForeignClientId": self.foreign_client.user_pool_client_id,
+            "FixtureUntrustedClientId": self.untrusted_client.user_pool_client_id,
+            "FixtureShortLivedClientId": self.short_lived_client.user_pool_client_id,
+        }.items():
+            cdk.CfnOutput(self, key, value=value, key=key)
+
+    def _client(
+        self, user_pool: cognito.UserPool, construct_id: str, name: str
+    ) -> cognito.UserPoolClient:
+        return cognito.UserPoolClient(
+            self,
+            construct_id,
+            user_pool=user_pool,
+            user_pool_client_name=name,
+            generate_secret=False,
+            auth_flows=cognito.AuthFlow(user_password=True),
+            prevent_user_existence_errors=True,
+        )

@@ -39,6 +39,22 @@ NagSuppressions.add_resource_suppressions(
         ),
     ],
 )
+if stack.identity.fixtures is not None:
+    NagSuppressions.add_resource_suppressions(
+        stack.identity.fixtures.foreign_user_pool,
+        [
+            NagPackSuppression(
+                id="AwsSolutions-COG2",
+                reason="Test-only foreign pool (testFixtures): it exists to issue tokens the "
+                "API must reject and holds one throwaway test user (ADR 0011).",
+            ),
+            NagPackSuppression(
+                id="AwsSolutions-COG8",
+                reason="Test-only foreign pool (testFixtures): no real sign-ins to protect "
+                "(ADR 0011).",
+            ),
+        ],
+    )
 if stack.identity.seed_users_secret is not None:
     NagSuppressions.add_resource_suppressions(
         stack.identity.seed_users_secret,
