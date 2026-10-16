@@ -91,3 +91,12 @@ def test_floci_settings_are_rejected_for_aws_targets(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError, match="only applies when target is floci"):
         load_config("awsish", tmp_path)
+
+
+def test_everyone_is_user_is_off_unless_an_environment_turns_it_on(tmp_path: Path) -> None:
+    assert load_config("local", CONFIG_DIR).everyone_is_user is False
+    (tmp_path / "selfsignup.yaml").write_text(
+        (CONFIG_DIR / "local.yaml").read_text() + "everyoneIsUser: true\n"
+    )
+
+    assert load_config("selfsignup", tmp_path).everyone_is_user is True

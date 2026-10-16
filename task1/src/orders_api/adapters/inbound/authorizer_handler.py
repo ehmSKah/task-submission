@@ -53,10 +53,13 @@ CLIENT_CLAIM = "TOKEN_CLIENT_CLAIM"
 ALLOWED_CLIENTS = "TOKEN_ALLOWED_CLIENTS"
 ROLES_CLAIM = "TOKEN_ROLES_CLAIM"
 GROUP_ROLES = "TOKEN_GROUP_ROLES"
+# ADR 0001's opt-in switch: every authenticated person also holds USER. Only "true" turns it on.
+EVERYONE_IS_USER = "ROLES_EVERYONE_IS_USER"
 
 
-def environment_for(settings: ValidatorConfig) -> dict[str, str]:
-    """The environment variables `config_from_environment` reads back as `settings`.
+def environment_for(settings: ValidatorConfig, *, everyone_is_user: bool = False) -> dict[str, str]:
+    """The environment variables `config_from_environment` reads back as `settings`, and
+    `everyone_is_user_from_environment` as the switch (written only when it is on).
 
     Values may be CDK tokens; joining them in a string is resolved at deploy time.
     """
@@ -74,7 +77,14 @@ def environment_for(settings: ValidatorConfig) -> dict[str, str]:
         environment[GROUP_ROLES] = ",".join(
             f"{group}={role}" for group, role in sorted(settings.group_roles.items())
         )
+    if everyone_is_user:
+        environment[EVERYONE_IS_USER] = "true"
     return environment
+
+
+def everyone_is_user_from_environment(environ: Mapping[str, str]) -> bool:
+    """Off unless explicitly `true`: anything else leaves people without a role denied."""
+    return environ.get(EVERYONE_IS_USER) == "true"
 
 
 def config_from_environment(environ: Mapping[str, str]) -> ValidatorConfig:
@@ -148,7 +158,8 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     except SigningKeysUnavailable:
         logger.error("signing_keys_unavailable")
         raise
-    roles = sorted(recognised_roles(identity.roles))
+    everyone_is_user = everyone_is_user_from_environment(os.environ)
+    roles = sorted(recognised_roles(identity.roles, everyone_is_user=everyone_is_user))
     logger.info(
         "token_accepted",
         extra={

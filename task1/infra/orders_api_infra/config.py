@@ -52,6 +52,9 @@ class EnvConfig(BaseModel):
     fixture_token_validity_seconds: int = Field(
         default=300, ge=1, alias="fixtureTokenValiditySeconds"
     )
+    # ADR 0001's opt-in switch for self-signup: every authenticated person also holds USER.
+    # Off by default, so a valid token without a recognised role is denied (403).
+    everyone_is_user: bool = Field(default=False, alias="everyoneIsUser")
     # Floci only: the issuer host tokens carry (FLOCI_HOSTNAME), reachable from Lambda
     # containers. On AWS the issuer comes from the user pool itself.
     floci_issuer_base_url: str | None = Field(default=None, alias="flociIssuerBaseUrl")

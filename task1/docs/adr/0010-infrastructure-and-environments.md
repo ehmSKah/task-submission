@@ -33,6 +33,7 @@ All AWS resources are defined in **one AWS CDK (Python) stack built from three c
 | Rate-limit config cache TTL | 2 s | `aws-dev`: 2 s; `aws-prod`: 60 s |
 | `seedUsers` | `true` | `aws-dev`: `true`; `aws-prod`: `false` |
 | `testFixtures` (foreign pool, untrusted and short-lived clients, counter-reset helper; [ADR 0011](0011-testing-strategy.md)) | `true` | `aws-dev`: `true`; `aws-prod`: `false` |
+| `everyoneIsUser` (every authenticated person also holds `USER`; [ADR 0001](0001-role-based-access-control.md)) | `false` (the default) | `false` (the default) |
 | WAF | deployed, not enforced | enforced |
 | Log level | DEBUG | INFO |
 

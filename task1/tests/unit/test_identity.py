@@ -127,3 +127,10 @@ def test_the_authorizer_gets_the_cognito_profile(
     assert "TOKEN_GROUP_ROLES" not in environment  # the groups are named after the roles
     issuer = stack.resolve(environment["TOKEN_ISSUER"])
     assert issuer["Fn::Join"][1][0] == "http://floci:4566/"
+    assert "ROLES_EVERYONE_IS_USER" not in environment  # off by default (ADR 0001)
+
+
+def test_the_authorizer_gets_the_everyone_is_user_switch_when_an_environment_sets_it() -> None:
+    _, identity, _ = synth(config(everyoneIsUser=True, testFixtures=False))
+
+    assert identity.authorizer_environment["ROLES_EVERYONE_IS_USER"] == "true"

@@ -169,6 +169,37 @@ def test_an_acceptance_logs_subject_roles_and_client(
     assert "secret-token-value" not in authorizer_logs.getvalue()
 
 
+NOBODY_IDENTITY = Identity(subject="nobody-sub", roles=(), client_id="orders-api-client")
+
+
+def test_a_person_without_a_role_is_identified_with_no_roles(use_validator: Any) -> None:
+    """Authentication succeeds; the API function denies them every order endpoint (ADR 0001)."""
+    use_validator(NOBODY_IDENTITY)
+
+    assert authorize(event("Bearer token-1"))["context"] == {"sub": "nobody-sub", "roles": ""}
+
+
+@pytest.mark.parametrize(
+    ("identity", "roles"),
+    [(NOBODY_IDENTITY, "USER"), (Identity("boss-sub", ("ADMIN",), "c"), "ADMIN,USER")],
+    ids=["no-role", "admin"],
+)
+def test_with_everyone_is_user_every_person_also_holds_user(
+    use_validator: Any, monkeypatch: pytest.MonkeyPatch, identity: Identity, roles: str
+) -> None:
+    monkeypatch.setenv("ROLES_EVERYONE_IS_USER", "true")
+    use_validator(identity)
+
+    assert authorize(event("Bearer token-1"))["context"]["roles"] == roles
+
+
+@pytest.mark.parametrize("value", [None, "", "false", "yes", "1"])
+def test_everyone_is_user_is_off_unless_set_to_true(value: str | None) -> None:
+    environ = {} if value is None else {"ROLES_EVERYONE_IS_USER": value}
+
+    assert authorizer_handler.everyone_is_user_from_environment(environ) is False
+
+
 def test_key_events_are_logged_and_mark_the_request_as_having_fetched_keys(
     use_validator: Any, authorizer_logs: io.StringIO
 ) -> None:
@@ -253,4 +284,14 @@ def test_the_environment_written_by_infra_reads_back_as_the_same_settings() -> N
 
     environment = authorizer_handler.environment_for(settings)
 
+    assert authorizer_handler.config_from_environment(environment) == settings
+    assert authorizer_handler.everyone_is_user_from_environment(environment) is False
+
+
+def test_the_everyone_is_user_switch_written_by_infra_reads_back_as_on() -> None:
+    settings = authorizer_handler.config_from_environment(COGNITO_ENVIRONMENT)
+
+    environment = authorizer_handler.environment_for(settings, everyone_is_user=True)
+
+    assert authorizer_handler.everyone_is_user_from_environment(environment) is True
     assert authorizer_handler.config_from_environment(environment) == settings

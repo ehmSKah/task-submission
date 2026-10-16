@@ -102,7 +102,8 @@ class Identity(Construct):
                 client_claim="client_id",
                 allowed_clients=frozenset(allowed_clients),
                 roles_claim="cognito:groups",
-            )
+            ),
+            everyone_is_user=config.everyone_is_user,
         )
 
         self.seed_users_secret: secretsmanager.Secret | None = None
