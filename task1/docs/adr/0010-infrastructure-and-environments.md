@@ -23,15 +23,16 @@ All AWS resources are defined in **one AWS CDK (Python) stack built from three c
 
 **Environments.** `infra/config/<env>.yaml`, validated by a small Pydantic model, selected with `cdk deploy -c env=<env>`.
 
-| Setting | `local` (Floci) | `aws` (example, deployable unchanged) |
+| Setting | `local` (Floci) | `aws-dev` / `aws-prod` (real AWS; deployable unchanged) |
 |---|---|---|
 | Target | Floci, account `000000000000` | real account and region |
 | Issuer passed to the authorizer | `http://floci:4566/<poolId>` | `https://cognito-idp.<region>.amazonaws.com/<poolId>` |
 | Floci id pinning (`floci:override-id`, `floci:override-cognito-client-id` on the pool) | on, so issuer and client id are deterministic | off |
 | Lambda architecture | **host architecture** (auto-detected) | **`arm64`** |
-| Removal policy / PITR / deletion and termination protection | destroy / off | retain / on (production) |
-| Rate-limit config cache TTL | 2 s | 60 s |
-| `seedUsers` | `true` | `false` (prod) |
+| Removal policy / PITR / deletion and termination protection | destroy / off | `aws-dev`: destroy / off; `aws-prod`: retain / on |
+| Rate-limit config cache TTL | 2 s | `aws-dev`: 2 s; `aws-prod`: 60 s |
+| `seedUsers` | `true` | `aws-dev`: `true`; `aws-prod`: `false` |
+| `testFixtures` (foreign pool, untrusted and short-lived clients, counter-reset helper; [ADR 0011](0011-testing-strategy.md)) | `true` | `aws-dev`: `true`; `aws-prod`: `false` |
 | WAF | deployed, not enforced | enforced |
 | Log level | DEBUG | INFO |
 
@@ -113,7 +114,7 @@ Rules:
 - **Test suites that change the rate-limit parameter run one after another** against the single local deployment.
 - **Floci specifics live in the `local` config and the Makefile:** id-pinning tags, `--method=direct`, the URL lookup, `FLOCI_HOSTNAME`, the token-validity flag. The CDK code itself stays target-neutral.
 - **Password sign-in** (`USER_PASSWORD_AUTH`) is for the demo and the tests. Real users would sign in through the hosted login with authorization code + PKCE, or SRP.
-- **Deploying to AWS** is supported by the `aws` example config but not performed as part of this assignment.
+- **Deploying to AWS** is supported: `aws-dev` can be deployed, tested with the same suites and destroyed, either locally or through a manually triggered workflow ([ADR 0011](0011-testing-strategy.md)). It is optional and not required for the local deliverable.
 - **To verify while building:**
   - the Floci setting that puts Lambda containers on the Compose network
   - that `AWS::SecretsManager::Secret` with `GenerateSecretString` works on Floci (supported in source, not yet run)
