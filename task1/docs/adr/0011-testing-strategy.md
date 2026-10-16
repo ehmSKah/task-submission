@@ -41,7 +41,7 @@ Each of the assignment's five required categories (successful requests, invalid 
 | Expired | Real, from a test-fixture client with a few-seconds lifetime (Floci only) |
 
 - **Every forged or expired token is new to the authorizer,** so its 5-minute cache never hides a result ([ADR 0003](0003-access-token-validation.md)).
-- **The fixture pool and clients exist only where the environment sets `testFixtures: true`.** They are deliberately not on the authorizer's allow-list.
+- **The fixture pool and clients exist only where the environment sets `testFixtures: true`.** The foreign pool and the untrusted client are deliberately not on the authorizer's allow-list. The **short-lived client is**: otherwise its tokens would fail the client check whether expired or not, and the expiry test would prove nothing. A control token from the same client is accepted, so expiry is the only possible cause of the second `401`.
 
 **Determinism and isolation.**
 - **Rate limits:**
@@ -53,7 +53,7 @@ Each of the assignment's five required categories (successful requests, invalid 
   - **Lists:** list tests walk all pages and check their own orders appear newest-first. "A USER sees only their own" is checked as "every returned `ownerId` is the caller's `sub`".
   - **No per-test cleanup:** local storage starts fresh on each `make up`, and `aws-dev` is destroyed after the run.
 - **Eventual consistency:** list checks right after a write poll for up to 5 s ([ADR 0005](0005-dynamodb-storage.md)). Reads by id never poll.
-- **Time:** domain tests set time through the `Clock` port. Token-validator tests use `time-machine`, because PyJWT reads the clock itself.
+- **Time:** domain tests set time through the `Clock` port. Token-validator tests use the real clock with margins of several seconds either side of the 30-second tolerance, because PyJWT reads the clock itself; `time-machine` stays the option if those margins ever prove flaky.
 - **Races:** two simultaneous `PATCH`es must yield exactly one `200` and one `409`. The test is repeated several times.
 
 **Targets.**
@@ -74,7 +74,7 @@ Each of the assignment's five required categories (successful requests, invalid 
 **Tooling.**
 - **Running and checking:** pytest (with markers: `adapter`, `integration`, `contract`, `floci_only`, `aws_only`), httpx, and **openapi-core** wrapped in one helper that every integration test calls.
 - **Contract tests:** Schemathesis, with a Cognito auth hook.
-- **Tokens and time:** PyJWT + cryptography for forging, time-machine.
+- **Tokens and time:** PyJWT + cryptography for forging; the real clock with safe margins for time checks.
 - **Fixtures:** boto3.
 - **Property-based domain tests with Hypothesis:**
   - random sequences of requested status changes never produce an invalid status, a skipped step or a change after a final status

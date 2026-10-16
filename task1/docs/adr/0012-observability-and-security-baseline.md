@@ -25,7 +25,7 @@ The build includes **what the assignment's requirements touch, and nothing beyon
 - **Authorizer:** the decision, the **precise rejection reason** (returned to nobody, [ADR 0003](0003-access-token-validation.md)), `kid`, `iss`, `client_id`, and whether keys were cached or fetched.
 - **Operational events** have fixed event names, e.g.:
   - `rate_limiter_unavailable`, `rate_limiter_circuit_open` ([ADR 0006](0006-rate-limiting.md))
-  - `jwks_refetch`, `jwks_fetch_failed`
+  - `jwks_fetched`, `jwks_refetch`, `jwks_fetch_failed`
 - **Never logged:** tokens or `Authorization` headers, passwords or secrets, request and response bodies.
 - **Client IPs in application logs are truncated** (IPv4 `/24`, IPv6 `/64`). IP addresses are personal data under the GDPR. The full address appears only in API Gateway's own access logs (under the retention below) and in rate-limit counter keys, which expire within minutes.
 - **Levels:** DEBUG locally, INFO on AWS, set by an environment variable. In `aws-*` environments, **1 % of requests** log at DEBUG (Powertools sampling).

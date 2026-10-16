@@ -20,7 +20,7 @@ Request bodies are validated **at API Gateway** by request validators, so an inv
 ```
 - **`type`** is a stable URN identifying the error kind. It is the machine-readable code and is documented in OpenAPI.
 - **`requestId`** is API Gateway's request id (`$context.requestId`). It is in every error body, in an `X-Request-Id` header on every response, and in every log line.
-- **`errors[]`** (JSON Pointer plus message) appears only when code produced field-level errors. Gateway validation yields a single message, which goes into `detail`.
+- **`errors[]`** appears only when code produced field-level errors. Each entry has a message plus either `pointer` (a JSON Pointer into the body) or `parameter` (the name of a path or query parameter). Gateway validation yields a single message, which goes into `detail`.
 - **`scope`** (`ip` or `user`) appears on `429` ([ADR 0006](0006-rate-limiting.md)).
 
 | `type` (`urn:problem:orders-api:…`) | Status |
@@ -85,7 +85,7 @@ Request bodies are validated **at API Gateway** by request validators, so an inv
 **Unexpected errors and gateway defaults.**
 - **Uncaught exceptions:** a top-level handler in the function turns them into `500 internal-error` with a generic `detail`. No stack trace or internals go into the response; the full stack trace is logged with the request id.
 - **Gateway Responses mapped to Problem Details:**
-  - `BAD_REQUEST_BODY` / `BAD_REQUEST_PARAMETERS` → `400`, with `detail: $context.error.validationErrorString`
+  - `BAD_REQUEST_BODY` / `BAD_REQUEST_PARAMETERS` → `400`, with `detail: $context.error.validationErrorString`. The message can contain quotes (e.g. an enum's allowed values, or a client-chosen field name). Floci inserts it raw but evaluates VTL, so on Floci the template escapes it; AWS documents these templates as plain substitution, so on AWS it is inserted as is. The template is therefore chosen per target, and the AWS form is verified on the first AWS run.
   - `UNAUTHORIZED` → `401` ([ADR 0003](0003-access-token-validation.md))
   - `AUTHORIZER_FAILURE` → `503`
   - `MISSING_AUTHENTICATION_TOKEN` → `404`

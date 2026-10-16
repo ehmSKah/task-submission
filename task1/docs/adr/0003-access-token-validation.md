@@ -39,7 +39,7 @@ Roles are then read from the configured claim and mapped to roles as in ADR 0001
 **Signing keys (JWKS)**
 - **Source:** the key URL comes from OIDC discovery (`{issuer}/.well-known/openid-configuration` → `jwks_uri`) unless the override is set.
 - **Cache:** keys live in the authorizer instance's memory with a **1-hour TTL**.
-- **Unknown `kid`:** triggers a refetch, **at most once every 60 seconds**, so random `kid`s can't make us hammer the provider.
+- **Unknown `kid`:** triggers a refetch, **at most once every 60 seconds**, so random `kid`s can't make us hammer the provider. A failed refresh while stale keys exist is also retried at most once every 60 seconds; with no keys at all, every request retries, so the authorizer recovers as soon as the provider does.
 - **Fetch timeout:** 2 seconds.
 - **Provider unreachable:** cached keys are used even when stale (keys are public and stay valid until rotated). With no keys at all, the authorizer fails closed. API Gateway's `AUTHORIZER_FAILURE` response is mapped to **`503`**.
 
