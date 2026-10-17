@@ -23,6 +23,9 @@ dev = [
     "boto3>=1.40",
     "boto3-stubs[dynamodb,cognito-idp,secretsmanager,cloudformation,ssm]>=1.40",
     "hypothesis>=6.170.1",
+    "schemathesis>=4.31",
+    "pytest-cov>=7.1",
+    "openapi-spec-validator>=0.8",
 ]
 infra = [
     "aws-cdk-lib>=2.220",
