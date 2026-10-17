@@ -59,7 +59,7 @@ Two web UIs show what's running:
 | UI | URL | Started by | Shows |
 |---|---|---|---|
 | Floci UI | <http://localhost:4500> | `make up` | what the deploy created: the DynamoDB tables and their items, both Lambda functions, the REST API, the Cognito user pools, the SSM parameters, the log groups and the CloudFormation stacks |
-| Swagger UI | <http://localhost:8080> | `make docs` | the OpenAPI document, with "Try it out" against the deployed API: paste a token from `make token` into "Authorize" ([Trying requests](#trying-requests)) |
+| Swagger UI | <http://localhost:8080> | `make docs` | the OpenAPI document, with "Try it out" against the deployed API: paste a token ([how to get one](#a-token-for-your-own-requests)) into "Authorize" |
 
 Floci UI is Floci's own web console (`floci/floci-ui`, pinned in `docker-compose.yml`). It can
 change resources as well as show them, so anything done there is outside the tests' control:
@@ -223,7 +223,8 @@ make docs              # Swagger UI on http://localhost:8080, pointed at the API
 make -s token ROLE=user   # copy the printed token
 ```
 
-Open <http://localhost:8080>, click **Authorize**, paste the token (without `Bearer `), then
+Open <http://localhost:8080>, click **Authorize**, paste the token (without `Bearer `; it lasts
+15 minutes, see [A token for your own requests](#a-token-for-your-own-requests)), then
 "Try it out" on any operation. The browser calls the deployed API directly, which CORS allows
 for this origin ([ADR 0014](docs/adr/0014-cors-for-browser-clients.md)), and shows every answer,
 the gateway's `401` and `400` included.
