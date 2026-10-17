@@ -17,6 +17,7 @@ from aws_lambda_powertools.utilities.idempotency.persistence.datarecord import (
 
 from orders_api.application.orders import OrderPage, PagePosition
 from orders_api.domain.order import Order
+from orders_api.domain.rate_limits import DEFAULT_RATE_LIMITS, RateLimits
 
 
 class InMemoryOrderRepository:
@@ -157,6 +158,40 @@ class InMemoryIdempotencyStore(BasePersistenceLayer):
                 in_progress_expiry_timestamp=int(time.time() * 1000) + 60_000,
                 payload_hash=record.payload_hash,
             )
+
+
+class InMemoryRateLimitCounters:
+    """The counter store's conditional `ADD`: a counter below its limit goes up by one and says
+    what it is now; one at its limit stays as it is and says `None`."""
+
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+        self.expiry: dict[str, datetime] = {}
+
+    def increment(self, key: str, *, limit: int, expires_at: datetime) -> int | None:
+        count = self.counts.get(key, 0)
+        if count >= limit:
+            return None
+        self.counts[key] = count + 1
+        self.expiry[key] = expires_at
+        return count + 1
+
+
+class FailingRateLimitCounters:
+    """A counter store that can't be reached."""
+
+    def increment(self, key: str, *, limit: int, expires_at: datetime) -> int | None:
+        raise ConnectionError("counter store unreachable")
+
+
+class SwitchableRateLimitConfig:
+    """The rate-limit configuration, as an operator would change it at runtime."""
+
+    def __init__(self, limits: RateLimits = DEFAULT_RATE_LIMITS) -> None:
+        self.limits = limits
+
+    def current(self) -> RateLimits:
+        return self.limits
 
 
 WireApi = Callable[..., InMemoryOrderRepository]
