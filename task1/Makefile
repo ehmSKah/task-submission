@@ -58,9 +58,10 @@ endif
 
 up: $(UP_STEPS) ## Deploy, seed users, write the .http env: on Floci (ENV=local) or AWS (ENV=aws-dev)
 
-floci-up: ## Start the Floci emulator
-	docker compose up -d floci
+floci-up: ## Start the Floci emulator and its web console (http://localhost:4500)
+	docker compose up -d floci floci-ui
 	@scripts/wait-for-floci.sh $(FLOCI_URL)
+	@echo "Floci UI: http://localhost:4500"
 
 # Bootstraps the account and region the environment config names (idempotent).
 bootstrap: guard bundle ## Bootstrap CDK in the target account

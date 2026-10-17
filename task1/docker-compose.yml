@@ -1,4 +1,5 @@
-# Local runtime: the Floci AWS emulator, plus a read-only Swagger UI (ADRs 0008 and 0010).
+# Local runtime: the Floci AWS emulator and its web console, plus a read-only Swagger UI (ADRs 0008
+# and 0010).
 name: orders-api
 
 services:
@@ -16,6 +17,22 @@ services:
     volumes:
       # Floci starts Lambda functions as sibling containers.
       - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - orders-api
+
+  # Floci's web console, to see what `make up` deployed: the tables, functions, user pool,
+  # parameters and REST API. It talks to Floci over the shared network with Floci's dummy keys.
+  floci-ui:
+    image: floci/floci-ui:0.7.0
+    ports:
+      - "4500:4500"
+    environment:
+      FLOCI_ENDPOINT: http://floci:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    depends_on:
+      - floci
     networks:
       - orders-api
 
