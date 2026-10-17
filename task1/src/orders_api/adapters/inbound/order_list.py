@@ -23,11 +23,12 @@ from orders_api.adapters.inbound.order_requests import ORDERS_PATH
 from orders_api.adapters.inbound.problems import FieldError, ProblemType
 from orders_api.adapters.inbound.request_checks import InvalidRequest
 from orders_api.application.orders import OrderPage, PagePosition
-from orders_api.contract import load_contract, query_parameter_schemas
+from orders_api.contract import property_schema, query_parameter_schemas
 
 LIMIT = "limit"
 CURSOR = "cursor"
 _CURSOR_FIELDS = {"owner", "createdAt", "id"}
+_NOT_A_CURSOR = FieldError(parameter=CURSOR, detail="is not a valid cursor")
 
 
 @dataclass(frozen=True)
@@ -76,9 +77,7 @@ def encode_cursor(cursor: Cursor) -> str:
 def _order_field_pattern(name: str) -> re.Pattern[str]:
     """The pattern the contract declares for an `Order` field, so a cursor carries only values
     an order could have."""
-    return re.compile(
-        load_contract()["components"]["schemas"]["Order"]["properties"][name]["pattern"]
-    )
+    return re.compile(property_schema("Order", name)["pattern"])
 
 
 def _matches(value: Any, field: str) -> bool:
@@ -101,9 +100,9 @@ def decode_cursor(text: str) -> Cursor:
         raw = base64.b64decode(text + "=" * (-len(text) % 4), altchars=b"-_", validate=True)
         document = json.loads(raw)
     except (binascii.Error, ValueError):  # ValueError includes JSON and UTF-8 errors
-        raise _invalid(FieldError(parameter=CURSOR, detail="is not a valid cursor")) from None
+        raise _invalid(_NOT_A_CURSOR) from None
     if not _is_cursor(document):
-        raise _invalid(FieldError(parameter=CURSOR, detail="is not a valid cursor"))
+        raise _invalid(_NOT_A_CURSOR)
     position = PagePosition(created_at=document["createdAt"], order_id=document["id"])
     return Cursor(owner_id=document["owner"], position=position)
 

@@ -13,6 +13,11 @@ import boto3
 import httpx
 from boto3.dynamodb.conditions import Key
 
+from orders_api.adapters.outbound.dynamodb_orders import (
+    BY_OWNER_INDEX,
+    LIST_SORT_KEY,
+    OWNER_ATTRIBUTE,
+)
 from orders_api.domain.order import format_timestamp
 from tests.integration.assertions import assert_contract_headers, assert_problem
 from tests.integration.requests import NEW_ORDER, bearer, subject_of
@@ -33,9 +38,9 @@ def order_ids_created_since(endpoints: dict[str, Any], owner: str, created_at: s
     table = boto3.resource("dynamodb").Table(endpoints["ordersTable"])
     until = format_timestamp(datetime.now(UTC)) + "~"  # `~` sorts after `#<id>`
     items = table.query(
-        IndexName="byOwner",
-        KeyConditionExpression=Key("ownerId").eq(owner)
-        & Key("createdAtId").between(created_at, until),
+        IndexName=BY_OWNER_INDEX,
+        KeyConditionExpression=Key(OWNER_ATTRIBUTE).eq(owner)
+        & Key(LIST_SORT_KEY).between(created_at, until),
     )["Items"]
     return [str(item["id"]) for item in items]
 

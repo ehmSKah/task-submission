@@ -64,3 +64,9 @@ def query_parameter_schemas(method: str, path: str) -> dict[str, dict[str, Any]]
         for parameter in operation.get("parameters", [])
         if parameter["in"] == "query"
     }
+
+
+@cache
+def property_schema(schema: str, name: str) -> dict[str, Any]:
+    """The schema of one property of a component schema; `KeyError` if it has none."""
+    return _draft_04(load_contract()["components"]["schemas"][schema]["properties"][name])

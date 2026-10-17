@@ -12,10 +12,13 @@ from orders_api.domain.order import LineItem, Order, OrderStatus
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.service_resource import Table
 
-LIST_ALL_PARTITION = "ORDER"
-# The two list indexes (ADR 0005): partition attribute, and the sort key both share.
+# The two list indexes (ADR 0005): each one's partition attribute, and the sort key both share.
 BY_OWNER_INDEX = "byOwner"
+OWNER_ATTRIBUTE = "ownerId"
 BY_CREATED_INDEX = "byCreated"
+LIST_ALL_ATTRIBUTE = "listAll"
+LIST_ALL_PARTITION = "ORDER"
+"""The one partition of `byCreated`, which every order is in."""
 LIST_SORT_KEY = "createdAtId"
 
 
@@ -27,7 +30,7 @@ def list_sort_key(created_at: str, order_id: str) -> str:
 def to_item(order: Order) -> dict[str, Any]:
     return {
         "id": order.id,
-        "ownerId": order.owner_id,
+        OWNER_ATTRIBUTE: order.owner_id,
         "status": order.status.value,
         "currency": order.currency,
         "items": [
@@ -39,14 +42,14 @@ def to_item(order: Order) -> dict[str, Any]:
         "version": order.version,
         # Sort key of both list indexes: newest first, `id` breaks ties (ADR 0005).
         LIST_SORT_KEY: list_sort_key(order.created_at, order.id),
-        "listAll": LIST_ALL_PARTITION,
+        LIST_ALL_ATTRIBUTE: LIST_ALL_PARTITION,
     }
 
 
 def from_item(item: dict[str, Any]) -> Order:
     return Order(
         id=str(item["id"]),
-        owner_id=str(item["ownerId"]),
+        owner_id=str(item[OWNER_ATTRIBUTE]),
         status=OrderStatus(item["status"]),
         currency=str(item["currency"]),
         items=tuple(
@@ -88,9 +91,9 @@ class DynamoDbOrderRepository:
         docs/verification.md), and a position can never leave the queried partition.
         """
         index, partition, value = (
-            (BY_CREATED_INDEX, "listAll", LIST_ALL_PARTITION)
+            (BY_CREATED_INDEX, LIST_ALL_ATTRIBUTE, LIST_ALL_PARTITION)
             if owner_id is None
-            else (BY_OWNER_INDEX, "ownerId", owner_id)
+            else (BY_OWNER_INDEX, OWNER_ATTRIBUTE, owner_id)
         )
         condition: ConditionBase = Key(partition).eq(value)
         if after is not None:

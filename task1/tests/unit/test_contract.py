@@ -7,6 +7,7 @@ from orders_api.contract import (
     DRAFT_04,
     load_contract,
     path_parameter_schema,
+    property_schema,
     request_body_schema,
 )
 
@@ -76,6 +77,13 @@ def test_path_id_schema_is_the_uuid_v4_pattern() -> None:
             validate(malformed)
 
 
+def test_an_order_id_property_is_the_same_uuid_as_the_path_id() -> None:
+    assert (
+        property_schema("Order", "id")["pattern"]
+        == (path_parameter_schema("/api/v1/orders/{id}", "id")["pattern"])
+    )
+
+
 STATUS_PATH = "/api/v1/orders/{id}/status"
 
 
@@ -113,3 +121,5 @@ def test_unknown_operation_or_parameter_is_a_programming_error() -> None:
         request_body_schema("put", "/api/v1/orders")
     with pytest.raises(KeyError):
         path_parameter_schema("/api/v1/orders/{id}", "orderId")
+    with pytest.raises(KeyError):
+        property_schema("Order", "secret")

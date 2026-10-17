@@ -84,15 +84,17 @@ class Caller:
         An order the caller can't see is treated exactly like one that doesn't exist (`404`),
         so its existence never leaks (ADR 0001).
         """
-        if Permission.READ_ANY in self.permissions:
-            return True
-        return Permission.READ_OWN in self.permissions and order.owner_id == self.subject
+        return self._may_act_on(order, any_order=Permission.READ_ANY, own=Permission.READ_OWN)
 
     def can_change_status_of(self, order: Order) -> bool:
         """Any order with `order:status:any`, else only their own with `order:cancel:own`.
 
         Someone else's order is then a `404`, exactly like a missing one (ADR 0001).
         """
-        if Permission.STATUS_ANY in self.permissions:
+        return self._may_act_on(order, any_order=Permission.STATUS_ANY, own=Permission.CANCEL_OWN)
+
+    def _may_act_on(self, order: Order, *, any_order: Permission, own: Permission) -> bool:
+        """Any order with `any_order`; with only `own`, just the caller's own orders."""
+        if any_order in self.permissions:
             return True
-        return Permission.CANCEL_OWN in self.permissions and order.owner_id == self.subject
+        return own in self.permissions and order.owner_id == self.subject
