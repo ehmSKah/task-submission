@@ -11,6 +11,7 @@ from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from constructs import Construct
 
+from orders_api.adapters.inbound.cors import ALLOWED_ORIGINS_VARIABLE
 from orders_api.adapters.outbound.dynamodb_orders import BY_CREATED_INDEX, BY_OWNER_INDEX
 from orders_api_infra.config import Architecture, EnvConfig
 from orders_api_infra.openapi_extensions import load_spec, with_aws_extensions
@@ -84,6 +85,12 @@ class Api(Construct):
                 "RATE_LIMIT_TABLE": rate_limit_table.table_name,
                 "RATE_LIMITS_PARAMETER": config.rate_limits_parameter,
                 "RATE_LIMITS_MAX_AGE_SECONDS": str(config.rate_limit_config_cache_seconds),
+                # Only where browser clients are allowed; without it CORS is off (ADR 0014).
+                **(
+                    {ALLOWED_ORIGINS_VARIABLE: ",".join(config.cors_allowed_origins)}
+                    if config.cors_allowed_origins
+                    else {}
+                ),
             },
         )
         self.api_function.add_to_role_policy(

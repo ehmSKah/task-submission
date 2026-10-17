@@ -17,6 +17,12 @@ from aws_lambda_powertools.utilities.idempotency.exceptions import (
 from aws_lambda_powertools.utilities.typing import LambdaContext
 
 from orders_api.adapters.inbound.caller import MissingCallerIdentity, caller_from_event
+from orders_api.adapters.inbound.cors import (
+    ALLOWED_ORIGINS_VARIABLE,
+    allowed_origins,
+    cors_headers,
+    request_origin,
+)
 from orders_api.adapters.inbound.http_headers import (
     JSON_MEDIA_TYPE,
     PROBLEM_JSON_MEDIA_TYPE,
@@ -104,6 +110,12 @@ def rate_limiter() -> RateLimiter:
         DynamoDbRateLimitCounters(os.environ["RATE_LIMIT_TABLE"]), events=report_rate_limiter_event
     )
     return RateLimiter(counters, config, clock)
+
+
+@cache
+def cors_origins() -> frozenset[str]:
+    """The browser origins this environment allows; none turns CORS off (ADR 0014)."""
+    return allowed_origins(os.environ.get(ALLOWED_ORIGINS_VARIABLE))
 
 
 # This request's rate-limit decision, once step 3 has made it: every response from then on, an
@@ -367,9 +379,16 @@ def _problem_type(response: dict[str, Any]) -> str | None:
 
 
 def _with_contract_headers(
-    response: dict[str, Any], request_id: str, rate_limit: RateLimitDecision | None
+    response: dict[str, Any],
+    request_id: str,
+    rate_limit: RateLimitDecision | None,
+    origin: str | None,
 ) -> dict[str, Any]:
-    extra = {**SECURITY_HEADERS, REQUEST_ID_HEADER: request_id}
+    extra = {
+        **SECURITY_HEADERS,
+        REQUEST_ID_HEADER: request_id,
+        **cors_headers(cors_origins(), origin),
+    }
     if rate_limit is not None:
         extra.update(rate_limit_headers(rate_limit))
     if "multiValueHeaders" in response:
@@ -401,4 +420,6 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
             "problemType": _problem_type(response),
         },
     )
-    return _with_contract_headers(response, request_id, _rate_limit.get())
+    return _with_contract_headers(
+        response, request_id, _rate_limit.get(), request_origin(event.get("headers"))
+    )

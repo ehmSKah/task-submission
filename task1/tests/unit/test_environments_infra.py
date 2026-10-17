@@ -147,6 +147,23 @@ def test_functions_run_on_the_environments_architecture_level_and_cache_time(
     assert variables["RATE_LIMITS_MAX_AGE_SECONDS"] == cache_seconds
 
 
+def test_only_environments_with_browser_clients_tell_the_function_their_origins(
+    env: str, template: Template
+) -> None:
+    """aws-prod's function is configured as it was before CORS existed (ADR 0014)."""
+    [api_function] = [
+        function
+        for function in template.find_resources("AWS::Lambda::Function").values()
+        if "RATE_LIMITS_MAX_AGE_SECONDS" in str(function)
+    ]
+    variables = api_function["Properties"]["Environment"]["Variables"]
+
+    if env == "aws-prod":
+        assert "CORS_ALLOWED_ORIGINS" not in variables
+    else:
+        assert variables["CORS_ALLOWED_ORIGINS"] == "http://localhost:8080"
+
+
 def test_waf_limits_follow_the_environment(env: str, template: Template) -> None:
     *_, flood_limit, test_limit = EXPECTED[env]
 
