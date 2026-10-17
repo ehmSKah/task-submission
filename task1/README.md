@@ -65,6 +65,22 @@ Floci UI is Floci's own web console (`floci/floci-ui`, pinned in `docker-compose
 change resources as well as show them, so anything done there is outside the tests' control:
 `make down && make up` starts afresh.
 
+### A token for your own requests
+
+Every order operation needs a Cognito access token. `make token` signs in a demo user and prints
+one; it never shows the password.
+
+```sh
+TOKEN=$(make -s token ROLE=user)           # alice; or ROLE=manager|admin|none, USER_NAME=bob
+API=$(jq -r .apiUrl build/endpoints.json)  # the local API URL, also printed by make up
+curl -i -H "Authorization: Bearer $TOKEN" "$API/api/v1/orders"
+```
+
+- **It lasts 15 minutes.** After that the API answers `401`; run `make token` again.
+- **For the request collection,** `make http-env` writes a token per demo user at once
+  ([Trying requests](#trying-requests)).
+- **Who is who:** [Users and roles](#users-and-roles).
+
 `make demo` prints every request and its status, and fails on the first status that isn't the
 expected one. It never prints a token.
 
