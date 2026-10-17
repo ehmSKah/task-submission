@@ -22,6 +22,21 @@ EXPIRY_MARGIN = timedelta(seconds=60)
 key; the margin keeps a slow clock from deleting a counter that is still being written."""
 
 
+class CounterStoreThrottled(Exception):
+    """The store refused to count this key for now, because it is written faster than the
+    store allows. That almost always means one client hammering its own counter."""
+
+
+class CounterStoreUnavailable(Exception):
+    """The store didn't answer in time, couldn't be reached, or failed on its side: an outage,
+    which says nothing about the count."""
+
+    def __init__(self, error_type: str) -> None:
+        super().__init__(f"Counter store unavailable: {error_type}")
+        self.error_type = error_type
+        """What went wrong, e.g. `ReadTimeoutError` or a service error code; safe to log."""
+
+
 class RateLimitCounterStore(Protocol):
     def increment(self, key: str, *, limit: int, expires_at: datetime) -> int | None:
         """One atomic conditional count: if `key`'s counter is below `limit`, add one and return
@@ -29,7 +44,8 @@ class RateLimitCounterStore(Protocol):
         once `expires_at` has passed.
 
         The one call the limiter makes, so a store that fails open, or falls back to another
-        store, can wrap this one without the limiter noticing.
+        store, can wrap this one without the limiter noticing. A store may raise
+        `CounterStoreThrottled` or `CounterStoreUnavailable`; any other error is a defect.
         """
         ...
 

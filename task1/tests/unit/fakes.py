@@ -179,10 +179,53 @@ class InMemoryRateLimitCounters:
 
 
 class FailingRateLimitCounters:
-    """A counter store that can't be reached."""
+    """A counter store that fails with an error the port doesn't name, as a defect would."""
 
     def increment(self, key: str, *, limit: int, expires_at: datetime) -> int | None:
         raise ConnectionError("counter store unreachable")
+
+
+class UnreliableRateLimitCounters(InMemoryRateLimitCounters):
+    """In-memory counters that fail as the port says the real store may: set `failure` to a
+    `CounterStoreUnavailable` or `CounterStoreThrottled`, or back to `None` once it recovers."""
+
+    def __init__(self, failure: Exception | None = None) -> None:
+        super().__init__()
+        self.failure = failure
+        self.calls = 0
+
+    def increment(self, key: str, *, limit: int, expires_at: datetime) -> int | None:
+        self.calls += 1
+        if self.failure is not None:
+            raise self.failure
+        return super().increment(key, limit=limit, expires_at=expires_at)
+
+
+class ManualTime:
+    """A monotonic time source that moves only when told to, in seconds."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class RecordedEvents:
+    """Operational events as reported, in order: `(event, fields)`."""
+
+    def __init__(self) -> None:
+        self.reported: list[tuple[str, dict[str, object]]] = []
+
+    def __call__(self, event: str, /, **fields: object) -> None:
+        self.reported.append((event, fields))
+
+    @property
+    def names(self) -> list[str]:
+        return [event for event, _ in self.reported]
 
 
 class SwitchableRateLimitConfig:
