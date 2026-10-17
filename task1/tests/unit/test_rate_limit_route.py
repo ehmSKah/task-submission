@@ -8,6 +8,12 @@ from typing import Any
 import pytest
 
 from orders_api.adapters.inbound.http_headers import SECURITY_HEADERS
+from orders_api.application.fail_open_counters import (
+    FAILURES_TO_OPEN,
+    OPEN_SECONDS,
+    REST_AFTER_FAILURE_SECONDS,
+)
+from orders_api.application.rate_limiting import CounterStoreThrottled, CounterStoreUnavailable
 from orders_api.domain.access import Role
 from orders_api.domain.rate_limits import RateLimits
 from tests.builders import an_order, rest_event
@@ -28,6 +34,7 @@ from tests.unit.fakes import (
     FailingRateLimitCounters,
     InMemoryOrderRepository,
     RateLimitsInUse,
+    UnreliableRateLimitCounters,
     WireApi,
 )
 
@@ -228,10 +235,76 @@ def test_a_request_without_a_source_ip_fails_closed(
     assert '"source_ip_missing"' in log_output.getvalue()
 
 
-def test_a_counter_store_failure_is_a_500_without_rate_limit_headers(
+def test_while_the_counter_store_is_unavailable_requests_are_counted_in_memory(
     rate_limits: RateLimitsInUse,
 ) -> None:
-    """For now; failing open with a fallback is ADR 0006's next step."""
+    rate_limits.use_counters(UnreliableRateLimitCounters(CounterStoreUnavailable("Timeout")))
+    rate_limits.config.limits = TINY
+
+    responses = [invoke(get_order_event(ORDER.id)) for _ in range(3)]
+
+    assert [response["statusCode"] for response in responses] == [200, 200, 429]
+    assert rate_limit_headers(responses[0])["RateLimit-Remaining"] == "1"
+    assert problem_of(responses[-1], 429, "rate-limited")["scope"] == "user"
+
+
+def test_a_throttled_counter_is_a_429(rate_limits: RateLimitsInUse) -> None:
+    rate_limits.use_counters(
+        UnreliableRateLimitCounters(CounterStoreThrottled("ThrottlingException"))
+    )
+
+    response = invoke(get_order_event(ORDER.id))
+
+    assert problem_of(response, 429, "rate-limited")["scope"] == "ip"
+    assert rate_limit_headers(response)["RateLimit-Remaining"] == "0"
+
+
+def operational_lines(log_output: io.StringIO, event: str) -> list[dict[str, Any]]:
+    lines = [json.loads(line) for line in log_output.getvalue().splitlines() if line]
+    return [line for line in lines if line["message"] == event]
+
+
+def test_an_unavailable_counter_store_is_logged_as_a_warning_without_the_client_address(
+    rate_limits: RateLimitsInUse, log_output: io.StringIO
+) -> None:
+    rate_limits.use_counters(
+        UnreliableRateLimitCounters(CounterStoreUnavailable("ReadTimeoutError"))
+    )
+
+    invoke(get_order_event(ORDER.id))
+
+    [line] = operational_lines(log_output, "rate_limiter_unavailable")
+    assert line["level"] == "WARNING"
+    assert line["errorType"] == "ReadTimeoutError"
+    assert line["consecutiveFailures"] == 1
+    assert line["requestId"]
+    assert "203.0.113.7" not in log_output.getvalue()
+
+
+def test_the_circuit_opening_and_closing_are_logged(
+    rate_limits: RateLimitsInUse, log_output: io.StringIO
+) -> None:
+    counters = UnreliableRateLimitCounters(CounterStoreUnavailable("ReadTimeoutError"))
+    rate_limits.use_counters(counters)
+    for _ in range(FAILURES_TO_OPEN):
+        invoke(get_order_event(ORDER.id))
+        rate_limits.time.advance(REST_AFTER_FAILURE_SECONDS)
+    counters.failure = None
+    rate_limits.time.advance(OPEN_SECONDS)
+
+    invoke(get_order_event(ORDER.id))
+
+    [opened] = operational_lines(log_output, "rate_limiter_circuit_open")
+    assert opened["level"] == "WARNING"
+    assert opened["openSeconds"] == OPEN_SECONDS
+    [closed] = operational_lines(log_output, "rate_limiter_circuit_closed")
+    assert closed["level"] == "INFO"
+
+
+def test_an_unexpected_counter_store_error_is_a_500_without_rate_limit_headers(
+    rate_limits: RateLimitsInUse,
+) -> None:
+    """Only outages fail open; a defect (e.g. a missing permission) fails loudly."""
     rate_limits.use_counters(FailingRateLimitCounters())
 
     response = invoke(get_order_event(ORDER.id))

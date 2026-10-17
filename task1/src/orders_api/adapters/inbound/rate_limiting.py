@@ -2,9 +2,13 @@
 
 from typing import Any
 
+from aws_lambda_powertools import Logger
+
 from orders_api.domain.rate_limits import RateLimitDecision, RateLimitScope
 
 RETRY_AFTER_HEADER = "Retry-After"
+
+logger = Logger(service="orders-api", child=True)
 
 _WHOSE = {RateLimitScope.IP: "from this IP address", RateLimitScope.USER: "for this user"}
 
@@ -52,3 +56,12 @@ def rate_limit_headers(decision: RateLimitDecision) -> dict[str, str]:
         "RateLimit-Remaining": str(decision.usage.remaining),
         "RateLimit-Reset": str(decision.reset_seconds),
     }
+
+
+def report_rate_limiter_event(event: str, /, **fields: object) -> None:
+    """Log the fail-open counter store's events (ADR 0012): the store failing and the circuit
+    opening are warnings, for a metric filter and an alarm to pick up; closing again is info."""
+    if event == "rate_limiter_circuit_closed":
+        logger.info(event, extra=fields)
+    else:
+        logger.warning(event, extra=fields)

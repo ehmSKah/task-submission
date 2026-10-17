@@ -15,12 +15,16 @@ import pytest
 from botocore.exceptions import ClientError
 from botocore.stub import Stubber
 
+from orders_api.adapters.inbound import api_handler
 from orders_api.adapters.outbound.dynamodb_rate_limits import (
     CALL_BUDGET_SECONDS,
     CLIENT_CONFIG,
     DynamoDbRateLimitCounters,
 )
+from orders_api.application import fail_open_counters
+from orders_api.application.fail_open_counters import FAILURES_TO_OPEN
 from orders_api.application.rate_limiting import CounterStoreThrottled, CounterStoreUnavailable
+from orders_api.domain.access import Role
 
 EXPIRES_AT = datetime(2026, 10, 17, 9, 33, tzinfo=UTC)
 KEY = "ip#203.0.113.7#2026-10-17T09:31Z"
@@ -157,3 +161,38 @@ def test_a_store_that_doesn_t_answer_is_unavailable_within_the_budget(
 
     assert raised.value.error_type == error_type
     assert elapsed < CALL_BUDGET_SECONDS
+
+
+def test_the_api_function_lets_requests_through_while_the_counter_table_hangs(
+    silent_server: tuple[str, int],
+    closed_port: tuple[str, int],
+    point_at: PointAt,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The function's own wiring, with every AWS call hanging: the limits come from the defaults
+    (the parameter can't be read) and the counts from memory; no request waits longer than one
+    counter call's budget, and once the circuit is open, not at all."""
+    point_at(silent_server)
+    # The parameter read isn't what this test times: it is refused at once, and not retried.
+    monkeypatch.setenv("AWS_ENDPOINT_URL_SSM", f"http://{closed_port[0]}:{closed_port[1]}")
+    monkeypatch.setenv("AWS_MAX_ATTEMPTS", "1")
+    # A shorter rest after a failure, still covering the rest of its request, keeps this quick.
+    monkeypatch.setattr(fail_open_counters, "REST_AFTER_FAILURE_SECONDS", 0.3)
+    monkeypatch.setenv("RATE_LIMIT_TABLE", "rate-limits")
+    monkeypatch.setenv("RATE_LIMITS_PARAMETER", "/orders-api/test/rate-limits")
+    monkeypatch.setenv("RATE_LIMITS_MAX_AGE_SECONDS", "600")
+    limiter = api_handler.rate_limiter.__wrapped__()
+
+    durations, decisions = [], []
+    for _ in range(FAILURES_TO_OPEN):
+        time.sleep(0.3)  # each request asks the store once: its IP check fails, its user rests
+        started = time.perf_counter()
+        decisions.append(limiter.check("203.0.113.7", "alice-sub", frozenset({Role.USER})))
+        durations.append(time.perf_counter() - started)
+    started = time.perf_counter()
+    decisions.append(limiter.check("203.0.113.7", "alice-sub", frozenset({Role.USER})))
+    open_duration = time.perf_counter() - started
+
+    assert all(decision.allowed for decision in decisions)
+    assert max(durations) < CALL_BUDGET_SECONDS
+    assert open_duration < 0.01

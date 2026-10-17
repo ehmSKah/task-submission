@@ -15,6 +15,8 @@ from aws_lambda_powertools.utilities.idempotency.persistence.datarecord import (
     DataRecord,
 )
 
+from orders_api.adapters.inbound.rate_limiting import report_rate_limiter_event
+from orders_api.application.fail_open_counters import FailOpenCounterStore
 from orders_api.application.orders import Clock, OrderPage, PagePosition
 from orders_api.application.rate_limiting import RateLimitCounterStore, RateLimiter
 from orders_api.domain.order import Order
@@ -240,17 +242,21 @@ class SwitchableRateLimitConfig:
 
 class RateLimitsInUse:
     """What the API function counts with in unit tests: in-memory counters and limits that a test
-    can switch, read through a real `RateLimiter`."""
+    can switch, read through a real `RateLimiter` and, as in the function, a fail-open store
+    that logs its events (on a time source that only moves when told to)."""
 
     def __init__(self, clock: Clock) -> None:
         self.counters = InMemoryRateLimitCounters()
         self.config = SwitchableRateLimitConfig()
-        self._store: RateLimitCounterStore = self.counters
+        self.time = ManualTime()
         self._clock = clock
+        self.use_counters(self.counters)
 
     def use_counters(self, store: RateLimitCounterStore) -> None:
         """Count in `store` instead, e.g. one that fails."""
-        self._store = store
+        self._store = FailOpenCounterStore(
+            store, events=report_rate_limiter_event, time_source=self.time
+        )
 
     def limiter(self) -> RateLimiter:
         return RateLimiter(self._store, self.config, self._clock)
