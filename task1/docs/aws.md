@@ -122,6 +122,8 @@ Only workflow runs of this repository in the `aws-dev` environment can assume th
 
 ### The role's permissions
 
+**Keep production in another account.** The policy below is scoped to `aws-dev` where it can be, but deploying through CDK's bootstrap roles means CloudFormation acts with the bootstrap's execution role, which can change any stack in the account, a production one included. Only the account boundary keeps this workflow away from `aws-prod`; the workflow itself only ever names `aws-dev`. The Cognito admin calls below cover every user pool in the account for the same reason, since the pool's id is only known after the deploy.
+
 CloudFormation does the deploying through CDK's bootstrap roles. The workflow role only assumes
 those roles, plus what the preflight check, the seeding and the tests call directly. In the
 policy, `<REGION>` is `us-east-1` and `<ACCOUNT_ID>` is the account.
@@ -136,8 +138,7 @@ policy, `<REGION>` is `us-east-1` and `<ACCOUNT_ID>` is the account.
       "Action": "sts:AssumeRole",
       "Resource": [
         "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-deploy-role-<ACCOUNT_ID>-<REGION>",
-        "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-file-publishing-role-<ACCOUNT_ID>-<REGION>",
-        "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-lookup-role-<ACCOUNT_ID>-<REGION>"
+        "arn:aws:iam::<ACCOUNT_ID>:role/cdk-hnb659fds-file-publishing-role-<ACCOUNT_ID>-<REGION>"
       ]
     },
     {

@@ -153,7 +153,7 @@ class Api(Construct):
                 )
             ),
             endpoint_types=[apigateway.EndpointType.EDGE],
-            deploy_options=self._stage_options(),
+            deploy_options=self._stage_options_and_access_logs(),
             # The account's API Gateway logging role is a per-account, per-region setting made
             # once outside this stack, like CDK's bootstrap (ADR 0010).
             cloud_watch_role=False,
@@ -179,7 +179,7 @@ class Api(Construct):
         cdk.CfnOutput(self, "ApiId", value=self.rest_api.rest_api_id, key="ApiId")
         cdk.CfnOutput(self, "StageName", value=config.stage_name, key="StageName")
 
-    def _stage_options(self) -> apigateway.StageOptions:
+    def _stage_options_and_access_logs(self) -> apigateway.StageOptions:
         config = self._config
         if not config.access_logs:
             return apigateway.StageOptions(stage_name=config.stage_name)

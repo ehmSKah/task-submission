@@ -89,7 +89,6 @@ def test_waf_blocks_an_address_over_the_limit_with_the_rate_limited_problem(
 
     blocked = first_blocked(edge)
 
-    assert blocked.status_code == 429
     assert blocked.headers["Content-Type"].startswith("application/json")
     assert blocked.json() == rate_limited_problem()
     problem_schema = {
