@@ -27,3 +27,19 @@ _Avoid_: bad message, poison pill (a crash-causing message, which is a different
 **Event id**:
 The identity of one order placed event. A redelivery of the same event keeps its event id; a new event about the same order gets a new one.
 _Avoid_: message id, order id (the order has its own identity)
+
+**Duplicate event**:
+An order placed event for an order that has already been accepted. It arrives either as a redelivery or as a re-emission.
+_Avoid_: double, repeat
+
+**Conflicting event**:
+An order placed event for an order that has already been accepted, but describing it differently (other lines, another total). The first accepted version stands; the conflicting event is kept aside for a person to look at.
+_Avoid_: update, correction (there are no order updates in this context)
+
+**Redelivery**:
+The same event, with the same event id, arriving again, for example after the consumer restarted before recording its progress.
+_Avoid_: retry (a retry is the consumer trying again, not the event arriving again)
+
+**Re-emission**:
+The producer sending an order again as a new event, with a new event id.
+_Avoid_: resend, replay (replay means feeding dead letters back in)
