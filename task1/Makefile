@@ -26,8 +26,8 @@ RUN_INFRA_MODULE := cd infra && uv run python -m
 
 .DEFAULT_GOAL := help
 .PHONY: help doctor guard install up floci-up bootstrap bundle deploy endpoints seed token down \
-	limits test test-adapter test-integration contract-test coverage lint lint-openapi \
-	lint-workflows docs
+	limits demo http-env test test-adapter test-integration contract-test coverage lint \
+	lint-openapi lint-workflows docs
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -87,6 +87,11 @@ token: guard ## Print an access token: ROLE=user|manager|admin|none, or USER_NAM
 PRESET ?= defaults
 limits: guard ## Switch the runtime rate limits, no deploy: PRESET=defaults|high|tiny|tiny-ip
 	$(RUN_INFRA_MODULE) orders_api_infra.rate_limits --env $(ENV) --preset $(PRESET)
+
+# Needs the environment's testFixtures: the rate-limit step empties the counters and waits out
+# the cache, as the test suites do (ADR 0011).
+demo: guard ## Run the one-minute scenario against the deployed stack; fails on any unexpected status
+	$(RUN_INFRA_MODULE) orders_api_infra.demo --env $(ENV)
 
 # Floci leaves sibling containers (e.g. its ECR registry) on the network; remove those too. On
 # AWS, destroying needs the app to synthesise, hence the bundle; aws-prod's termination protection
