@@ -61,7 +61,12 @@ class Api(Construct):
         )
         self.api_function.add_to_role_policy(
             iam.PolicyStatement(
-                actions=["dynamodb:GetItem", "dynamodb:PutItem"],
+                actions=[
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                ],
                 resources=[orders_table.table_arn],
             )
         )

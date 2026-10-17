@@ -91,5 +91,24 @@ def test_the_api_function_gets_exactly_the_four_item_actions_on_the_idempotency_
     )
 
 
+def test_the_api_function_gets_exactly_the_four_item_actions_on_the_orders_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Get, create, change status and delete (ADRs 0005 and 0012); queries are not item actions."""
+    stack, data, template = synth(config(), tmp_path, monkeypatch)
+    table_id = stack.get_logical_id(data.orders_table.node.default_child)  # type: ignore[arg-type]
+    table_arn = {"Fn::GetAtt": [table_id, "Arn"]}
+
+    granted = {
+        action
+        for policy in template.find_resources("AWS::IAM::Policy").values()
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]
+        if table_arn in _as_list(statement["Resource"])
+        for action in _as_list(statement["Action"])
+    }
+
+    assert sorted(action for action in granted if action.endswith("Item")) == ITEM_ACTIONS
+
+
 def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else [value]
