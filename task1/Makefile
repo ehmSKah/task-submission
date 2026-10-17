@@ -93,6 +93,9 @@ limits: guard ## Switch the runtime rate limits, no deploy: PRESET=defaults|high
 demo: guard ## Run the one-minute scenario against the deployed stack; fails on any unexpected status
 	$(RUN_INFRA_MODULE) orders_api_infra.demo --env $(ENV)
 
+http-env: guard ## Write the .http collection's git-ignored env file: API URL and a token per user
+	$(RUN_INFRA_MODULE) orders_api_infra.http_env --env $(ENV)
+
 # Floci leaves sibling containers (e.g. its ECR registry) on the network; remove those too. On
 # AWS, destroying needs the app to synthesise, hence the bundle; aws-prod's termination protection
 # refuses it.

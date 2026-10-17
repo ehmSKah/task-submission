@@ -7,6 +7,7 @@ Usage: python -m orders_api_infra.endpoints --env local --floci-url http://local
 
 import argparse
 import json
+from typing import Any
 
 from orders_api_infra.config import EnvConfig, load_config
 from orders_api_infra.identity import FIXTURE_OUTPUTS
@@ -25,6 +26,15 @@ def stack_outputs(config: EnvConfig) -> dict[str, str]:
     outputs_by_stack = json.loads((BUILD_DIR / "cdk-outputs.json").read_text())
     outputs: dict[str, str] = outputs_by_stack[config.stack_name]
     return outputs
+
+
+def read() -> dict[str, Any]:
+    """`build/endpoints.json`, as the last `make up` (or `make endpoints`) wrote it."""
+    path = BUILD_DIR / "endpoints.json"
+    if not path.is_file():
+        raise SystemExit("build/endpoints.json is missing: run `make up` first")
+    endpoints: dict[str, Any] = json.loads(path.read_text())
+    return endpoints
 
 
 def write(env: str, floci_url: str) -> dict[str, str]:

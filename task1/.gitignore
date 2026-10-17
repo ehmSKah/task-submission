@@ -10,3 +10,6 @@ __pycache__/
 build/
 infra/cdk.out/
 infra/node_modules/
+
+# Live tokens for the .http collection, written by `make http-env`
+http/http-client.private.env.json

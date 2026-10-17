@@ -23,10 +23,9 @@ import httpx
 import jwt
 
 from orders_api.domain.access import Role
-from orders_api_infra import rate_limits
+from orders_api_infra import endpoints, rate_limits
 from orders_api_infra.config import EnvConfig, load_config
 from orders_api_infra.demo_users import access_token, demo_user
-from orders_api_infra.paths import BUILD_DIR
 from orders_api_infra.rate_limits import PRESETS
 
 ALG_NONE = "alg-none"
@@ -228,10 +227,7 @@ def main() -> None:
     parser.add_argument("--env", default="local")
     args = parser.parse_args()
     config = load_config(args.env)
-    endpoints_file = BUILD_DIR / "endpoints.json"
-    if not endpoints_file.is_file():
-        raise SystemExit("build/endpoints.json is missing: run `make up` first")
-    api_url = json.loads(endpoints_file.read_text())["apiUrl"]
+    api_url = endpoints.read()["apiUrl"]
     print(f"Orders API demo against {api_url} (env {config.name})\n")
     with httpx.Client(base_url=api_url, timeout=30) as client:
         passed = run(SCENARIO, _target(config, client))
