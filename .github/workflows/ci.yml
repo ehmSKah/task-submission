@@ -1,4 +1,5 @@
-# Static checks, unit tests, then the integration suite against Floci (ADR 0011).
+# Static checks, unit tests with the coverage gates, then the adapter, integration and contract
+# suites against Floci (ADR 0011).
 name: ci
 
 on:
@@ -12,6 +13,11 @@ concurrency:
 defaults:
   run:
     working-directory: task1
+
+# Reports are uploaded only once this pattern (a JWT: two base64url JSON segments) is absent
+# from them, so a token can never leave the runner in an artifact (ADR 0012).
+env:
+  TOKEN_PATTERN: 'eyJ[A-Za-z0-9_-]+\.eyJ'
 
 jobs:
   static:
@@ -27,6 +33,8 @@ jobs:
           cache: npm
           cache-dependency-path: task1/infra/package-lock.json
       - run: make install
+      # Ruff, mypy, import-linter, the OpenAPI document (openapi-spec-validator, Spectral) and
+      # cdk-nag at synth.
       - run: make lint
 
   unit:
@@ -38,12 +46,19 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run pytest tests/unit --junitxml=build/junit-unit.xml
-      - if: always()
+      - run: make test PYTEST_ARGS=--junitxml=build/junit-unit.xml
+      - run: make coverage
+      - id: no-tokens
+        if: always()
+        run: '! grep -lE "$TOKEN_PATTERN" build/*.xml'
+      - if: always() && steps.no-tokens.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
-          name: junit-unit
-          path: task1/build/junit-unit.xml
+          name: unit-reports
+          path: |
+            task1/build/junit-unit.xml
+            task1/build/coverage.xml
+            task1/build/coverage-html/
 
   floci:
     needs: [unit]
@@ -61,21 +76,26 @@ jobs:
       # Avoids the 10+ s image pull on the first Lambda invoke.
       - run: docker pull -q public.ecr.aws/lambda/python:3.13
       - run: make up
-      - run: uv run pytest tests/adapter -m adapter --junitxml=build/junit-adapter.xml
-      - run: uv run pytest tests/integration -m integration --junitxml=build/junit-integration.xml
+      - run: make test-adapter PYTEST_ARGS=--junitxml=build/junit-adapter.xml
+      - run: make test-integration PYTEST_ARGS=--junitxml=build/junit-integration.xml
+      - run: make contract-test PYTEST_ARGS=--junitxml=build/junit-contract.xml
       - if: failure()
         run: |
           docker logs orders-api-floci-1 > build/floci.log 2>&1 || true
           for c in $(docker ps -aq --filter label=floci=true); do
             docker logs "$c" > "build/$(docker inspect -f '{{.Name}}' "$c" | tr -d /).log" 2>&1 || true
           done
-      - if: always()
+      - id: no-tokens
+        if: always()
+        run: '! grep -lE "$TOKEN_PATTERN" build/*.xml build/*.log build/endpoints.json'
+      - if: always() && steps.no-tokens.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: floci-run
           path: |
             task1/build/junit-adapter.xml
             task1/build/junit-integration.xml
+            task1/build/junit-contract.xml
             task1/build/*.log
             task1/build/endpoints.json
       - if: always()

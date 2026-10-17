@@ -30,6 +30,8 @@ make up                 # start Floci, deploy the stack, seed demo users, write 
 make test               # unit tests
 make test-adapter       # DynamoDB adapter against Floci
 make test-integration   # HTTP tests against the deployed stack
+make contract-test      # Schemathesis: generated requests against the deployed stack
+make coverage           # coverage thresholds of the unit (and adapter) runs, XML and HTML reports
 make down               # stop and remove everything
 ```
 
@@ -53,5 +55,6 @@ for staff, per minute), `high` (what the integration tests run with), `tiny` (a 
 after 3 requests) or `tiny-ip` (the IP after 3). Responses carry `RateLimit-Limit`,
 `RateLimit-Remaining` and `RateLimit-Reset`.
 
-Other targets: `make lint` (Ruff, mypy, import-linter, cdk-nag), `make docs` (read-only Swagger
-UI on http://localhost:8080). `make help` lists them all.
+Other targets: `make lint` (Ruff, mypy, import-linter, the OpenAPI lint of `make lint-openapi`,
+cdk-nag), `make docs` (read-only Swagger UI on http://localhost:8080). `make help` lists them all.
+The test targets pass `PYTEST_ARGS` on to pytest, e.g. `make contract-test PYTEST_ARGS=-x`.

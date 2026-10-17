@@ -71,7 +71,8 @@ Rules:
 | `make token ROLE=user\|manager\|admin` | prints an access token for a seeded user |
 | `make limits PRESET=defaults\|high\|tiny\|tiny-ip` | writes a rate-limit preset to the SSM parameter, in force within the cache TTL ([ADR 0006](0006-rate-limiting.md)) |
 | `make test` / `make test-integration` / `make contract-test` | unit / Floci integration / Schemathesis |
-| `make lint` | Ruff, mypy, import-linter, OpenAPI lint |
+| `make coverage` | the coverage thresholds of ADR 0011, after `make test` (and `make test-adapter`) |
+| `make lint` | Ruff, mypy, import-linter, OpenAPI lint (`make lint-openapi`), `cdk-nag` |
 | `make docs` | Swagger UI |
 | `make down` | stops everything and removes its volumes |
 
