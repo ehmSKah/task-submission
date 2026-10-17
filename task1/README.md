@@ -46,5 +46,12 @@ curl -H "Authorization: Bearer $(make -s token ROLE=user)" "$API/api/v1/orders/<
 `USER_NAME=alice|bob|manager|admin|nobody`. The demo users' password is generated into Secrets
 Manager (`/orders-api/local/seed-users`); it never appears in the repository.
 
+Rate limits are runtime configuration (ADR 0006): every order request counts per client IP and
+per user, and over a limit the API answers `429`. `make limits PRESET=…` switches them without a
+deploy, in force within the cache time (2 s locally): `defaults` (300 per IP, 60 per `USER`, 300
+for staff, per minute), `high` (what the integration tests run with), `tiny` (a `USER` is refused
+after 3 requests) or `tiny-ip` (the IP after 3). Responses carry `RateLimit-Limit`,
+`RateLimit-Remaining` and `RateLimit-Reset`.
+
 Other targets: `make lint` (Ruff, mypy, import-linter, cdk-nag), `make docs` (read-only Swagger
 UI on http://localhost:8080). `make help` lists them all.

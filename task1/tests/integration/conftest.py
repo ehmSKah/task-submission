@@ -8,9 +8,11 @@ from typing import Any
 import httpx
 import pytest
 
+from orders_api.adapters.outbound.ssm_rate_limits import rate_limits_to_json
 from orders_api.domain.order import Order, OrderStatus, format_timestamp
 from orders_api_infra.config import load_config
 from orders_api_infra.demo_users import access_token, demo_user
+from orders_api_infra.rate_limits import PRESETS, switched_limits
 from tests.builders import an_order
 from tests.deployment import store_order
 from tests.integration.contract import contract_checked_client
@@ -27,6 +29,16 @@ def _only_on_floci(request: pytest.FixtureRequest, endpoints: dict[str, Any]) ->
     """`floci_only` tests need emulator behaviour, e.g. second-long tokens (ADR 0011)."""
     if request.node.get_closest_marker("floci_only") and endpoints["target"] != "floci":
         pytest.skip("runs against Floci only")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def high_rate_limits(endpoints: dict[str, Any]) -> Iterator[None]:
+    """The suite runs with high limits: it sends far more than 60 requests a minute per demo
+    user, all from one address locally. Only the rate-limit tests switch in tiny ones. The
+    environment's own limits come back afterwards (ADR 0011)."""
+    config = load_config(endpoints["env"])
+    with switched_limits(config, rate_limits_to_json(PRESETS["high"])):
+        yield
 
 
 @pytest.fixture(scope="session")

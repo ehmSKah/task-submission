@@ -16,7 +16,7 @@ RUN_INFRA_MODULE := cd infra && uv run python -m
 
 .DEFAULT_GOAL := help
 .PHONY: help doctor install up floci-up bootstrap bundle deploy endpoints seed token down \
-	test test-adapter test-integration lint docs
+	limits test test-adapter test-integration lint docs
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -56,6 +56,10 @@ ROLE ?= user
 token: ## Print an access token: ROLE=user|manager|admin|none, or USER_NAME=alice|bob|…
 	@$(RUN_INFRA_MODULE) orders_api_infra.demo_users token --env $(ENV) --role $(ROLE) \
 		$(if $(USER_NAME),--user $(USER_NAME))
+
+PRESET ?= defaults
+limits: ## Switch the runtime rate limits, no deploy: PRESET=defaults|high|tiny|tiny-ip
+	$(RUN_INFRA_MODULE) orders_api_infra.rate_limits --env $(ENV) --preset $(PRESET)
 
 # Floci leaves sibling containers (e.g. its ECR registry) on the network; remove those too.
 down: ## Stop Floci and remove its containers, network and volumes

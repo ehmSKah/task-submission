@@ -50,17 +50,30 @@ class FunctionLogs:
                     break
                 kwargs["nextToken"] = page["nextToken"]
 
-    def request_ids(self, since_ms: int) -> set[str]:
-        """The `requestId` of every structured line the function wrote since `since_ms`."""
-        ids = set()
+    def lines(self, since_ms: int) -> Iterator[dict[str, Any]]:
+        """Every structured line the function wrote since `since_ms`."""
         for message in self._messages(since_ms):
             try:
                 line = json.loads(message)
             except ValueError:
                 continue
-            if isinstance(line, dict) and line.get("requestId"):
-                ids.add(str(line["requestId"]))
-        return ids
+            if isinstance(line, dict):
+                yield line
+
+    def wait_for_event(self, event: str, since_ms: int, timeout_s: float = 30) -> dict[str, Any]:
+        """The first line logged as `event` since `since_ms` (log delivery is async)."""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            for line in self.lines(since_ms):
+                if line.get("message") == event:
+                    return line
+            if time.monotonic() > deadline:
+                raise AssertionError(f"{event} never appeared in the function logs")
+            time.sleep(1)
+
+    def request_ids(self, since_ms: int) -> set[str]:
+        """The `requestId` of every structured line the function wrote since `since_ms`."""
+        return {str(line["requestId"]) for line in self.lines(since_ms) if line.get("requestId")}
 
     def wait_for(self, request_id: str, since_ms: int, timeout_s: float = 30) -> set[str]:
         """All logged request ids, once `request_id` is among them (log delivery is async)."""
