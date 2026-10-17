@@ -38,6 +38,7 @@ All AWS resources are defined in **one AWS CDK (Python) stack built from three c
 | WAF flood limit per IP and 5 minutes (`wafRateLimit`, default 3,000; ADR 0006) | 3,000 | `aws-dev`: 10,000; `aws-prod`: 3,000 |
 | WAF test rule (`wafTestRuleLimit`, `testFixtures` only; ADR 0011) | 100 (deployed, not enforced) | `aws-dev`: 100; `aws-prod`: none |
 | API Gateway access logs (`accessLogs`; [ADR 0012](0012-observability-and-security-baseline.md)) | off | on |
+| Browser origins allowed by CORS (`corsAllowedOrigins`, default none; [ADR 0014](0014-cors-for-browser-clients.md)) | `http://localhost:8080` (Swagger UI) | `aws-dev`: `http://localhost:8080`; `aws-prod`: none, so CORS is off |
 | Log retention | 7 days | `aws-dev`: 14 days; `aws-prod`: 90 days |
 | Log level | DEBUG | INFO |
 
@@ -65,7 +66,7 @@ Rules:
 - **Storage:** `memory`. Every `make up` deploys and seeds from scratch. `persistent` mode is optional.
 - **Short-lived tokens:** `FLOCI_SERVICES_COGNITO_ENFORCE_TOKEN_VALIDITY_LIMITS=false`, so expiry tests can use them.
 - **Floci UI**, Floci's web console (`floci/floci-ui:0.7.0`, pinned), starts with Floci on `localhost:4500`, so a reviewer can see what `make up` deployed. It reaches Floci over the shared network with the dummy keys, and can change resources as well as show them.
-- **Swagger UI** runs under the `docs` profile on `localhost:8080`.
+- **Swagger UI** runs under the `docs` profile on `localhost:8080`. It serves `build/swagger/openapi.yaml`, a copy of the contract that `make docs` points at the deployed API, so "Try it out" works ([ADR 0014](0014-cors-for-browser-clients.md)).
 
 **Workflow** (`make`; the README documents these as the setup and execution instructions):
 
@@ -80,7 +81,7 @@ Rules:
 | `make test` / `make test-integration` / `make contract-test` | unit / Floci integration / Schemathesis |
 | `make coverage` | the coverage thresholds of ADR 0011, after `make test` (and `make test-adapter`) |
 | `make lint` | Ruff, mypy, import-linter, OpenAPI lint (`make lint-openapi`), actionlint, `cdk-nag` at synth for `local`, `aws-dev` and `aws-prod` |
-| `make docs` | Swagger UI |
+| `make docs` | Swagger UI, with "Try it out" against the API in `build/endpoints.json` ([ADR 0014](0014-cors-for-browser-clients.md)) |
 | `make down` | stops everything and removes its volumes |
 
 - **Deploying:** `--method=direct` always. Floci breaks CDK's default change-set redeploys.

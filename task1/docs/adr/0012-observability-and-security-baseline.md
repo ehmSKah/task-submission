@@ -65,11 +65,12 @@ The build includes **what the assignment's requirements touch, and nothing beyon
 | `X-Frame-Options` | `DENY` |
 | `Strict-Transport-Security` | `max-age=31536000` (ignored by browsers over Floci's plain HTTP) |
 
-- **No CORS headers** ([ADR 0008](0008-openapi-contract.md)).
+- ~~**No CORS headers** ([ADR 0008](0008-openapi-contract.md)).~~ **CORS headers only where the environment allows browser origins** ([ADR 0014](0014-cors-for-browser-clients.md)): `Access-Control-Allow-Origin` for an allowed origin only, never `*`, and never `Access-Control-Allow-Credentials`; `Access-Control-Expose-Headers` and `Vary: Origin` with it. None in `aws-prod`.
 - **Where the headers are set:**
-  - by a response middleware in the API function, for every response including `/health`
-  - as static parameters in every mapped Gateway Response
-  - in WAF's custom `429`, from the same constant. It can't carry `X-Request-Id`, and its `Content-Type` is `application/json`, since WAF sets that header itself ([ADR 0006](0006-rate-limiting.md)).
+  - by a response middleware in the API function, for every response including `/health`; the CORS headers in the same place
+  - as static parameters in every mapped Gateway Response, with the CORS headers as a static value where exactly one origin is allowed
+  - in WAF's custom `429`, from the same constant. It can't carry `X-Request-Id`, and its `Content-Type` is `application/json`, since WAF sets that header itself ([ADR 0006](0006-rate-limiting.md)). The same static CORS headers as the Gateway Responses.
+  - in the CORS preflight API Gateway answers itself, with `X-Request-Id`, where browser origins are allowed (ADR 0014)
 - **Tested:** integration tests check the full set on one response from each of those layers (WAF on AWS only, `tests/integration/test_edge_firewall.py`).
 - **Headers API Gateway adds itself** (`x-amzn-RequestId`, `x-amz-apigw-id`) can't be removed and reveal nothing beyond "AWS".
 
@@ -93,4 +94,4 @@ The build includes **what the assignment's requirements touch, and nothing beyon
 - **The rate limiter's fail-open state** is visible only by reading logs until the production metric filter and alarm exist.
 - **Investigating one user's activity** means querying logs (e.g. CloudWatch Logs Insights by `sub`), not dashboards.
 - **IAM statements must be updated by hand** when an adapter starts using a new action. `cdk-nag` and the integration tests (failing with `AccessDenied`) catch omissions.
-- **Header consistency depends on three places** (the function, Gateway Responses, WAF). The integration tests guard all three.
+- **Header consistency depends on three places** (the function, Gateway Responses, WAF), four with the CORS preflight. The integration tests guard all of them.

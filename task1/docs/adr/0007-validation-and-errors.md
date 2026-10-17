@@ -79,7 +79,7 @@ Request bodies are validated **at API Gateway** by request validators, so an inv
 | Body over 64 KB | `413` | function |
 | Unknown or repeated query parameter; `limit` not an integer 1–100; cursor doesn't decode or belongs to another list | `400` with `errors[]`, one entry per offending parameter | function |
 | Path `{id}` doesn't match the UUID pattern declared in the OpenAPI document | `400` with `errors[]` pointing at the path parameter | function (the gateway only checks that parameters are present, not their format). That includes an id the function's router can't match at all (a control character, a zero-width space): a catch-all route behind the order routes answers it with the same `400` instead of "no such route" |
-| Unknown path or method | `404` | gateway (`MISSING_AUTHENTICATION_TOKEN` remapped from its default `403`) |
+| Unknown path or method | `404` | gateway (`MISSING_AUTHENTICATION_TOKEN` remapped from its default `403`). Where the environment allows browser origins, `OPTIONS` on a known path is a CORS preflight instead, answered `204` ([ADR 0014](0014-cors-for-browser-clients.md)) |
 | `Accept` asks for something other than JSON | ignored; responses are always JSON | — |
 
 **Unexpected errors and gateway defaults.**
@@ -93,6 +93,7 @@ Request bodies are validated **at API Gateway** by request validators, so an inv
   - `INTEGRATION_TIMEOUT` → `504`
   - `DEFAULT_4XX` / `DEFAULT_5XX` → generic Problem Details, so nothing ever returns the gateway's own `{"message": …}` shape
 - **WAF's custom `429`** uses the same format (ADR 0006).
+- **Browsers can read these errors too** where the environment allows exactly one browser origin: every Gateway Response and WAF's `429` carry it as a static `Access-Control-Allow-Origin`, with the exposed headers ([ADR 0014](0014-cors-for-browser-clients.md)).
 - **Timeouts:** the API function times out at **10 s** and the authorizer at **5 s**, both below the REST API's 29 s integration limit, so our own timeout fires first and is logged.
 
 ## Considered options

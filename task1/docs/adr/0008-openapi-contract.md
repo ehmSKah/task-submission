@@ -29,6 +29,7 @@ The API is described **design-first** in one OpenAPI document. That document is 
   - `x-amazon-apigateway-authorizer` (the REQUEST authorizer from [ADR 0003](0003-access-token-validation.md))
   - `x-amazon-apigateway-request-validators` and `…-request-validator`
   - `x-amazon-apigateway-gateway-responses` (the Problem Details templates from ADR 0007)
+  - where the environment allows browser origins, an `OPTIONS` operation with a MOCK integration on every path, answering CORS preflights ([ADR 0014](0014-cors-for-browser-clients.md))
 - **The result** is passed to `SpecRestApi`.
 - **Normal CDK still covers** the stage, deployment, WAF association and Lambda invoke permissions.
 
@@ -46,7 +47,8 @@ The API is described **design-first** in one OpenAPI document. That document is 
   - **Rules:** Spectral's `oas` set (without `servers`, whose URL depends on the deployment, and `info.contact`) failing on warnings, plus custom rules: OpenAPI exactly 3.0.3; no `nullable`, `readOnly`, `writeOnly` or `format`; `additionalProperties: false` on every object; request bodies reference a `…Request` schema and responses never do; request schemas contain no `$ref`; `$ref`s in schemas point at `#/components/schemas/`; every `4xx`/`5xx` response is `application/problem+json`. Each rule was shown to fire on a scratch copy of the document broken for it.
 - **A unit test compiles every request schema** with `fastjsonschema` as draft-04, and every path and query parameter schema the function validates with.
 
-**Viewing it.** `make docs` starts a **Swagger UI container** on `localhost:8080`, showing the spec file. It is **read-only**: there is no "Try it out", because calling the API from the browser would need CORS. Requests are tried through an HTTP request collection instead. The README links to the spec file and to `make docs`.
+**Viewing it.** `make docs` starts a **Swagger UI container** on `localhost:8080`, showing the spec file. ~~It is **read-only**: there is no "Try it out", because calling the API from the browser would need CORS.~~ Requests are tried through an HTTP request collection instead. The README links to the spec file and to `make docs`.
+- **Amended by [ADR 0014](0014-cors-for-browser-clients.md):** "Try it out" now works. The API answers CORS for the origins an environment allows (`http://localhost:8080` in `local` and `aws-dev`), and `make docs` serves a copy of the document with the deployed API's URL as its server. The committed document still names no server and lists no `OPTIONS`.
 
 **Proving the implementation matches.**
 - **Response checks in every integration test:** each response is validated against the OpenAPI schema for its operation and status code (e.g. `openapi-core`). Undocumented fields, wrong types and undocumented status codes fail the test.
@@ -68,7 +70,7 @@ The API is described **design-first** in one OpenAPI document. That document is 
   - *A `/api/v1/docs` route in the API:* an extra public route the assignment doesn't ask for.
   - *GitHub Pages:* needs a paid plan for the private working repo, and the URL would break when moving repos. A candidate for the final public repo.
   - *A static Redoc HTML file in the repo:* GitHub shows HTML as source, and it is one more generated artefact to keep in sync.
-- **"Try it out" in Swagger UI.** Needs CORS on the API (and `OPTIONS` handling in the spec), a cross-cutting decision not taken for this. The request collection covers the need.
+- **"Try it out" in Swagger UI.** Needs CORS on the API (and `OPTIONS` handling in the spec), a cross-cutting decision not taken for this. The request collection covers the need. *Since taken in [ADR 0014](0014-cors-for-browser-clients.md),* with the `OPTIONS` operations added at synth rather than in the published document.
 - **Only one of the two contract checks.** Response checks alone miss inputs we didn't think of. Schemathesis alone leaves the hand-written tests unchecked. If time gets tight, Schemathesis is the part to cut.
 - **Open response objects** (allowing unknown fields). Friendlier to evolution for third-party consumers, but undocumented fields could appear silently. Strict objects make the contract the gate.
 
@@ -78,5 +80,5 @@ The API is described **design-first** in one OpenAPI document. That document is 
 - **To verify on Floci:**
   - that `SpecRestApi` (CloudFormation `Body`) imports the document with its integration, authorizer, request validators and gateway responses, and serves it end to end. Floci's source and docs list support for all of these extensions, but it hasn't been run.
 - **To verify against AWS:** that API Gateway's OpenAPI import accepts 3.0.3 as used (and not 3.1).
-- **The docs are view-only locally.** Interactive calls from the docs would need CORS.
+- ~~**The docs are view-only locally.** Interactive calls from the docs would need CORS.~~ Interactive calls work locally since [ADR 0014](0014-cors-for-browser-clients.md).
 - **The test environment needs high rate limits** for Schemathesis. It is a separate configuration from the one used to test `429` quickly.

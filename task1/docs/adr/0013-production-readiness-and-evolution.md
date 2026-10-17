@@ -54,7 +54,7 @@ Ordered by risk (correctness and security first, then operability, then hardenin
 | Per-route limits | A second configuration dimension in the rate limiter | 0006 |
 | Our own CDN or caching in front | Regional endpoint + own CloudFront; WAF moves to CloudFront; the app uses the trusted-proxy hop for the client IP | 0002, 0006 |
 | Observability beyond logs | Powertools Metrics (EMF) with the cardinality rule (never `sub`, order id, IP or request id as a dimension), X-Ray tracing, dashboards | 0012 |
-| Browser clients | CORS, and "Try it out" in the docs | 0008 |
+| Browser clients | ~~CORS, and "Try it out" in the docs~~ Built ([ADR 0014](0014-cors-for-browser-clients.md)), off in `aws-prod`. A production client's `https://` origin goes into `aws-prod`'s `corsAllowedOrigins`. A second origin that must read the gateway's errors too calls for a regional endpoint with our own CloudFront and its CORS response headers policy | 0008, 0014 |
 | Hosted documentation | Published OpenAPI docs; dereferenceable problem `type` URIs; OpenAPI 3.1 once API Gateway imports it | 0007, 0008 |
 | Several teams or deploy cadences | Split stacks by lifecycle, passing values through SSM parameters instead of exports | 0010 |
 | A higher availability requirement | Warm standby (see Disaster recovery) | this ADR |
