@@ -21,7 +21,7 @@ Ordered by risk (correctness and security first, then operability, then hardenin
 | 3 | **Run the `aws_only` checks on the target account:** WAF and `sourceIp` see the client behind the edge-optimized endpoint; WAF's IPv6 aggregation; API Gateway accepts the OpenAPI 3.0.3 import | Floci can't show these | [0006](0006-rate-limiting.md), [0007](0007-validation-and-errors.md), [0008](0008-openapi-contract.md), [0011](0011-testing-strategy.md) |
 | 4 | **Minimum alerting:** metric filter + alarm on `rate_limiter_unavailable` / `rate_limiter_circuit_open`; Lambda errors and throttles; API Gateway 5XX and latency; DynamoDB throttles | Logs only | [0012](0012-observability-and-security-baseline.md) |
 | 5 | **Deployment pipeline with approvals,** and a separate production account (multi-account setup) | Manual deploys; `aws-e2e` is a verification tool, already on GitHub OIDC | 0010, 0011 |
-| 6 | **Custom domain + ACM certificate** (in `us-east-1`, for the edge-optimized endpoint) | API Gateway's default domain | [0002](0002-serverless-rest-api-single-lambda.md) |
+| 6 | **Custom domain + ACM certificate** (in `us-east-1` for the edge-optimized endpoint, whatever region the API runs in) | API Gateway's default domain | [0002](0002-serverless-rest-api-single-lambda.md) |
 | 7 | **WAF managed rule sets** (common rules, known bad inputs, IP reputation) next to the rate rule, and WAF logging | Rate rule only; WAF's metrics and sampled requests | 0006 |
 | 8 | **HMAC-signed cursors** | Encoded, unsigned. Safe, because queries are scoped to the caller, but tamperable within that scope | 0004 |
 | 9 | **A tested restore.** PITR is on in production, but a backup is only real once a restore has been rehearsed | — | [0005](0005-dynamodb-storage.md) |

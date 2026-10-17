@@ -13,10 +13,11 @@ first deploy has to confirm.
 
 ## Account and region
 
-- **Region:** each environment's config names it (`us-east-1` for both). The Makefile exports it
-  as `AWS_REGION` for every AWS target.
+- **Region:** each environment's config names it: `eu-central-1` (Frankfurt) for both, so the
+  data stays in the EU ([ADR 0010](adr/0010-infrastructure-and-environments.md)). The Makefile
+  exports it as `AWS_REGION` for every AWS target. Local Floci stays in `us-east-1`, its default.
 - **Account:** no config names one, so no account id is kept in the repository. The stack is
-  synthesised without an account (`aws://unknown-account/us-east-1` in the CDK manifest), and
+  synthesised without an account (`aws://unknown-account/eu-central-1` in the CDK manifest), and
   CloudFormation deploys it to the account of the caller's credentials. As a result, `cdk synth`
   and `make lint` need no AWS credentials.
 - **Checks:**
@@ -44,7 +45,7 @@ The owner of the account does these once, with administrator credentials.
        "Principal":{"Service":"apigateway.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
    aws iam attach-role-policy --role-name apigateway-cloudwatch-logs \
      --policy-arn arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
-   aws apigateway update-account --region us-east-1 --patch-operations \
+   aws apigateway update-account --region eu-central-1 --patch-operations \
      op=replace,path=/cloudwatchRoleArn,value=arn:aws:iam::<ACCOUNT_ID>:role/apigateway-cloudwatch-logs
    ```
 
@@ -126,7 +127,7 @@ Only workflow runs of this repository in the `aws-dev` environment can assume th
 
 CloudFormation does the deploying through CDK's bootstrap roles. The workflow role only assumes
 those roles, plus what the preflight check, the seeding and the tests call directly. In the
-policy, `<REGION>` is `us-east-1` and `<ACCOUNT_ID>` is the account.
+policy, `<REGION>` is `eu-central-1` and `<ACCOUNT_ID>` is the account.
 
 ```json
 {

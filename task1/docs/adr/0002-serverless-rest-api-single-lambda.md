@@ -48,7 +48,7 @@ The Orders API runs on **AWS Lambda behind an API Gateway REST API (v1)**. **One
 - **One IAM role for the function** holds the union of all permissions on this service's own tables. It's acceptable while the routes share one owner and one data set. Split functions (per route, or read/write) when routes need different permissions, scaling or ownership.
 - **WAF is available for production.** Rate-based rules and managed rule sets attach directly to the REST API stage. The local Floci stack doesn't emulate WAF; production use is covered in the production-evolution notes.
 - **Edge-optimized endpoint specifics.**
-  - A custom domain needs its ACM certificate in `us-east-1`.
+  - A custom domain needs its ACM certificate in `us-east-1`, whatever region the API runs in (the AWS environments run in `eu-central-1`).
   - The AWS-managed CloudFront distribution can't be configured: no caching, no WAF of our own at the edge locations.
   - WAF still attaches as a *regional* web ACL to the API stage ([ADR 0006](0006-rate-limiting.md)).
 - **Local Floci specifics:**
