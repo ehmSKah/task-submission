@@ -6,6 +6,7 @@ import json
 import pytest
 
 from orders_api.adapters.inbound import api_handler
+from orders_api.domain.order import OrderStatus
 from tests.builders import an_order
 from tests.unit.events import (
     ADMIN,
@@ -14,7 +15,9 @@ from tests.unit.events import (
     MANAGER,
     NOBODY,
     VALID_ORDER,
+    change_status_event,
     create_order_event,
+    delete_order_event,
     get_order_event,
     headers_of,
     invoke,
@@ -34,6 +37,12 @@ class UntouchableRepository(InMemoryOrderRepository):
         raise AssertionError("the repository must not be read")
 
     def add(self, order: object) -> None:
+        raise AssertionError("the repository must not be written")
+
+    def update_status(self, current: object, changed: object, *, check_version: bool) -> None:
+        raise AssertionError("the repository must not be written")
+
+    def delete(self, order_id: str) -> bool:
         raise AssertionError("the repository must not be written")
 
 
@@ -71,6 +80,27 @@ def test_nobody_may_not_read_an_order_whether_or_not_it_exists(order_id: str) ->
 
 
 @pytest.mark.usefixtures("untouchable")
+@pytest.mark.parametrize("status", [status.value for status in OrderStatus])
+@pytest.mark.parametrize("order_id", [ALICES_ORDER.id, UNKNOWN_ID], ids=["existing", "unknown"])
+def test_nobody_may_not_change_any_status_whether_or_not_the_order_exists(
+    order_id: str, status: str
+) -> None:
+    body = problem_of(
+        invoke(change_status_event(order_id, status=status, authorizer=NOBODY)), 403, "forbidden"
+    )
+
+    assert body["instance"] == f"/api/v1/orders/{order_id}/status"
+
+
+@pytest.mark.usefixtures("untouchable")
+@pytest.mark.parametrize("order_id", [ALICES_ORDER.id, UNKNOWN_ID], ids=["existing", "unknown"])
+def test_nobody_may_not_delete_an_order_whether_or_not_it_exists(order_id: str) -> None:
+    body = problem_of(invoke(delete_order_event(order_id, NOBODY)), 403, "forbidden")
+
+    assert body["detail"] == "Missing permission: order:delete:any"
+
+
+@pytest.mark.usefixtures("untouchable")
 def test_only_unknown_groups_are_no_role_at_all() -> None:
     problem_of(
         invoke(get_order_event(ALICES_ORDER.id, with_roles("marketing,staff"))), 403, "forbidden"
@@ -90,6 +120,68 @@ def test_an_invalid_body_is_a_400_even_for_nobody() -> None:
 @pytest.mark.usefixtures("untouchable")
 def test_a_malformed_path_id_is_a_400_even_for_nobody() -> None:
     problem_of(invoke(get_order_event("not-a-uuid", NOBODY)), 400, "validation-error")
+
+
+@pytest.mark.usefixtures("untouchable")
+def test_an_invalid_status_body_is_a_400_even_for_nobody() -> None:
+    event = change_status_event(ALICES_ORDER.id, status="LOST", authorizer=NOBODY)
+
+    problem_of(invoke(event), 400, "validation-error")
+
+
+@pytest.mark.usefixtures("untouchable")
+def test_a_malformed_path_id_is_a_400_for_nobody_on_status_changes_and_deletes() -> None:
+    problem_of(invoke(change_status_event("not-a-uuid", authorizer=NOBODY)), 400)
+    problem_of(invoke(delete_order_event("not-a-uuid", NOBODY)), 400)
+
+
+# Status changes and deletion: who may, decided before any data is read.
+
+
+@pytest.mark.usefixtures("untouchable")
+@pytest.mark.parametrize("status", ["PENDING", "CONFIRMED", "SHIPPED", "DELIVERED"])
+def test_the_owner_may_not_request_any_status_but_cancelled_even_on_their_own_order(
+    status: str,
+) -> None:
+    body = problem_of(
+        invoke(change_status_event(ALICES_ORDER.id, status=status, authorizer=ALICE)),
+        403,
+        "forbidden",
+    )
+
+    assert body["detail"] == "Missing permission: order:status:any"
+
+
+@pytest.mark.usefixtures("untouchable")
+@pytest.mark.parametrize("caller", [ALICE, MANAGER], ids=["user", "manager"])
+def test_only_an_admin_may_delete(caller: dict[str, str]) -> None:
+    body = problem_of(invoke(delete_order_event(ALICES_ORDER.id, caller)), 403, "forbidden")
+
+    assert body["detail"] == "Missing permission: order:delete:any"
+
+
+def test_bob_cancelling_alice_s_order_is_a_404_identical_to_an_unknown_one() -> None:
+    foreign = invoke(change_status_event(ALICES_ORDER.id, status="CANCELLED", authorizer=BOB))
+    unknown = invoke(change_status_event(UNKNOWN_ID, status="CANCELLED", authorizer=BOB))
+
+    foreign_body = problem_of(foreign, 404, "not-found")
+    unknown_body = problem_of(unknown, 404, "not-found")
+    assert {k: v for k, v in foreign_body.items() if k != "instance"} == {
+        k: v for k, v in unknown_body.items() if k != "instance"
+    }
+
+
+def test_the_owner_cancels_their_own_order() -> None:
+    response = invoke(change_status_event(ALICES_ORDER.id, status="CANCELLED", authorizer=ALICE))
+
+    assert response["statusCode"] == 200
+
+
+@pytest.mark.parametrize("staff", [MANAGER, ADMIN], ids=["manager", "admin"])
+def test_staff_change_the_status_of_anyone_s_order(staff: dict[str, str]) -> None:
+    response = invoke(change_status_event(ALICES_ORDER.id, status="CONFIRMED", authorizer=staff))
+
+    assert response["statusCode"] == 200
 
 
 def test_someone_else_s_order_is_a_404_identical_to_an_unknown_one() -> None:

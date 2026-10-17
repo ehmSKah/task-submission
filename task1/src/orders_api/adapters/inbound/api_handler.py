@@ -23,7 +23,13 @@ from orders_api.adapters.inbound.http_headers import (
 )
 from orders_api.adapters.inbound.idempotency import idempotency_key, run_once
 from orders_api.adapters.inbound.order_json import order_to_json
-from orders_api.adapters.inbound.order_requests import ORDERS_PATH, new_order_from, valid_order_id
+from orders_api.adapters.inbound.order_requests import (
+    ORDERS_PATH,
+    if_match_versions,
+    new_order_from,
+    requested_status_from,
+    valid_order_id,
+)
 from orders_api.adapters.inbound.problems import FieldError, ProblemType, problem_body
 from orders_api.adapters.inbound.request_checks import InvalidRequest
 from orders_api.adapters.outbound.dynamodb_idempotency import dynamodb_store
@@ -34,12 +40,17 @@ from orders_api.application.orders import (
     IdGenerator,
     OrderNotFound,
     OrderRepository,
+    VersionMismatch,
+    change_order_status,
+    check_may_change_status,
     check_may_create,
+    check_may_delete,
     check_may_read,
     create_order,
+    delete_order,
     get_order,
 )
-from orders_api.domain.order import Order
+from orders_api.domain.order import Order, StatusChangeNotAllowed
 from orders_api.domain.permissions import Caller, PermissionDenied
 
 UNEXPECTED_ERROR_DETAIL = "An unexpected error occurred"
@@ -127,6 +138,34 @@ def get_order_by_id(order_id: str) -> Response[str]:
     return order_response(get_order(orders(), caller, order_id), 200)
 
 
+@app.patch("/api/v1/orders/<order_id>/status")
+def patch_order_status(order_id: str) -> Response[str]:
+    caller = identified_caller()
+    order_id = valid_order_id(order_id)
+    status = requested_status_from(app.current_event)
+    # Step 6 needs the body: cancelling and every other status need different permissions.
+    check_may_change_status(caller, status)
+    order = change_order_status(
+        orders(),
+        clock,
+        caller,
+        order_id,
+        status,
+        if_match=if_match_versions(app.current_event),
+    )
+    return order_response(order, 200)
+
+
+@app.delete("/api/v1/orders/<order_id>")
+def delete_order_by_id(order_id: str) -> Response[str]:
+    caller = identified_caller()
+    order_id = valid_order_id(order_id)
+    check_may_delete(caller)
+    logger.append_keys(orderId=order_id)
+    delete_order(orders(), order_id)
+    return Response(status_code=204)
+
+
 def problem_response(
     problem: ProblemType, detail: str | None = None, errors: tuple[FieldError, ...] = ()
 ) -> Response[str]:
@@ -162,6 +201,19 @@ def permission_denied(error: PermissionDenied) -> Response[str]:
 @app.exception_handler(OrderNotFound)  # type: ignore[untyped-decorator]  # Powertools leaves it untyped
 def order_not_found(_: OrderNotFound) -> Response[str]:
     return problem_response(ProblemType.NOT_FOUND)
+
+
+@app.exception_handler(StatusChangeNotAllowed)  # type: ignore[untyped-decorator]
+def status_change_not_allowed(error: StatusChangeNotAllowed) -> Response[str]:
+    """Only reached once the caller may see the order, so naming its status leaks nothing."""
+    return problem_response(ProblemType.CONFLICT, str(error))
+
+
+@app.exception_handler(VersionMismatch)  # type: ignore[untyped-decorator]
+def version_mismatch(_: VersionMismatch) -> Response[str]:
+    return problem_response(
+        ProblemType.PRECONDITION_FAILED, "If-Match doesn't name the order's current ETag"
+    )
 
 
 @app.exception_handler(IdempotencyValidationError)  # type: ignore[untyped-decorator]
