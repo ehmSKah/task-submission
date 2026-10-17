@@ -51,7 +51,8 @@ task1/
   - **What is stored:** the serialised `201` response.
   - **Errors:** a validation error maps to `422`; already-in-progress maps to `409`.
   - **Store:** the idempotency table ([ADR 0005](0005-dynamodb-storage.md)).
-- **Configuration:** Powertools **Parameters** reads the SSM rate-limit configuration with a 60-second cache, behind `RateLimitConfigSource`.
+- **Configuration:** Powertools **Parameters** reads the SSM rate-limit configuration, cached for the environment's configured time (2 s locally, 60 s in production; [ADR 0006](0006-rate-limiting.md)), behind `RateLimitConfigSource`.
+- **Adapters made once per Lambda instance:** the order repository, the idempotency store and the rate limiter are each built on first use by a function without arguments wrapped in `functools.cache`. Unit tests replace those functions with fakes.
 
 **Request pipeline in the API function.** The order decides which error a client sees when several things are wrong:
 
@@ -60,7 +61,7 @@ task1/
 | 0 | Logger context; correlation id = `requestContext.requestId` | — |
 | 1 | `GET /api/v1/health` returns here (no identity, no rate limit) | `200` |
 | 2 | Identity from the authorizer context (`sub`, roles). If it's missing, that's a misconfiguration: fail closed | `500` + error log |
-| 3 | Rate limit: per IP, then per user | `429` |
+| 3 | Rate limit: per IP (`requestContext.identity.sourceIp`; missing → fail closed), then per user. From here on every response carries `RateLimit-*` | `429` / `500` |
 | 4 | Request checks: `Content-Type`, body size, query parameters, **path `{id}` matches the UUID pattern** | `415` / `413` / `400` |
 | 5 | Body: schema validation, duplicate SKUs, then parsing into typed models | `400` |
 | 6 | Permission check ([ADR 0001](0001-role-based-access-control.md)) | `403` |

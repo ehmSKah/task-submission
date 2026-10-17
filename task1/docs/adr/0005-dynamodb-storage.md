@@ -26,7 +26,7 @@ Orders are stored in **Amazon DynamoDB**. Each kind of data gets **its own table
 
 **Idempotency table.** One item per idempotency key, scoped per owner, expiring through **TTL** (`expiration`, 24 hours). Its exact layout follows whatever implements idempotency (the Powertools default schema if that is chosen).
 
-**Rate-limit table.** Separate from the other two if rate limiting stores counters in DynamoDB. Its layout is decided with rate limiting.
+**Rate-limit table.** One item per scope, subject and window, keyed `id` = `<scope>#<subject>#<windowStart>`, with `count` and the TTL attribute `expiresAt`; written only by one conditional `UpdateItem` per check ([ADR 0006](0006-rate-limiting.md)).
 
 **Settings**
 
@@ -36,7 +36,7 @@ Orders are stored in **Amazon DynamoDB**. Each kind of data gets **its own table
 | Point-in-time recovery | on (production) | off | off |
 | Removal policy | retain + deletion protection in production; destroy locally | destroy | destroy |
 | Encryption | AWS-owned key (default) | default | default |
-| TTL | none (orders never expire) | `expiration` | per rate-limit design |
+| TTL | none (orders never expire) | `expiration` | `expiresAt` |
 | Streams | off | off | off |
 
 ## Considered options

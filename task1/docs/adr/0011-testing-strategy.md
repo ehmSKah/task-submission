@@ -45,9 +45,11 @@ Each of the assignment's five required categories (successful requests, invalid 
 
 **Determinism and isolation.**
 - **Rate limits:**
-  - **Setup:** a fixture writes tiny limits to the SSM parameter (with the per-IP limit below the user limit for the per-IP test, since all local traffic shares one IP), waits for the 2-second cache, and **empties the counter table**. The emptying helper only runs when `testFixtures: true`.
-  - **Window boundaries:** if fewer than ~10 s remain in the current window, the fixture waits for the next one.
-  - **Isolation:** rate-limit tests run on their own. Every other suite runs with high limits.
+  - **Every other suite runs with high limits.** The integration suite sends far more than 60 requests a minute per demo user, all from one address locally. A session fixture writes the `high` preset to the SSM parameter, waits out the cache, and writes the previous value back at the end. The deployed default stays ADR 0006's limits, so `make up` and a demo show the real limits; tests switch at runtime instead, which also demonstrates ADR 0006's runtime configuration.
+  - **Setup:** each rate-limit module writes its tiny preset (`tiny`, or `tiny-ip` with the per-IP limit below every user limit for the per-IP test, since all local traffic shares one IP), waits for the 2-second cache, and restores the previous value afterwards, also when a test fails. Before each test it **empties the counter table**.
+  - **Window boundaries:** if fewer than ~15 s remain in the current window, the fixture waits for the next one, so a test's requests (including a cache wait inside the test) fall into one window.
+  - **Test-only helpers:** switching and waiting, and emptying the counters, refuse to run unless `testFixtures: true`, and use developer or CI credentials. `make limits` itself is the operators' tool and works everywhere.
+  - **Isolation:** rate-limit tests run on their own, one after another within the session.
 - **Orders:**
   - **Own data:** each test creates its own orders and asserts on their ids.
   - **Lists:** list tests walk all pages and check their own orders appear newest-first. "A USER sees only their own" is checked as "every returned `ownerId` is the caller's `sub`".

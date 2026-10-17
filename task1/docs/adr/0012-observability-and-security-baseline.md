@@ -21,10 +21,10 @@ The build includes **what the assignment's requirements touch, and nothing beyon
 - **Added once known:**
   - `route` (method + resource template)
   - `sub` and `roles`
-- **One access line per request in the API function:** `status`, `latencyMs`, `problemType`, `rateLimitScope` (on `429`), `orderId` (when relevant).
+- **One access line per request in the API function:** `status`, `latencyMs`, `problemType`, `rateLimitScope` and `clientNetwork` (on `429`: the scope hit, and the client's address truncated as below), `orderId` (when relevant).
 - **Authorizer:** the decision, the **precise rejection reason** (returned to nobody, [ADR 0003](0003-access-token-validation.md)), `kid`, `iss`, `client_id`, and whether keys were cached or fetched.
 - **Operational events** have fixed event names, e.g.:
-  - `rate_limiter_unavailable`, `rate_limiter_circuit_open` ([ADR 0006](0006-rate-limiting.md))
+  - `rate_limiter_unavailable`, `rate_limiter_circuit_open`, `rate_limit_config_invalid` ([ADR 0006](0006-rate-limiting.md))
   - `jwks_fetched`, `jwks_refetch`, `jwks_fetch_failed`
 - **Never logged:** tokens or `Authorization` headers, passwords or secrets, request and response bodies.
 - **Client IPs in application logs are truncated** (IPv4 `/24`, IPv6 `/64`). IP addresses are personal data under the GDPR. The full address appears only in API Gateway's own access logs (under the retention below) and in rate-limit counter keys, which expire within minutes.

@@ -30,14 +30,14 @@ All AWS resources are defined in **one AWS CDK (Python) stack built from three c
 | Floci id pinning (`floci:override-id`, `floci:override-cognito-client-id` on the pool) | on, so issuer and client id are deterministic | off |
 | Lambda architecture | **host architecture** (auto-detected) | **`arm64`** |
 | Removal policy / PITR / deletion and termination protection | destroy / off | `aws-dev`: destroy / off; `aws-prod`: retain / on |
-| Rate-limit config cache TTL | 2 s | `aws-dev`: 2 s; `aws-prod`: 60 s |
+| Rate-limit config cache TTL (`rateLimitConfigCacheSeconds`, default 60) | 2 s | `aws-dev`: 2 s; `aws-prod`: 60 s |
 | `seedUsers` | `true` | `aws-dev`: `true`; `aws-prod`: `false` |
 | `testFixtures` (foreign pool, untrusted and short-lived clients, counter-reset helper; [ADR 0011](0011-testing-strategy.md)) | `true` | `aws-dev`: `true`; `aws-prod`: `false` |
 | `everyoneIsUser` (every authenticated person also holds `USER`; [ADR 0001](0001-role-based-access-control.md)) | `false` (the default) | `false` (the default) |
 | WAF | deployed, not enforced | enforced |
 | Log level | DEBUG | INFO |
 
-- **One local deployment serves every test suite.** Suites that need particular limits (tiny limits for `429` tests, high limits for Schemathesis) switch the SSM rate-limit parameter at runtime and wait for the 2-second cache. That also demonstrates ADR 0006's runtime configuration. As a result, such suites run one after another, not in parallel.
+- **One local deployment serves every test suite.** Suites that need particular limits (tiny limits for `429` tests, high limits for the integration and Schemathesis suites) switch the SSM rate-limit parameter at runtime and wait for the 2-second cache. That also demonstrates ADR 0006's runtime configuration. As a result, such suites run one after another, not in parallel.
 
 **Secrets.** The design is **almost secret-free by construction**:
 - DynamoDB access uses IAM roles.
@@ -69,6 +69,7 @@ Rules:
 | `make doctor` | checks Docker (with Compose), `make`, `uv` and Node and their versions, and names anything missing |
 | `make up` | starts Floci and waits for it; `cdk bootstrap` (idempotent); builds the bundle; `cdk deploy --method=direct -c env=local`; seeds users; writes and prints the local API URL |
 | `make token ROLE=user\|manager\|admin` | prints an access token for a seeded user |
+| `make limits PRESET=defaults\|high\|tiny\|tiny-ip` | writes a rate-limit preset to the SSM parameter, in force within the cache TTL ([ADR 0006](0006-rate-limiting.md)) |
 | `make test` / `make test-integration` / `make contract-test` | unit / Floci integration / Schemathesis |
 | `make lint` | Ruff, mypy, import-linter, OpenAPI lint |
 | `make docs` | Swagger UI |
