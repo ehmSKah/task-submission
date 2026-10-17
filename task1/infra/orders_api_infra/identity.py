@@ -18,6 +18,8 @@ APP_CLIENT_NAME = "orders-api-client"
 UNTRUSTED_CLIENT_NAME = "orders-api-untrusted-client"
 SHORT_LIVED_CLIENT_NAME = "orders-api-short-lived-client"
 FOREIGN_CLIENT_NAME = "orders-api-foreign-client"
+TOKEN_VALIDITY_MINUTES = 15
+"""How long the app client's access and ID tokens last (ADR 0010)."""
 
 # The test-only resources' stack outputs, and their keys in build/endpoints.json (ADR 0011).
 FIXTURE_OUTPUTS = {
@@ -64,8 +66,8 @@ class Identity(Construct):
             user_pool_client_name=APP_CLIENT_NAME,
             generate_secret=False,
             auth_flows=cognito.AuthFlow(user_password=True),
-            access_token_validity=cdk.Duration.minutes(15),
-            id_token_validity=cdk.Duration.minutes(15),
+            access_token_validity=cdk.Duration.minutes(TOKEN_VALIDITY_MINUTES),
+            id_token_validity=cdk.Duration.minutes(TOKEN_VALIDITY_MINUTES),
             refresh_token_validity=cdk.Duration.days(1),
             prevent_user_existence_errors=True,
         )

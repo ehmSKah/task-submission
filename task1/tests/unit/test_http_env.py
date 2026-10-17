@@ -18,9 +18,9 @@ COLLECTION = sorted((PROJECT_DIR / "http").glob("*.http"))
 
 
 def test_an_environment_holds_the_api_url_and_one_token_per_demo_user() -> None:
-    values = environment("http://api.test/live", TOKENS)
+    variables = environment("http://api.test/live", TOKENS)
 
-    assert values == {
+    assert variables == {
         "baseUrl": "http://api.test/live",
         "aliceToken": "token-of-alice",
         "bobToken": "token-of-bob",
@@ -83,6 +83,7 @@ def test_the_summary_names_the_users_but_prints_no_token(
     printed = capsys.readouterr().out
     assert "token-of" not in printed
     assert "alice" in printed
+    assert "expire after 15 minutes" in printed  # the app client's lifetime (ADR 0010)
     assert "make http-env" in printed  # how to refresh expired tokens
 
 
