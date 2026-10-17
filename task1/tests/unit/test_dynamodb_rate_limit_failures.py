@@ -6,6 +6,7 @@ never answer, which is what an unreachable or hanging DynamoDB looks like to the
 are the one place a boto3 stand-in is used (ADR 0011).
 """
 
+import select
 import socket
 import time
 from collections.abc import Callable, Iterator
@@ -122,16 +123,34 @@ def silent_server() -> Iterator[tuple[str, int]]:
 @pytest.fixture
 def full_server() -> Iterator[tuple[str, int]]:
     """Never accepts, and its queue is full, so new connections hang: a connect that times out,
-    like an address that drops packets."""
+    like an address that drops packets.
+
+    How many connections fill the queue depends on the kernel (Linux takes one for a backlog of
+    0, macOS more), so it connects until one stays pending: that one, and every later one, hangs.
+    """
     with socket.create_server(("127.0.0.1", 0), backlog=0) as server:
-        fillers = [socket.socket() for _ in range(4)]
-        for filler in fillers:
-            filler.setblocking(False)
-            filler.connect_ex(server.getsockname())
-        time.sleep(0.05)
-        yield server.getsockname()
-        for filler in fillers:
-            filler.close()
+        fillers: list[socket.socket] = []
+        try:
+            while not fillers or _completes(fillers[-1]):
+                if len(fillers) == MAX_QUEUE_FILLERS:
+                    pytest.skip("this platform completes every connect: no way to make one hang")
+                filler = socket.socket()
+                filler.setblocking(False)
+                filler.connect_ex(server.getsockname())
+                fillers.append(filler)
+            yield server.getsockname()
+        finally:
+            for filler in fillers:
+                filler.close()
+
+
+MAX_QUEUE_FILLERS = 256
+
+
+def _completes(connecting: socket.socket) -> bool:
+    """Whether a non-blocking connect finished (or failed) within a moment, instead of hanging."""
+    _, writable, _ = select.select([], [connecting], [], 0.05)
+    return bool(writable)
 
 
 @pytest.fixture
