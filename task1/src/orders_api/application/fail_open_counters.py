@@ -8,15 +8,17 @@ It wraps the real counter store behind the same port, so the limiter doesn't not
   wait for its user check too: a request pays for one failed call at most
 - after a few consecutive failures the circuit opens: the store rests for 30 seconds and only
   the memory counts. The first call after that is a probe; an answer closes the circuit, a
-  failure opens it again at once
+  failure keeps it open for another 30 seconds
 
 Operational events (ADR 0012) go to an injected callback, so this module needs no logger.
+A Lambda instance handles one request at a time, so none of this state is locked.
 """
 
 import time
 from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime
+from enum import StrEnum
 from typing import Protocol
 
 from orders_api.application.rate_limiting import (
@@ -38,15 +40,25 @@ TimeSource = Callable[[], float]
 """Monotonic seconds."""
 
 
+class RateLimiterEvent(StrEnum):
+    """The fail-open store's operational events, under these names in the logs (ADR 0012)."""
+
+    UNAVAILABLE = "rate_limiter_unavailable"
+    """One counter call failed; the fallback counted instead."""
+    CIRCUIT_OPEN = "rate_limiter_circuit_open"
+    """The circuit opened: the store is left alone and only the fallback counts."""
+    CIRCUIT_CLOSED = "rate_limiter_circuit_closed"
+    """A probe was answered: the store counts again."""
+
+
 class RateLimiterEvents(Protocol):
-    def __call__(self, event: str, /, **fields: object) -> None:
-        """Report `rate_limiter_unavailable`, `rate_limiter_circuit_open` or
-        `rate_limiter_circuit_closed` with its details. Never a counter key: keys carry the
-        client's full address."""
+    def __call__(self, event: RateLimiterEvent, /, **fields: object) -> None:
+        """Report an event with its details. Never a counter key: keys carry the client's full
+        address."""
         ...
 
 
-def no_events(event: str, /, **fields: object) -> None:
+def no_events(event: RateLimiterEvent, /, **fields: object) -> None:
     """The default: report nothing."""
 
 
@@ -56,7 +68,8 @@ class LocalCounters:
 
     Every count is a use, a refused one included, so a client hammering at its limit keeps its
     full counter. Expiry needs no clock: the window is part of the key, so an old window's
-    counters are never touched again and are the first to go.
+    counters are never touched again and are the first to go. Not thread-safe; it needn't be,
+    as a Lambda instance handles one request at a time.
     """
 
     def __init__(self, max_keys: int = FALLBACK_MAX_KEYS) -> None:
@@ -97,12 +110,13 @@ class _CircuitBreaker:
         return was_open
 
     def failed(self) -> bool:
-        """Record a failed call; whether the circuit is open now (again, after a probe)."""
+        """Record a failed call; whether it just opened the circuit. A failed probe keeps an open
+        circuit open, which is not an opening: an alarm on openings counts outages, not probes."""
         self._failures += 1
-        opened = self._failures >= FAILURES_TO_OPEN
-        rest = OPEN_SECONDS if opened else REST_AFTER_FAILURE_SECONDS
+        is_open = self._failures >= FAILURES_TO_OPEN
+        rest = OPEN_SECONDS if is_open else REST_AFTER_FAILURE_SECONDS
         self._resting_until = self._now() + rest
-        return opened
+        return self._failures == FAILURES_TO_OPEN
 
 
 class FailOpenCounterStore:
@@ -139,17 +153,17 @@ class FailOpenCounterStore:
 
     def _answered(self) -> None:
         if self._breaker.answered():
-            self._events("rate_limiter_circuit_closed")
+            self._events(RateLimiterEvent.CIRCUIT_CLOSED)
 
     def _failed(self, error: CounterStoreUnavailable) -> None:
         opened = self._breaker.failed()
         failures = self._breaker.failures
         self._events(
-            "rate_limiter_unavailable", errorType=error.error_type, consecutiveFailures=failures
+            RateLimiterEvent.UNAVAILABLE, errorType=error.error_type, consecutiveFailures=failures
         )
         if opened:
             self._events(
-                "rate_limiter_circuit_open",
+                RateLimiterEvent.CIRCUIT_OPEN,
                 errorType=error.error_type,
                 consecutiveFailures=failures,
                 openSeconds=OPEN_SECONDS,

@@ -4,6 +4,7 @@ from typing import Any
 
 from aws_lambda_powertools import Logger
 
+from orders_api.application.fail_open_counters import RateLimiterEvent
 from orders_api.domain.rate_limits import RateLimitDecision, RateLimitScope
 
 RETRY_AFTER_HEADER = "Retry-After"
@@ -58,10 +59,10 @@ def rate_limit_headers(decision: RateLimitDecision) -> dict[str, str]:
     }
 
 
-def report_rate_limiter_event(event: str, /, **fields: object) -> None:
+def report_rate_limiter_event(event: RateLimiterEvent, /, **fields: object) -> None:
     """Log the fail-open counter store's events (ADR 0012): the store failing and the circuit
     opening are warnings, for a metric filter and an alarm to pick up; closing again is info."""
-    if event == "rate_limiter_circuit_closed":
-        logger.info(event, extra=fields)
+    if event is RateLimiterEvent.CIRCUIT_CLOSED:
+        logger.info(event.value, extra=fields)
     else:
-        logger.warning(event, extra=fields)
+        logger.warning(event.value, extra=fields)

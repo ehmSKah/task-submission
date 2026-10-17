@@ -23,8 +23,8 @@ EXPIRY_ATTRIBUTE = "expiresAt"
 CALL_BUDGET_SECONDS = 0.2
 """The longest one count may take on a failing store (ADR 0006)."""
 CLIENT_CONFIG = Config(
-    connect_timeout=0.1,
-    read_timeout=0.1,
+    connect_timeout=CALL_BUDGET_SECONDS / 2,
+    read_timeout=CALL_BUDGET_SECONDS / 2,
     retries={"mode": "standard", "total_max_attempts": 1},
 )
 """One attempt, whose connect and read together fit the budget. A retry wouldn't: the fallback

@@ -268,17 +268,16 @@ def test_once_open_time_is_over_one_answer_closes_the_circuit(setup: Setup) -> N
     assert setup.events.names.count("rate_limiter_circuit_closed") == 1
 
 
-def test_a_failed_probe_opens_the_circuit_again_at_once(setup: Setup) -> None:
+def test_a_failed_probe_keeps_the_circuit_open_without_reporting_another_opening(
+    setup: Setup,
+) -> None:
     setup.fail_until_open()
     setup.time.advance(OPEN_SECONDS - REST_AFTER_FAILURE_SECONDS)
     reported = len(setup.events.reported)
 
     setup.count()
 
-    assert setup.events.names[reported:] == [
-        "rate_limiter_unavailable",
-        "rate_limiter_circuit_open",
-    ]
+    assert setup.events.names[reported:] == ["rate_limiter_unavailable"]
     setup.time.advance(OPEN_SECONDS - 0.01)
     setup.count()
     assert setup.counters.calls == FAILURES_TO_OPEN + 1
