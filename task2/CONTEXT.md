@@ -20,6 +20,14 @@ _Avoid_: item, position
 The amount the producer states for the whole order. It must equal the sum of quantity × unit price over the order lines.
 _Avoid_: sum, grand total
 
+**Fulfilment service**:
+The downstream system that ships accepted orders. It keeps its own record of each order, the fulfilment order, under its own id.
+_Avoid_: downstream API, target system
+
+**Handover**:
+Passing an accepted order to the fulfilment service. A handover is complete once the fulfilment service has confirmed it with its fulfilment order id.
+_Avoid_: forwarding, sync, push
+
 **Invalid event**:
 An event that can never be processed as sent: unreadable, not a well-formed event, of an unsupported type or version, breaking the schema, or breaking a business rule such as a wrong order total. Being invalid is permanent; retrying cannot change it.
 _Avoid_: bad message, poison pill (a crash-causing message, which is a different problem)
