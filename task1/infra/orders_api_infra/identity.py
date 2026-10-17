@@ -54,6 +54,9 @@ class Identity(Construct):
             removal_policy=config.data_removal_policy,
             # Where data is kept, the users are too: the pool can't be deleted by accident.
             deletion_protection=config.retains_data,
+            # Password sign-in, groups and access tokens are all Lite has to offer that the
+            # design uses; Essentials would cost two to three times as much (ADR 0013).
+            feature_plan=cognito.FeaturePlan.LITE,
         )
         if config.floci_user_pool_id:
             # Stable ids on Floci, so the issuer and client id survive redeploys (ADR 0010).

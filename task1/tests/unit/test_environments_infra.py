@@ -98,6 +98,16 @@ def test_production_keeps_and_protects_the_user_pool(
     )
 
 
+def test_every_environment_pins_the_user_pool_to_the_lite_tier(
+    stack: OrdersApiStack, template: Template
+) -> None:
+    """The design uses none of Essentials' features, and identity is the largest cost from about
+    10 M requests a month (ADR 0013)."""
+    pool = resource(template, stack, stack.identity.user_pool)
+
+    assert pool["Properties"]["UserPoolTier"] == "LITE"
+
+
 def test_log_groups_keep_the_environments_retention(env: str, template: Template) -> None:
     _, retains, days, *_ = EXPECTED[env]
 
