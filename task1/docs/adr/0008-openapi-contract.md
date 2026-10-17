@@ -28,7 +28,7 @@ The API is described **design-first** in one OpenAPI document. That document is 
 - **Normal CDK still covers** the stage, deployment, WAF association and Lambda invoke permissions.
 
 **Schema rules**, so that one schema works as an OpenAPI schema, an API Gateway model (JSON Schema draft-04) and a `fastjsonschema` draft-04 schema in the Lambda:
-- **Separate request and response schemas** (`CreateOrderRequest`, `UpdateOrderStatusRequest` vs `Order`). No `readOnly`/`writeOnly`, which validators don't honour.
+- **Separate request and response schemas** (`CreateOrderRequest`, `ChangeOrderStatusRequest` vs `Order`). No `readOnly`/`writeOnly`, which validators don't honour.
 - **No `nullable`.** It is OpenAPI-specific, not draft-04. A value that may be `null` is written as `anyOf: [{type: …}, {enum: [null]}]`, which OpenAPI 3.0, draft-04 and `fastjsonschema` all read the same way (`OrderPage.nextCursor`).
 - **`pattern` instead of `format`** for anything that must be enforced. Draft-04 validators generally don't enforce `format`.
 - **`additionalProperties: false` on request and response objects.** A new response field therefore needs a spec change first: we own both sides of the contract.

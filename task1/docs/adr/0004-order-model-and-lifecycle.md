@@ -41,7 +41,7 @@ PENDING ──► CONFIRMED ──► SHIPPED ──► DELIVERED
 - **New orders start as `PENDING`.**
 - **Forward only:** no skipping and no going back. `DELIVERED` and `CANCELLED` are final, and a shipped order can't be cancelled (returns would be a separate future process). ADMIN follows the same rules.
 - **A disallowed status change returns `409`.**
-- **Requesting the status an order already has returns `200` and changes nothing.** That makes a retried `PATCH` harmless.
+- **Requesting the status an order already has returns `200` and changes nothing.** That makes a retried `PATCH` harmless. The one exception is a stale `If-Match`, which gets `412` even then (see *`412` before `409`* below): a client with a stale copy learns that first.
 
 **Concurrent changes**
 - **Atomic conditional write:** every status change is one write, "set status to X only if it is still Y". The loser of a race (e.g. a manager ships while the owner cancels) gets `409`, because by then its change *is* disallowed.
