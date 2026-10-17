@@ -18,7 +18,7 @@ Every layer that can answer a browser takes part: API Gateway answers the **pref
 
 - **Validated as browsers send an origin**, so an entry can be compared exactly and never silently fails to match: `http` or `https`, a lower-case host, a port only where it isn't the scheme's default; no wildcard, path, query, user info or trailing slash; no `null`; each origin once. The config model refuses anything else at synth.
 - **`aws-dev` allows Swagger UI's origin too.** A developer can point the same local Swagger UI at `aws-dev` (`make docs ENV=aws-dev`), and the integration suite's CORS tests then run on AWS as well, which is how the AWS rows of the verification document get filled in. A page on the developer's own `localhost:8080` gains nothing it couldn't do anyway: it can only call the API with a token it holds itself.
-- **`aws-prod` lists none.** There is no production browser client yet, and an origin is added when one exists, with its real `https://` origin. Until then production's template is the same as before this decision.
+- **`aws-prod` lists none.** There is no production browser client yet, and an origin is added when one exists, with its real `https://` origin. Until then production's synthesised template is byte for byte the same as before this decision; only the function's code bundle gains the CORS module, which does nothing there.
 
 **The preflight is answered by API Gateway** (an `OPTIONS` operation with a MOCK integration on every path, added at synth by `openapi_extensions.py`):
 - **`security: []` and no request validator.** A preflight carries no token, so the authorizer never runs; it invokes no function, so the function's rate limits never see it. WAF counts it like any other request.
