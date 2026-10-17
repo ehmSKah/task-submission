@@ -23,6 +23,7 @@ from orders_api.adapters.inbound.http_headers import (
 )
 from orders_api.adapters.inbound.idempotency import idempotency_key, run_once
 from orders_api.adapters.inbound.order_json import order_to_json
+from orders_api.adapters.inbound.order_list import order_list_query, order_page_to_json
 from orders_api.adapters.inbound.order_requests import ORDERS_PATH, new_order_from, valid_order_id
 from orders_api.adapters.inbound.problems import FieldError, ProblemType, problem_body
 from orders_api.adapters.inbound.request_checks import InvalidRequest
@@ -38,6 +39,8 @@ from orders_api.application.orders import (
     check_may_read,
     create_order,
     get_order,
+    list_orders,
+    listed_owner,
 )
 from orders_api.domain.order import Order
 from orders_api.domain.permissions import Caller, PermissionDenied
@@ -125,6 +128,21 @@ def get_order_by_id(order_id: str) -> Response[str]:
     order_id = valid_order_id(order_id)
     check_may_read(caller)
     return order_response(get_order(orders(), caller, order_id), 200)
+
+
+@app.get(ORDERS_PATH)
+def get_orders() -> Response[str]:
+    caller = identified_caller()
+    query = order_list_query(app.current_event)
+    check_may_read(caller)
+    # Which list the caller sees is known only now, so a cursor's binding is checked here.
+    owner_id = listed_owner(caller)
+    page = list_orders(orders(), caller, limit=query.limit, after=query.start_in(owner_id))
+    return Response(
+        status_code=200,
+        content_type=JSON_MEDIA_TYPE,
+        body=json.dumps(order_page_to_json(page, owner_id)),
+    )
 
 
 def problem_response(

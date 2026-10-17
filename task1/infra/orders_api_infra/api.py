@@ -8,6 +8,7 @@ from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from constructs import Construct
 
+from orders_api.adapters.outbound.dynamodb_orders import BY_CREATED_INDEX, BY_OWNER_INDEX
 from orders_api_infra.config import Architecture, EnvConfig
 from orders_api_infra.openapi_extensions import load_spec, with_aws_extensions
 from orders_api_infra.paths import BUNDLE_DIR
@@ -63,6 +64,16 @@ class Api(Construct):
             iam.PolicyStatement(
                 actions=["dynamodb:GetItem", "dynamodb:PutItem"],
                 resources=[orders_table.table_arn],
+            )
+        )
+        # Lists read the two indexes only, never the table itself (ADR 0005).
+        self.api_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:Query"],
+                resources=[
+                    f"{orders_table.table_arn}/index/{index}"
+                    for index in (BY_OWNER_INDEX, BY_CREATED_INDEX)
+                ],
             )
         )
         # Exactly the calls Powertools Idempotency makes, on this one table (ADR 0012).

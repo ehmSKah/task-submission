@@ -96,6 +96,59 @@ paths:
           $ref: "#/components/responses/ServiceUnavailable"
         "504":
           $ref: "#/components/responses/GatewayTimeout"
+    get:
+      tags: [orders]
+      operationId: listOrders
+      summary: List orders, newest first
+      description: >-
+        Callers with `order:read:any` list every order; everyone else only their own. Orders are
+        sorted by `createdAt`, newest first, with `id` breaking ties. Follow `nextCursor` until it
+        is `null` to get every order exactly once; orders created during the walk are not part of
+        it. The last page may be empty. No other query parameters are accepted. Lists are
+        eventually consistent: an order created a moment ago may take a fraction of a second to
+        appear.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: The most orders one page holds.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: cursor
+          in: query
+          required: false
+          description: >-
+            Opaque: the `nextCursor` of the previous page, unchanged. It only continues the list
+            it came from; a cursor from another caller's list is a `400`.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: One page of orders, newest first.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderPage"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
   /api/v1/orders/{id}:
     parameters:
       - name: id
@@ -241,6 +294,24 @@ components:
         unitPrice:
           type: integer
           description: Integer minor units of the order's currency (1999 = 19.99).
+    OrderPage:
+      description: One page of a newest-first list of orders.
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/Order"
+        nextCursor:
+          description: Pass it as `cursor` to get the next page; `null` once there are no more orders.
+          # `null` without `nullable`, which draft-04 doesn't know (ADR 0008).
+          anyOf:
+            - type: string
+              minLength: 1
+            - enum: [null]
     Health:
       type: object
       additionalProperties: false
@@ -402,7 +473,8 @@ components:
     ValidationError:
       description: >-
         The request breaks the contract: a body that fails its schema (unknown fields included),
-        isn't JSON or is empty; duplicate SKUs; a malformed path parameter.
+        isn't JSON or is empty; duplicate SKUs; a malformed path parameter; an unknown, repeated
+        or malformed query parameter.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
