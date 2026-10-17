@@ -18,7 +18,7 @@ it comes from is revisited (amended or superseded).
   - `pending`: not run yet.
 - **Version / date:** what the check last ran against, and when; `—` while pending.
 
-**State on 2026-10-18:** 102 assumptions: 57 `verified`, 6 `failed` (each with its
+**State on 2026-10-18:** 105 assumptions: 58 `verified`, 8 `failed` (each with its
 workaround), 39 `pending`.
 - **35 of the pending rows need AWS and have not yet been run on AWS.** They stay
   `pending` until the first deploy to `aws-dev` (`make up`, `make test-integration` and
@@ -103,6 +103,18 @@ workaround), 39 `pending`.
 | `DEFAULT_4XX` / `DEFAULT_5XX` render as `about:blank` Problem Details via `$context.error.messageString` ([ADR 0007](adr/0007-validation-and-errors.md)) | Floci + AWS | Not yet triggerable locally; to be covered once a route can produce a default gateway error | pending | — |
 | `INTEGRATION_FAILURE` → `502` and `INTEGRATION_TIMEOUT` → `504` render as Problem Details ([ADR 0007](adr/0007-validation-and-errors.md)) | Floci | To be covered by a failing-integration test | pending | — |
 | An authorizer function error surfaces as `AUTHORIZER_FAILURE` (Floci) or `AUTHORIZER_CONFIGURATION_ERROR` (AWS), both mapped to `503` ([ADR 0003](adr/0003-access-token-validation.md)) | Floci + AWS | Floci source read; the authorizer's side (it raises when no signing keys exist) by `tests/unit/test_authorizer_handler.py`; the gateway's mapping is not yet exercised end to end, because that needs the provider unreachable from a deployed authorizer | pending | — |
+
+## AWS: first run
+
+The first `make test-integration ENV=aws-dev` (2026-10-17, `eu-central-1`) passed 173 tests and
+showed three differences from Floci. Each has its fix; the pending rows below are filled in once
+a run is green.
+
+| Assumption | Target | How it's checked | Status | Version / date |
+|---|---|---|---|---|
+| A gateway response's `Content-Type` can be set by mapping `gatewayresponse.header.Content-Type` ([ADR 0007](adr/0007-validation-and-errors.md)). **Failed on AWS:** every gateway response (`401`, `404`, `400`) came as `application/json` although every other mapped header arrived; AWS takes the content type from the response template's key. Fixed by keying each template by `application/problem+json`; the mapping stays, as Floci honours it, and Floci answers `application/problem+json` with the new key too | AWS | `aws-dev` run: 11 errors and 4 failures in the contract checks; `curl -D -` of the gateway's `404` and `401`; on Floci, `tests/unit/test_openapi_extensions.py::test_every_gateway_response_s_template_is_keyed_by_the_problem_media_type` and the integration suite | failed | API Gateway, 2026-10-17 |
+| WAF's custom `429` carries exactly the security headers we set ([ADR 0006](adr/0006-rate-limiting.md)). **Failed on AWS:** `Cache-Control` arrived twice (`no-store, no-store`), since WAF adds `Cache-Control: no-store` to a custom response itself; the gateway's own errors, through the same CloudFront, carried it once. Fixed by leaving `Cache-Control` out of WAF's custom headers | AWS | `tests/integration/test_edge_firewall.py::test_waf_blocks_an_address_over_the_limit_with_the_rate_limited_problem` | failed | AWS WAF, 2026-10-17 |
+| A list page that ends exactly at the oldest order ([ADR 0004](adr/0004-order-model-and-lifecycle.md)): DynamoDB returned no `LastEvaluatedKey`, so the page has no cursor, where Floci always returns one and the page after it is empty. Both keep the contract ("the last page may be empty; stop on `null`"); the test now accepts either | AWS | `tests/integration/test_list_orders.py::test_the_last_page_may_be_empty_and_the_walk_ends_on_a_null_cursor` | verified | DynamoDB, 2026-10-17 |
 
 ## AWS: not yet run
 
