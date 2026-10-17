@@ -43,7 +43,7 @@ Needs Docker, `make`, `uv` and Node.js ([versions](#tools)); no AWS account.
 git clone <this repository> && cd <clone>/task1
 make doctor   # checks the tools and their versions
 make up       # installs dependencies, starts Floci, deploys the stack, seeds the demo users
-make docs     # optional: the OpenAPI document in Swagger UI
+make docs     # optional: the OpenAPI document in Swagger UI, with "Try it out"
 make demo     # the one-minute scenario below, against the deployed stack
 make test     # unit tests (they need no stack; `make install && make test` works on its own)
 make down     # stops Floci and removes everything
@@ -59,7 +59,7 @@ Two web UIs show what's running:
 | UI | URL | Started by | Shows |
 |---|---|---|---|
 | Floci UI | <http://localhost:4500> | `make up` | what the deploy created: the DynamoDB tables and their items, both Lambda functions, the REST API, the Cognito user pools, the SSM parameters, the log groups and the CloudFormation stacks |
-| Swagger UI | <http://localhost:8080> | `make docs` | the OpenAPI document, read-only (no "Try it out"; see [Trying requests](#trying-requests)) |
+| Swagger UI | <http://localhost:8080> | `make docs` | the OpenAPI document, with "Try it out" against the deployed API: paste a token from `make token` into "Authorize" ([Trying requests](#trying-requests)) |
 
 Floci UI is Floci's own web console (`floci/floci-ui`, pinned in `docker-compose.yml`). It can
 change resources as well as show them, so anything done there is outside the tests' control:
@@ -165,9 +165,12 @@ writes with conditional updates. The request flow, step by step, is in
 - **Rate limits:** every counted response carries `RateLimit-Limit`, `RateLimit-Remaining` and
   `RateLimit-Reset`.
 - **The contract:** [`openapi/openapi.yaml`](openapi/openapi.yaml) documents every status each
-  operation can return. `make docs` serves it in a read-only Swagger UI on
-  <http://localhost:8080>. There is no "Try it out", because that would need CORS; use the
-  [request collection](#trying-requests) instead.
+  operation can return. `make docs` serves it in Swagger UI on <http://localhost:8080>, with
+  "Try it out" ([Trying requests](#trying-requests)).
+- **CORS:** browser pages may call the API only from the origins the environment allows:
+  `http://localhost:8080` (Swagger UI) in `local` and `aws-dev`, none in `aws-prod`
+  ([ADR 0014](docs/adr/0014-cors-for-browser-clients.md)). Clients that aren't browsers are
+  unaffected.
 
 ## Users and roles
 
@@ -213,6 +216,23 @@ make http-env   # writes http/http-client.private.env.json: baseUrl and a token 
 - **Tokens expire after 15 minutes.** Run `make http-env` again for fresh ones; it keeps any other
   environment in the file (e.g. `aws-dev`).
 
+**From the browser, in Swagger UI:**
+
+```sh
+make docs              # Swagger UI on http://localhost:8080, pointed at the API in build/endpoints.json
+make -s token ROLE=user   # copy the printed token
+```
+
+Open <http://localhost:8080>, click **Authorize**, paste the token (without `Bearer `), then
+"Try it out" on any operation. The browser calls the deployed API directly, which CORS allows
+for this origin ([ADR 0014](docs/adr/0014-cors-for-browser-clients.md)), and shows every answer,
+the gateway's `401` and `400` included.
+- **After a redeploy** the API URL changes: run `make docs` again and reload the page.
+- **The committed document names no server**; `make docs` serves a copy in `build/swagger/` that
+  does. Without a deployed API it serves the document for reading only.
+- **Against `aws-dev`:** `make docs ENV=aws-dev` after `make up ENV=aws-dev`, with a token from
+  `make token ENV=aws-dev`.
+
 ## Tests
 
 | Suite | Command | Runs against | Proves |
@@ -251,8 +271,16 @@ trigger only ([below](#running-against-aws-optional)).
   - `aws-prod`: the hardened example. Data is retained, the stack is termination protected, and
     there are no demo users.
 - **What differs between them:** Lambda architecture, log level and retention, the rate-limit
-  cache time, WAF limits, access logs and removal policies
+  cache time, WAF limits, access logs, removal policies and the browser origins CORS allows
   ([ADR 0010](docs/adr/0010-infrastructure-and-environments.md)).
+
+**Browser origins are deploy-time configuration**
+([ADR 0014](docs/adr/0014-cors-for-browser-clients.md)): `corsAllowedOrigins` in the
+environment's config file lists exact origins, as a browser sends them (`https://app.example.com`,
+`http://localhost:8080`: no wildcard, path or trailing slash). `local` and `aws-dev` allow
+Swagger UI's `http://localhost:8080`; `aws-prod` lists none, which keeps CORS off: no
+`Access-Control-*` headers and no `OPTIONS` routes. With exactly one origin, the gateway's own
+errors name it too; with several, only the function's answers do. A change takes a deploy.
 
 **Rate limits are runtime configuration** ([ADR 0006](docs/adr/0006-rate-limiting.md)). They
 live in one SSM parameter, `/orders-api/<env>/rate-limits`, which `make limits` switches without
@@ -327,8 +355,10 @@ These are stated rather than hidden. The full list, with what would change each 
 [ADR 0013](docs/adr/0013-production-readiness-and-evolution.md).
 
 - **Not built:** metrics, tracing, alarms and dashboards; logs carry every signal
-  ([ADR 0012](docs/adr/0012-observability-and-security-baseline.md)). There is no CORS (no
-  browser clients) and no hosted docs.
+  ([ADR 0012](docs/adr/0012-observability-and-security-baseline.md)). There are no hosted docs.
+- **CORS is off in `aws-prod`** until a production browser client has an origin; with several
+  origins, the gateway's own errors can't be read by their pages
+  ([ADR 0014](docs/adr/0014-cors-for-browser-clients.md)).
 - **Simplified:**
   - Clients set unit prices; there is no catalogue.
   - Sign-in is by password, for the demo and tests; production would use authorization code

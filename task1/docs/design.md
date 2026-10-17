@@ -66,7 +66,13 @@ not a rewrite.
   synth.
 - **Security headers** on every response from every layer: `Cache-Control: no-store`,
   `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none';
-  frame-ancestors 'none'`, `X-Frame-Options: DENY` and `Strict-Transport-Security`. No CORS.
+  frame-ancestors 'none'`, `X-Frame-Options: DENY` and `Strict-Transport-Security`.
+- **CORS only for the browser origins an environment lists**
+  ([ADR 0014](adr/0014-cors-for-browser-clients.md)): Swagger UI's `http://localhost:8080` in
+  `local` and `aws-dev`, none in `aws-prod`, where nothing changes. API Gateway answers the
+  preflight itself (a MOCK integration, no token, no function); the function echoes an allowed
+  origin on its responses; Gateway Responses and WAF's `429` carry it as a static value. Never
+  `*`, never credentials. The published contract lists no `OPTIONS`.
 
 ## 2. Request flow
 
@@ -241,6 +247,7 @@ ever asks about permissions.
 | [0011](adr/0011-testing-strategy.md) | Testing | Five suites; the same tests on Floci and AWS; coverage gates | `moto`; in-process integration tests | Each suite proves something the others can't; the real gateway path is tested |
 | [0012](adr/0012-observability-and-security-baseline.md) | Observability and security | Structured logs, least-privilege IAM, security headers | Metrics, tracing, alarms now | What the requirements touch; the rest is production evolution |
 | [0013](adr/0013-production-readiness-and-evolution.md) | Production evolution | Simplifications listed with triggers; single-region DR | A roadmap with dates; warm standby now | Says what changes when, and why |
+| [0014](adr/0014-cors-for-browser-clients.md) | CORS for browser clients | Exact origins per environment (none in production); preflight answered by a gateway MOCK; static origin on gateway errors | Preflight in the API function; `*`; echoing any origin; a same-origin proxy | No invocation per preflight; no reflected origins; production unchanged until a client exists |
 
 ## 8. Production evolution
 
@@ -278,7 +285,8 @@ you do differently in production?" before anyone asks.
 - An audit trail means DynamoDB Streams to S3.
 - Filters mean one GSI per filter.
 - Safe, gradual limit changes mean AppConfig.
-- Browser clients need CORS.
+- A production browser client means its origin in `aws-prod`'s config (CORS is built, ADR 0014);
+  several origins that must read gateway errors mean our own CloudFront.
 - Several teams mean split stacks.
 
 The full list is in the ADR.
@@ -354,6 +362,12 @@ so each Frankfurt figure was read from AWS's official Price List API file for `e
     month, which puts it in the tens of millions, as ADR 0002 expected.
   - Fargate and load balancer prices were not part of this research, so ADR 0002's "$30–50 a
     month" for one task and a load balancer remains an unverified estimate.
+- **Browser clients add preflights** ([ADR 0014](adr/0014-cors-for-browser-clients.md)), which
+  the table leaves out. A page sends one before each call to a URL it hasn't called within two
+  hours, and the gateway answers it at $3.70 plus WAF's $0.60, about $4.30 per million, with no
+  Lambda or DynamoDB. If every request in the table came from a page and none was cached, the
+  request path would cost about 30 % more at 1 M requests. Clients that aren't browsers send
+  none, and `aws-prod` allows no origin today.
 - **`us-east-1` is cheaper** by 6–11 % on the request path, since API Gateway, DynamoDB and
   CloudWatch Logs cost less there, and by about 3 % in total with Lite from 10 M requests, since
   Cognito costs the same.
@@ -389,29 +403,31 @@ publication date and usage types in brackets):
 
 **Verification** ([`verification.md`](verification.md)): every assumption about emulator or AWS
 behaviour is tracked with the test that proves it. Every Floci and local check has been run,
-except three Gateway Responses that can't be triggered locally yet. **Nothing has been run on
+except three Gateway Responses that can't be triggered locally yet and Swagger UI's "Try it out"
+in a real browser, whose requests are covered with `curl` and the integration tests. **Nothing has been run on
 AWS yet**, so the AWS rows are all `pending`, among them:
 - WAF really blocks with the custom `429`.
 - WAF and `sourceIp` see the client, not CloudFront, behind the edge-optimized endpoint.
 - WAF's IPv6 aggregation.
 - The OpenAPI 3.0.3 import.
 - The Gateway Response templates on AWS.
+- The CORS preflight template on AWS.
 - The OIDC workflow role.
 
 They are executable checks (`aws_only` tests and the `aws-e2e` workflow), to be filled in after
-the first AWS run. Floci deviated from AWS in five places, recorded as `failed` with their
+the first AWS run. Floci deviated from AWS in six places, recorded as `failed` with their
 workarounds:
 - Request models can't contain `$ref`.
 - An `ExclusiveStartKey` whose order is gone restarts the page.
 - Floci answers `TRACE`/`CONNECT` itself.
 - WAF blobs come back unencoded.
 - Access logs aren't kept.
+- Response templates can't name a hyphenated header in the dot form.
 
 **Deliberately not built** ([ADR 0012](adr/0012-observability-and-security-baseline.md),
 [ADR 0013](adr/0013-production-readiness-and-evolution.md)):
 - **Metrics, tracing, alarms and dashboards.** Logs carry every signal. Floci can't graph
   metrics or emulate X-Ray.
-- **CORS and "Try it out" in the docs.** There are no browser clients.
 - **Server-side pricing, list filters and sorting.** Out of scope for the assignment
   ([ADR 0004](adr/0004-order-model-and-lifecycle.md)).
 - **Hosted documentation.** Problem `type` URNs are not dereferenceable.
