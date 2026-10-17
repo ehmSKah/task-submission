@@ -11,7 +11,7 @@ from functools import cached_property
 from types import MappingProxyType
 
 from orders_api.domain.access import Role
-from orders_api.domain.order import Order
+from orders_api.domain.order import Order, OrderStatus
 
 
 class Permission(StrEnum):
@@ -41,6 +41,16 @@ ROLE_PERMISSIONS: Mapping[Role, frozenset[Permission]] = MappingProxyType(
 def permissions_of(roles: Iterable[Role]) -> frozenset[Permission]:
     """The union of the permissions of every role; no role means no permission."""
     return frozenset().union(*(ROLE_PERMISSIONS[role] for role in roles))
+
+
+def permissions_to_change_to(status: OrderStatus) -> frozenset[Permission]:
+    """Any one of these lets a caller request a status change to `status` (ADRs 0001 and 0004).
+
+    Depends on the requested status alone, so it is decided before any order is read.
+    """
+    if status is OrderStatus.CANCELLED:
+        return frozenset({Permission.CANCEL_OWN, Permission.STATUS_ANY})
+    return frozenset({Permission.STATUS_ANY})
 
 
 class PermissionDenied(Exception):
@@ -77,3 +87,12 @@ class Caller:
         if Permission.READ_ANY in self.permissions:
             return True
         return Permission.READ_OWN in self.permissions and order.owner_id == self.subject
+
+    def can_change_status_of(self, order: Order) -> bool:
+        """Any order with `order:status:any`, else only their own with `order:cancel:own`.
+
+        Someone else's order is then a `404`, exactly like a missing one (ADR 0001).
+        """
+        if Permission.STATUS_ANY in self.permissions:
+            return True
+        return Permission.CANCEL_OWN in self.permissions and order.owner_id == self.subject

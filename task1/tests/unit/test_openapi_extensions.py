@@ -134,6 +134,15 @@ def test_operations_with_a_body_validate_it_at_the_gateway() -> None:
         assert operation["x-amazon-apigateway-request-validator"] == expected, route
 
 
+def test_status_changes_validate_their_body_and_deletes_their_parameters_at_the_gateway() -> None:
+    routes = operations_by_route(extended())
+
+    patch = routes["PATCH /api/v1/orders/{id}/status"]
+    assert patch["x-amazon-apigateway-request-validator"] == "body-and-parameters"
+    delete = routes["DELETE /api/v1/orders/{id}"]
+    assert delete["x-amazon-apigateway-request-validator"] == "parameters"
+
+
 VALIDATION_RESPONSES = ("BAD_REQUEST_BODY", "BAD_REQUEST_PARAMETERS")
 FLOCI_ESCAPED_MESSAGE = (
     "$util.escapeJavaScript($context.error.validationErrorString)" """.replaceAll("\\\\'","'")"""

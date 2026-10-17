@@ -193,6 +193,111 @@ paths:
           $ref: "#/components/responses/ServiceUnavailable"
         "504":
           $ref: "#/components/responses/GatewayTimeout"
+    delete:
+      tags: [orders]
+      operationId: deleteOrder
+      summary: Delete an order
+      description: >-
+        Removes the order for good, in whatever status. An administrative act that needs
+        `order:delete:any` (ADMIN only); customers cancel instead. Afterwards the order is a `404`.
+      responses:
+        "204":
+          description: The order is deleted.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+  /api/v1/orders/{id}/status:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The order's id (UUID v4).
+        schema:
+          type: string
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    patch:
+      tags: [orders]
+      operationId: changeOrderStatus
+      summary: Change an order's status
+      description: >-
+        Moves the order to the next status: `PENDING → CONFIRMED → SHIPPED → DELIVERED`, or to
+        `CANCELLED` from `PENDING` or `CONFIRMED`. Forward only, one step at a time; `DELIVERED`
+        and `CANCELLED` are final. Cancelling needs `order:cancel:own` (your own orders) or
+        `order:status:any`; every other status needs `order:status:any`, decided before the order
+        is read. Someone else's order is a `404` to a caller who may only cancel their own.
+        Requesting the status the order already has is a `200` that changes nothing. A change
+        the order's current status doesn't allow is a `409 Conflict`, also when a concurrent
+        change got there first. Every change increments `version`.
+      parameters:
+        - name: If-Match
+          in: header
+          required: false
+          description: >-
+            The order's `ETag` from an earlier response, e.g. `"3"`. The change is only made while
+            the order is still at that version; otherwise `412`, which is decided before a `409`
+            or a same-status `200`. Several tags may be listed, and `*` accepts any version.
+            Comparison is strong, so a weak tag (`W/"3"`) never matches. Without the header no
+            version is checked.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangeOrderStatusRequest"
+      responses:
+        "200":
+          description: The order with its new status, or unchanged if it already had it.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+            X-Request-Id:
+              $ref: "#/components/headers/X-Request-Id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
 components:
   securitySchemes:
     bearerAuth:
@@ -246,6 +351,16 @@ components:
                 minimum: 0
                 maximum: 1000000
                 description: Integer minor units of the order's currency (1999 = 19.99).
+    ChangeOrderStatusRequest:
+      description: >-
+        The status an order should move to. Self-contained (no `$ref`), like every request schema.
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [PENDING, CONFIRMED, SHIPPED, DELIVERED, CANCELLED]
     Order:
       type: object
       additionalProperties: false
@@ -427,6 +542,17 @@ components:
       description: >-
         The request conflicts with the current state, e.g. a request with the same
         `Idempotency-Key` is still in progress.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    PreconditionFailed:
+      description: >-
+        `If-Match` names none of the order's current version: the order changed since the client
+        read it. Read it again before deciding.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"

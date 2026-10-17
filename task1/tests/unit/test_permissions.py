@@ -3,11 +3,13 @@
 import pytest
 
 from orders_api.domain.access import Role
+from orders_api.domain.order import OrderStatus
 from orders_api.domain.permissions import (
     Caller,
     Permission,
     PermissionDenied,
     permissions_of,
+    permissions_to_change_to,
 )
 from tests.builders import an_order
 
@@ -86,3 +88,37 @@ def test_read_any_sees_everyone_s_orders(role: Role) -> None:
 
 def test_without_a_read_permission_not_even_an_own_order_is_visible() -> None:
     assert not caller(subject="alice-sub").can_see(an_order(owner_id="alice-sub"))
+
+
+# Status changes: what they need, decided by the requested status alone, and on whose orders.
+
+
+def test_cancelling_needs_cancel_own_or_status_any() -> None:
+    assert permissions_to_change_to(OrderStatus.CANCELLED) == {
+        Permission.CANCEL_OWN,
+        Permission.STATUS_ANY,
+    }
+
+
+@pytest.mark.parametrize("status", [s for s in OrderStatus if s is not OrderStatus.CANCELLED])
+def test_every_other_status_needs_status_any(status: OrderStatus) -> None:
+    assert permissions_to_change_to(status) == {Permission.STATUS_ANY}
+
+
+def test_an_owner_with_cancel_own_may_change_the_status_of_their_own_order() -> None:
+    assert caller(Role.USER).can_change_status_of(an_order(owner_id="alice-sub"))
+
+
+def test_someone_else_with_only_cancel_own_may_not_change_the_status_of_the_order() -> None:
+    assert not caller(Role.USER, subject="bob-sub").can_change_status_of(
+        an_order(owner_id="alice-sub")
+    )
+
+
+@pytest.mark.parametrize("role", [Role.ORDER_MANAGER, Role.ADMIN])
+def test_status_any_may_change_the_status_of_everyone_s_orders(role: Role) -> None:
+    assert caller(role, subject="staff-sub").can_change_status_of(an_order(owner_id="alice-sub"))
+
+
+def test_without_a_status_permission_not_even_an_own_order_may_change() -> None:
+    assert not caller(subject="alice-sub").can_change_status_of(an_order(owner_id="alice-sub"))

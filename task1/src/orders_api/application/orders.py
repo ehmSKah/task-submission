@@ -5,12 +5,13 @@ functions are the permission step (`403`), run before any data is read and befor
 idempotency wrapper; the use cases then load the order and apply visibility (`404`).
 """
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from orders_api.domain.order import NewOrder, Order
-from orders_api.domain.permissions import Caller, Permission
+from orders_api.domain.order import NewOrder, Order, OrderStatus
+from orders_api.domain.permissions import Caller, Permission, permissions_to_change_to
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,17 @@ class OrderRepository(Protocol):
     ) -> OrderPage:
         """Up to `limit` orders, newest first, starting after `after` (or at the newest): only
         `owner_id`'s orders, or every order when it is `None`. Eventually consistent (ADR 0005)."""
+        ...
+
+    def update_status(self, current: Order, changed: Order, *, check_version: bool) -> Order | None:
+        """One atomic conditional write (ADR 0005): `changed`'s status and `updated_at`, with the
+        version incremented, only while the stored order still has `current`'s status (and
+        `current`'s version, if `check_version`). The order as now stored, or `None` when the
+        condition failed because the order changed or disappeared meanwhile."""
+        ...
+
+    def delete(self, order_id: str) -> bool:
+        """Remove the order for good; `False` if there was none."""
         ...
 
 
@@ -113,3 +125,81 @@ def list_orders(
 ) -> OrderPage:
     """One page of the orders the caller may see, newest first (ADR 0004)."""
     return repository.list_newest_first(owner_id=listed_owner(caller), limit=limit, after=after)
+
+
+class VersionMismatch(Exception):
+    """The client's `If-Match` names none of the order's current version: `412` (ADR 0004)."""
+
+    def __init__(self, order_id: str, current_version: int) -> None:
+        super().__init__(f"Order {order_id} is at version {current_version}")
+        self.order_id = order_id
+        self.current_version = current_version
+
+
+def check_may_change_status(caller: Caller, status: OrderStatus) -> None:
+    """`PermissionDenied` unless the caller may request `status` on at least their own orders.
+
+    Cancelling needs `order:cancel:own` or `order:status:any`, anything else `order:status:any`.
+    The body names the status, so this runs after body validation and before any data is read.
+    """
+    caller.require(*permissions_to_change_to(status))
+
+
+# Each lost race means another status change succeeded. Changes only move forward, so an order
+# can win at most three races against one request; the bound only guards against a broken store.
+_MAX_WRITE_ATTEMPTS = len(OrderStatus)
+
+
+def change_order_status(
+    repository: OrderRepository,
+    clock: Clock,
+    caller: Caller,
+    order_id: str,
+    status: OrderStatus,
+    *,
+    if_match: Collection[int] | None = None,
+) -> Order:
+    """Change the order's status with one atomic conditional write, and return it as stored.
+
+    Checks run in ADR 0009's order, after `check_may_change_status`: visibility (`OrderNotFound`;
+    a caller who may only cancel their own orders can't tell someone else's from a missing one),
+    then `If-Match` (`VersionMismatch`, given the versions the client accepts), then the rules
+    (`StatusChangeNotAllowed`). The precondition goes before the rules, as RFC 9110 evaluates
+    preconditions before the method: a client whose copy is stale learns that first, even when
+    its change would also be refused or is already in effect. Requesting the current status
+    writes nothing.
+
+    A write whose condition fails lost a race: the order is read again and everything is decided
+    afresh against what the winner left, never overwriting it (ADR 0004).
+    """
+    order = repository.get(order_id)
+    if order is None or not caller.can_change_status_of(order):
+        raise OrderNotFound(order_id)
+    for _ in range(_MAX_WRITE_ATTEMPTS):
+        if if_match is not None and order.version not in if_match:
+            raise VersionMismatch(order_id, order.version)
+        changed = order.with_status(status, now=clock.now())
+        if changed is order:
+            return order
+        stored = repository.update_status(order, changed, check_version=if_match is not None)
+        if stored is not None:
+            return stored
+        fresh = repository.get(order_id)
+        if fresh is None:
+            raise OrderNotFound(order_id)
+        order = fresh
+    raise RuntimeError(f"Order {order_id} kept failing its conditional write")
+
+
+def check_may_delete(caller: Caller) -> None:
+    """`PermissionDenied` unless the caller may delete orders, which only ADMIN may."""
+    caller.require(Permission.DELETE_ANY)
+
+
+def delete_order(repository: OrderRepository, order_id: str) -> None:
+    """Hard-delete the order in whatever status (ADR 0004); `OrderNotFound` if there is none.
+
+    `order:delete:any` covers every order, so there is no visibility step.
+    """
+    if not repository.delete(order_id):
+        raise OrderNotFound(order_id)

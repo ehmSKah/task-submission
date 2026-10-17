@@ -4,6 +4,7 @@ Rules live in the OpenAPI document. The Pydantic models below carry types only: 
 turns an already validated body into them, so there is nothing to keep in sync.
 """
 
+import re
 from typing import Any
 
 from aws_lambda_powertools.utilities.data_classes.common import BaseProxyEvent
@@ -18,7 +19,7 @@ from orders_api.adapters.inbound.request_checks import (
     validate_path_parameter,
 )
 from orders_api.contract import path_parameter_schema, request_body_schema
-from orders_api.domain.order import LineItem, NewOrder
+from orders_api.domain.order import LineItem, NewOrder, OrderStatus
 
 ORDERS_PATH = "/api/v1/orders"
 ORDER_PATH = "/api/v1/orders/{id}"
@@ -72,3 +73,35 @@ def new_order_from(event: BaseProxyEvent) -> NewOrder:
 def valid_order_id(order_id: str) -> str:
     """The id must match the UUID pattern the contract declares, else `400` (ADR 0007)."""
     return validate_path_parameter("id", order_id, path_parameter_schema(ORDER_PATH, "id"))
+
+
+ORDER_STATUS_PATH = "/api/v1/orders/{id}/status"
+IF_MATCH_HEADER = "If-Match"
+# An `ETag` is the quoted version (ADR 0004). The digit limit keeps a hostile header away from
+# Python's limit on converting long digit strings; no real version comes near it.
+_STRONG_VERSION_TAG = re.compile(r'"([0-9]{1,18})"')
+
+
+class ChangeStatusBody(BaseModel):
+    status: str
+
+
+def requested_status_from(event: BaseProxyEvent) -> OrderStatus:
+    """`Content-Type` → size → JSON → schema (the status enum) → typed status."""
+    body = json_body(event)
+    validate_body(body, request_body_schema("patch", ORDER_STATUS_PATH))
+    return OrderStatus(parse(event=body, model=ChangeStatusBody).status)
+
+
+def if_match_versions(event: BaseProxyEvent) -> frozenset[int] | None:
+    """The versions the `If-Match` header accepts; `None` when it accepts any.
+
+    No header, an empty one (like an empty `Idempotency-Key`) and `*` check no version.
+    `If-Match` compares strongly (RFC 9110), so a weak tag (`W/"3"`) or anything that isn't one
+    of our `ETag`s matches no version and makes the request a `412`, never a `400`.
+    """
+    value = (event.headers.get(IF_MATCH_HEADER) or "").strip()
+    if not value or value == "*":
+        return None
+    tags = (_STRONG_VERSION_TAG.fullmatch(tag.strip()) for tag in value.split(","))
+    return frozenset(int(tag.group(1)) for tag in tags if tag)

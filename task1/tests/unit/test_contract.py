@@ -76,6 +76,38 @@ def test_path_id_schema_is_the_uuid_v4_pattern() -> None:
             validate(malformed)
 
 
+STATUS_PATH = "/api/v1/orders/{id}/status"
+
+
+@pytest.mark.parametrize("status", ["PENDING", "CONFIRMED", "SHIPPED", "DELIVERED", "CANCELLED"])
+def test_change_status_schema_accepts_each_of_the_five_statuses(status: str) -> None:
+    fastjsonschema.compile(request_body_schema("patch", STATUS_PATH))({"status": status})
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"status": "LOST"},
+        {"status": "pending"},
+        {"status": None},
+        {"status": 1},
+        {},
+        {"status": "SHIPPED", "version": 2},
+        ["SHIPPED"],
+        "SHIPPED",
+    ],
+)
+def test_change_status_schema_rejects_what_adr_0007_forbids(body: Any) -> None:
+    with pytest.raises(fastjsonschema.JsonSchemaValueException):
+        fastjsonschema.compile(request_body_schema("patch", STATUS_PATH))(body)
+
+
+def test_the_status_path_declares_the_same_id_as_the_order_path() -> None:
+    assert path_parameter_schema(STATUS_PATH, "id") == path_parameter_schema(
+        "/api/v1/orders/{id}", "id"
+    )
+
+
 def test_unknown_operation_or_parameter_is_a_programming_error() -> None:
     with pytest.raises(KeyError):
         request_body_schema("put", "/api/v1/orders")

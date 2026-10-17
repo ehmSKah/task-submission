@@ -6,12 +6,14 @@ The in-progress `409` depends on timing end to end, so it is covered by unit tes
 import time
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 import boto3
 import httpx
 from boto3.dynamodb.conditions import Key
 
+from orders_api.domain.order import format_timestamp
 from tests.integration.assertions import assert_contract_headers, assert_problem
 from tests.integration.requests import NEW_ORDER, bearer, subject_of
 
@@ -23,11 +25,17 @@ def with_key(token: str, key: str, header: str = "Idempotency-Key") -> dict[str,
 
 
 def order_ids_created_since(endpoints: dict[str, Any], owner: str, created_at: str) -> list[str]:
-    """The owner's orders created at or after `created_at`, read from the `byOwner` index."""
+    """The owner's orders created from `created_at` until now, read from the `byOwner` index.
+
+    The upper bound keeps out orders other tests wrote straight to the table with a fixed,
+    possibly future, timestamp; tables persist across runs.
+    """
     table = boto3.resource("dynamodb").Table(endpoints["ordersTable"])
+    until = format_timestamp(datetime.now(UTC)) + "~"  # `~` sorts after `#<id>`
     items = table.query(
         IndexName="byOwner",
-        KeyConditionExpression=Key("ownerId").eq(owner) & Key("createdAtId").gte(created_at),
+        KeyConditionExpression=Key("ownerId").eq(owner)
+        & Key("createdAtId").between(created_at, until),
     )["Items"]
     return [str(item["id"]) for item in items]
 

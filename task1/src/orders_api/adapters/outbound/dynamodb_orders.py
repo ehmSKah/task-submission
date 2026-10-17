@@ -104,6 +104,48 @@ class DynamoDbOrderRepository:
             next_position=_position(str(last[LIST_SORT_KEY])) if last else None,
         )
 
+    def update_status(self, current: Order, changed: Order, *, check_version: bool) -> Order | None:
+        """One `UpdateItem`: set the status and `updatedAt` and increment `version`, on condition
+        that the status (and the version, if asked) is still `current`'s (ADR 0005).
+
+        A missing order fails the condition too, so the write never creates an item.
+        `ALL_NEW` returns the order as stored, so no second read is needed.
+        """
+        condition = "#status = :expected"
+        values: dict[str, Any] = {
+            ":expected": current.status.value,
+            ":status": changed.status.value,
+            ":updatedAt": changed.updated_at,
+            ":one": 1,
+        }
+        if check_version:
+            condition += " AND #version = :version"
+            values[":version"] = current.version
+        try:
+            response = self._table.update_item(
+                Key={"id": current.id},
+                UpdateExpression=(
+                    "SET #status = :status, updatedAt = :updatedAt, #version = #version + :one"
+                ),
+                ConditionExpression=condition,
+                ExpressionAttributeNames={"#status": "status", "#version": "version"},
+                ExpressionAttributeValues=values,
+                ReturnValues="ALL_NEW",
+            )
+        except self._table.meta.client.exceptions.ConditionalCheckFailedException:
+            return None
+        return from_item(response["Attributes"])
+
+    def delete(self, order_id: str) -> bool:
+        """One `DeleteItem`, on condition that the order exists, so a miss is told apart."""
+        try:
+            self._table.delete_item(
+                Key={"id": order_id}, ConditionExpression="attribute_exists(id)"
+            )
+        except self._table.meta.client.exceptions.ConditionalCheckFailedException:
+            return False
+        return True
+
 
 def _position(sort_key: str) -> PagePosition:
     created_at, _, order_id = sort_key.partition("#")

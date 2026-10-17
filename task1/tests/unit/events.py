@@ -54,6 +54,39 @@ def get_order_event(order_id: str, authorizer: dict[str, Any] | None = ALICE) ->
     return event
 
 
+def change_status_event(
+    order_id: str,
+    body: Any = None,
+    *,
+    status: str = "CONFIRMED",
+    if_match: str | None = None,
+    content_type: str | None = "application/json",
+    raw: str | None = None,
+    authorizer: dict[str, Any] | None = MANAGER,
+) -> dict[str, Any]:
+    """A `PATCH /api/v1/orders/{id}/status`, by default `{"status": status}` from the manager."""
+    path = f"/api/v1/orders/{order_id}/status"
+    event = rest_event("PATCH", path, resource="/api/v1/orders/{id}/status")
+    event["pathParameters"] = {"id": order_id}
+    event["body"] = raw if raw is not None else json.dumps(body or {"status": status})
+    headers = {"Content-Type": content_type, "If-Match": if_match}
+    for name, value in headers.items():
+        if value is not None:
+            event["headers"][name] = value
+            event["multiValueHeaders"][name] = [value]
+    if authorizer is not None:
+        event["requestContext"]["authorizer"] = authorizer
+    return event
+
+
+def delete_order_event(order_id: str, authorizer: dict[str, Any] | None = ADMIN) -> dict[str, Any]:
+    event = rest_event("DELETE", f"/api/v1/orders/{order_id}", resource="/api/v1/orders/{id}")
+    event["pathParameters"] = {"id": order_id}
+    if authorizer is not None:
+        event["requestContext"]["authorizer"] = authorizer
+    return event
+
+
 def invoke(event: dict[str, Any]) -> dict[str, Any]:
     response: dict[str, Any] = api_handler.handler(event, FakeLambdaContext())
     return response
