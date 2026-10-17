@@ -184,11 +184,13 @@ def _gateway_response(
     headers = {
         f"gatewayresponse.header.{name}": f"'{value}'" for name, value in static_headers.items()
     }
+    # AWS takes a gateway response's `Content-Type` from its template's key and ignores this
+    # mapping; Floci honours the mapping. Both name the problem media type (docs/verification.md).
     headers["gatewayresponse.header.Content-Type"] = f"'{PROBLEM_JSON_MEDIA_TYPE}'"
     headers[f"gatewayresponse.header.{REQUEST_ID_HEADER}"] = "context.requestId"
     response: dict[str, Any] = {
         "responseParameters": headers,
-        "responseTemplates": {"application/json": _problem_template(error, target)},
+        "responseTemplates": {PROBLEM_JSON_MEDIA_TYPE: _problem_template(error, target)},
     }
     if error.problem is not None:
         response["statusCode"] = str(error.problem.status)

@@ -2,7 +2,7 @@ import copy
 import json
 from typing import Any
 
-from orders_api.adapters.inbound.http_headers import SECURITY_HEADERS
+from orders_api.adapters.inbound.http_headers import PROBLEM_JSON_MEDIA_TYPE, SECURITY_HEADERS
 from orders_api_infra.openapi_extensions import Target, load_spec, with_aws_extensions
 from orders_api_infra.paths import SPEC_PATH
 
@@ -56,7 +56,7 @@ def test_unknown_paths_become_problem_404_instead_of_the_gateway_403() -> None:
     missing_token = responses["MISSING_AUTHENTICATION_TOKEN"]
     assert missing_token["statusCode"] == "404"
     body = json.loads(
-        missing_token["responseTemplates"]["application/json"].replace(
+        missing_token["responseTemplates"][PROBLEM_JSON_MEDIA_TYPE].replace(
             "$context.requestId", "req-1"
         )
     )
@@ -103,7 +103,7 @@ def test_rejected_tokens_get_a_problem_401_with_www_authenticate() -> None:
     assert unauthorized["statusCode"] == "401"
     params = unauthorized["responseParameters"]
     assert params["gatewayresponse.header.WWW-Authenticate"] == "'Bearer error=\"invalid_token\"'"
-    body = json.loads(unauthorized["responseTemplates"]["application/json"])
+    body = json.loads(unauthorized["responseTemplates"][PROBLEM_JSON_MEDIA_TYPE])
     assert body["type"] == "urn:problem:orders-api:unauthorized"
 
 
@@ -154,7 +154,7 @@ def validation_templates(target: Target) -> dict[str, str]:
     for name in VALIDATION_RESPONSES:
         assert responses[name]["statusCode"] == "400"
     return {
-        name: responses[name]["responseTemplates"]["application/json"]
+        name: responses[name]["responseTemplates"][PROBLEM_JSON_MEDIA_TYPE]
         for name in VALIDATION_RESPONSES
     }
 
@@ -193,5 +193,14 @@ def test_authorizer_failures_are_problem_503s() -> None:
 
     for name in ("AUTHORIZER_FAILURE", "AUTHORIZER_CONFIGURATION_ERROR"):
         assert responses[name]["statusCode"] == "503"
-        body = json.loads(responses[name]["responseTemplates"]["application/json"])
+        body = json.loads(responses[name]["responseTemplates"][PROBLEM_JSON_MEDIA_TYPE])
         assert body["type"] == "urn:problem:orders-api:service-unavailable"
+
+
+def test_every_gateway_response_s_template_is_keyed_by_the_problem_media_type() -> None:
+    """AWS takes a gateway response's `Content-Type` from its template's key and ignores a
+    mapped `Content-Type` header (seen on aws-dev; docs/verification.md)."""
+    for target in ("floci", "aws"):
+        responses = extended(target=target)["x-amazon-apigateway-gateway-responses"]
+        for name, response in responses.items():
+            assert set(response["responseTemplates"]) == {PROBLEM_JSON_MEDIA_TYPE}, name
