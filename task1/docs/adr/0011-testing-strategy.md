@@ -151,6 +151,7 @@ Each of the assignment's five required categories (successful requests, invalid 
 - **Two pieces of test-only infrastructure** exist only when `testFixtures: true`, never in `aws-prod`:
   - the fixture pool and clients
   - the counter-emptying helper
+- **`make demo` reuses the test helpers outside the suites:** it empties the counters and switches the runtime limits (restoring them afterwards) with the same functions, so it runs only where `testFixtures` is set (`local`, `aws-dev`) and is refused elsewhere.
 - **The "verify on AWS" items are executable** (`aws_only`), but only run when someone triggers the AWS workflow or runs `ENV=aws-dev` locally.
 - **The idempotency "in progress" case is covered by unit tests only,** because it depends on timing end to end.
 - **Coverage figures describe in-process code only.** The deployed path is proven by the integration and contract suites.
