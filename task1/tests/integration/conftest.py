@@ -2,12 +2,13 @@
 
 import uuid
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 import pytest
 
-from orders_api.domain.order import Order
+from orders_api.domain.order import Order, OrderStatus, format_timestamp
 from orders_api_infra.config import load_config
 from orders_api_infra.demo_users import access_token, demo_user
 from tests.builders import an_order
@@ -65,6 +66,31 @@ def stored_order(endpoints: dict[str, Any], subject_for: Callable[[str], str]) -
     order = an_order(id=str(uuid.uuid4()), owner_id=subject_for("alice"))
     store_order(endpoints, order)
     return order
+
+
+@pytest.fixture
+def alices_order_in(
+    endpoints: dict[str, Any], subject_for: Callable[[str], str]
+) -> Callable[..., Order]:
+    """Writes an order of alice's in the given status straight to the table and returns it.
+
+    It is created now, so it never looks newer than orders the API creates later.
+    """
+
+    def store(status: OrderStatus, version: int = 1) -> Order:
+        now = format_timestamp(datetime.now(UTC))
+        order = an_order(
+            id=str(uuid.uuid4()),
+            owner_id=subject_for("alice"),
+            status=status,
+            version=version,
+            created_at=now,
+            updated_at=now,
+        )
+        store_order(endpoints, order)
+        return order
+
+    return store
 
 
 @pytest.fixture

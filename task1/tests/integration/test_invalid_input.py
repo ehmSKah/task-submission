@@ -141,6 +141,74 @@ def test_the_authorizer_runs_before_request_validation(api: httpx.Client) -> Non
     assert_problem(response, 401, "unauthorized")
 
 
+def status_path(order_id: str = "0e6bb2c6-0000-4000-8000-000000000000") -> str:
+    return f"{ORDERS}/{order_id}/status"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"status": "LOST"},
+        {"status": "shipped"},
+        {"status": 3},
+        {},
+        {"status": "SHIPPED", "version": 2},
+    ],
+    ids=["unknown-status", "lower-case", "not-a-string", "missing-status", "unknown-field"],
+)
+def test_an_invalid_status_body_is_400_from_the_gateway(
+    api: httpx.Client, alice: dict[str, str], body: Any
+) -> None:
+    assert_rejected_by_the_gateway(api.patch(status_path(), json=body, headers=alice))
+
+
+@pytest.mark.parametrize("content", ['{"status": ', ""])
+def test_an_invalid_or_empty_status_body_is_400(
+    api: httpx.Client, alice: dict[str, str], content: str
+) -> None:
+    response = api.patch(
+        status_path(), content=content, headers={**alice, "Content-Type": "application/json"}
+    )
+
+    assert_problem(response, 400, "validation-error")
+
+
+def test_a_status_body_in_the_wrong_content_type_is_415(
+    api: httpx.Client, alice: dict[str, str]
+) -> None:
+    response = api.patch(
+        status_path(),
+        content=json.dumps({"status": "CANCELLED"}),
+        headers={**alice, "Content-Type": "text/plain"},
+    )
+
+    assert_problem(response, 415, "unsupported-media-type")
+
+
+def test_a_malformed_path_id_on_a_status_change_is_400_naming_the_parameter(
+    api: httpx.Client, alice: dict[str, str]
+) -> None:
+    response = api.patch(status_path("not-a-uuid"), json={"status": "CANCELLED"}, headers=alice)
+
+    assert_problem(response, 400, "validation-error")
+    assert [error["parameter"] for error in response.json()["errors"]] == ["id"]
+
+
+def test_an_invalid_status_body_never_invokes_the_api_function(
+    api: httpx.Client, alice: dict[str, str], endpoints: dict[str, Any]
+) -> None:
+    logs = FunctionLogs(api_function_name(endpoints))
+    since_ms = int(time.time() * 1000) - 5_000
+
+    rejected = api.patch(status_path(), json={"status": "LOST"}, headers=alice)
+    reached = api.patch(status_path(), json={"status": "CANCELLED"}, headers=alice)
+
+    assert_rejected_by_the_gateway(rejected)
+    assert_problem(reached, 404, "not-found")
+    logged = logs.wait_for(reached.headers["X-Request-Id"], since_ms)
+    assert rejected.headers["X-Request-Id"] not in logged
+
+
 def test_an_invalid_body_never_invokes_the_api_function(
     api: httpx.Client, alice: dict[str, str], endpoints: dict[str, Any]
 ) -> None:
