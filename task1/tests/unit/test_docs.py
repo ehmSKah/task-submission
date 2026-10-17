@@ -1,10 +1,13 @@
 """The deliverable documents are self-contained, and their links resolve.
 
 A reviewer gets this folder and nothing else: no issue tracker, no working branches, no files
-for coding assistants. Relative links in the Markdown documents must point at files that exist
-(and at headings that exist, where they name one). The design document summarises every ADR.
+for coding assistants. The repository's README and its workflows ship beside the folder, so they
+are scanned for such links too. Relative links in the Markdown documents must point at files
+that exist (and at headings that exist, where they name one). The design document summarises
+every ADR.
 """
 
+import os
 import re
 from pathlib import Path
 
@@ -13,6 +16,7 @@ import pytest
 from orders_api_infra.paths import PROJECT_DIR
 
 THIS_FILE = Path(__file__).resolve()
+REPO_DIR = PROJECT_DIR.parent
 SKIPPED_DIRS = {"build", "node_modules", "cdk.out", "__pycache__"}
 """Plus every directory whose name starts with a dot: `.venv` and the tools' caches."""
 DELIVERABLE_SUFFIXES = {".md", ".py", ".http", ".yaml", ".yml", ".toml", ".sh", ".json"}
@@ -44,6 +48,22 @@ def deliverables() -> list[Path]:
         if path.suffix in DELIVERABLE_SUFFIXES or path.name in DELIVERABLE_NAMES:
             found.append(path)
     return sorted(found)
+
+
+def shipped_beside() -> list[Path]:
+    """The repository's README and everything under `.github/`, where they exist."""
+    readme = REPO_DIR / "README.md"
+    github = REPO_DIR / ".github"
+    files = sorted(path for path in github.rglob("*") if path.is_file()) if github.is_dir() else []
+    return ([readme] if readme.is_file() else []) + files
+
+
+def scanned_for_links() -> list[Path]:
+    return deliverables() + shipped_beside()
+
+
+def label(path: Path) -> str:
+    return Path(os.path.relpath(path, PROJECT_DIR)).as_posix()
 
 
 def markdown_documents() -> list[Path]:
@@ -87,6 +107,13 @@ def broken_link(document: Path, target: str) -> str | None:
     return None
 
 
+def test_the_link_scan_also_sees_what_ships_beside_the_folder() -> None:
+    """The repository's README and its workflows ship with the folder, where they exist."""
+    beside = [REPO_DIR / "README.md", REPO_DIR / ".github" / "workflows" / "ci.yml"]
+
+    assert {path for path in beside if path.is_file()} <= set(scanned_for_links())
+
+
 def test_the_scan_sees_the_documents_and_the_code() -> None:
     names = {path.relative_to(PROJECT_DIR).as_posix() for path in deliverables()}
 
@@ -95,9 +122,7 @@ def test_the_scan_sees_the_documents_and_the_code() -> None:
     assert not any(name.startswith(("build/", "infra/node_modules/")) for name in names)
 
 
-@pytest.mark.parametrize(
-    "path", deliverables(), ids=lambda path: path.relative_to(PROJECT_DIR).as_posix()
-)
+@pytest.mark.parametrize("path", scanned_for_links(), ids=label)
 def test_no_deliverable_points_outside_the_folders_own_material(path: Path) -> None:
     text = path.read_text(errors="replace")
 
