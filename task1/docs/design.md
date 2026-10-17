@@ -198,7 +198,7 @@ ever asks about permissions.
   for 5 minutes.
 - **`X-Forwarded-For` is never honoured,** because clients can set it freely.
 - **Trade-offs accepted:** a client can burst to twice its limit across a window boundary. Each
-  request costs two writes, $1.25 per million requests (section 8), plus about 10–20 ms. During a
+  request costs two writes, $1.53 per million requests (section 8), plus about 10–20 ms. During a
   store outage the effective limit is multiplied by the number of warm instances.
 
 ## 6. Validation and errors
@@ -294,26 +294,26 @@ The full list is in the ADR.
 
 ### Cost model
 
-**Monthly cost in `us-east-1` at list prices.** The prices were read on **2026-10-17** from the
-AWS pricing pages listed below. Those pages render their rate tables with JavaScript, so each
-figure was read from the page's worked examples and confirmed in AWS's official Price List API
-file for the region.
+**Monthly cost in `eu-central-1` at list prices,** the region both AWS environments run in. The
+prices were read on **2026-10-18**. The AWS pricing pages listed below give the price structure,
+but they render their rate tables with JavaScript and price their worked examples in US regions,
+so each Frankfurt figure was read from AWS's official Price List API file for `eu-central-1`.
 
 | Line item (USD per month) | 1 M requests | 10 M requests | 100 M requests |
 |---|--:|--:|--:|
-| API Gateway REST requests, $3.50 per million (edge-optimized costs the same) | 3.50 | 35.00 | 350.00 |
+| API Gateway REST requests, $3.70 per million (edge-optimized costs the same) | 3.70 | 37.00 | 370.00 |
 | Data transfer out, 1.5 KB per response at $0.09/GB | 0.14 | 1.35 | 13.50 |
 | Lambda arm64, both functions (assumptions below) | 0.39 | 3.93 | 39.33 |
-| DynamoDB, rate-limit counters: 2 writes per request at $0.625 per million | 1.25 | 12.50 | 125.00 |
-| DynamoDB, orders: 0.9 writes + 0.9 reads per request on average | 0.68 | 6.75 | 67.50 |
+| DynamoDB, rate-limit counters: 2 writes per request at $0.7625 per million | 1.53 | 15.25 | 152.50 |
+| DynamoDB, orders: 0.9 writes + 0.9 reads per request on average ($0.1525 per million reads) | 0.82 | 8.24 | 82.35 |
 | WAF: web ACL $5 + 1 rule $1 + $0.60 per million requests | 6.60 | 12.00 | 66.00 |
-| CloudWatch Logs: 1.5 KB per request at $0.50/GB, kept 90 days at $0.03/GB-month | 0.89 | 8.85 | 88.50 |
+| CloudWatch Logs: 1.5 KB per request at $0.63/GB, kept 90 days at $0.0324/GB-month | 1.09 | 10.91 | 109.08 |
 | SSM Parameter Store (standard parameter, standard throughput) | 0 | 0 | 0 |
 | Secrets Manager ($0.40 per secret; `aws-prod` has none, `aws-dev` one) | 0 | 0 | 0 |
-| **Subtotal: the request path** | **13.44** | **80.38** | **749.83** |
+| **Subtotal: the request path** | **14.27** | **88.68** | **832.76** |
 | Cognito, 5k / 50k / 500k MAU, **Essentials** tier (the stack's default today), $0.015/MAU over 10k free | 0 | 600 | 7,350 |
 | Cognito, same MAU, **Lite** tier, from $0.0055/MAU over 10k free | 0 | 220 | 2,335 |
-| **Total with Lite** | **13.44** | **300.38** | **3,084.83** |
+| **Total with Lite** | **14.27** | **308.68** | **3,167.76** |
 
 **Assumptions:**
 - **Users:** 200 requests per monthly active user, so 5k, 50k and 500k MAU.
@@ -332,48 +332,59 @@ file for the region.
   MAU, which the Cognito rows include.
 - **Not included:**
   - DynamoDB storage. Orders grow by about 0.6 GB per million requests (each order plus its two
-    GSI copies), at $0.25 per GB-month.
+    GSI copies), at $0.306 per GB-month.
   - PITR backups.
   - A custom domain.
   - Support plans.
   - Tax.
 
 **What the table shows:**
-- **Identity dominates from 10 M requests on.** The request path costs about $7.40 per million
+- **Identity dominates from 10 M requests on.** The request path costs about $8.30 per million
   requests plus WAF's $6 base. Cognito is billed per active user, not per request.
 - **The tier matters most.** The stack sets no feature plan, so CloudFormation creates the pool
   in **Essentials**. The design uses none of Essentials' features: groups already arrive in the
   access token, and there is no managed login or token customization. Pinning **Lite** saves
   60–70 % of the identity bill (go-live item 12).
-- **The counter writes are the largest DynamoDB item.** At $1.25 per million requests they cost
-  about a third of the REST API's $3.50. That is the trigger for ElastiCache only when latency
+- **The counter writes are the largest DynamoDB item.** At $1.53 per million requests they cost
+  about 40 % of the REST API's $3.70. That is the trigger for ElastiCache only when latency
   or hot keys matter, not on cost alone.
-- **Container crossover:** API Gateway plus Lambda cost about $3.90 per million requests.
+- **Container crossover:** API Gateway plus Lambda cost about $4.10 per million requests.
   - A container setup (ECS Fargate behind a load balancer) replaces those two lines with a fixed
     monthly cost. WAF, DynamoDB, logs and Cognito stay the same.
-  - Each $100 a month the container setup costs moves the break-even by about 26 M requests a
+  - Each $100 a month the container setup costs moves the break-even by about 24 M requests a
     month, which puts it in the tens of millions, as ADR 0002 expected.
   - Fargate and load balancer prices were not part of this research, so ADR 0002's "$30–50 a
     month" for one task and a load balancer remains an unverified estimate.
+- **`us-east-1` is cheaper** by 6–11 % on the request path, since API Gateway, DynamoDB and
+  CloudWatch Logs cost less there, and by about 3 % in total with Lite from 10 M requests, since
+  Cognito costs the same.
 
-**Sources** (all accessed 2026-10-17; the Price List API file is
-`https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/<service>/current/us-east-1/index.json`,
-publication date in brackets):
-- API Gateway: <https://aws.amazon.com/api-gateway/pricing/> (`AmazonApiGateway`, 2026-10-13).
-  Data transfer is "charged at the EC2 data transfer rate" (`AWSDataTransfer`, 2026-09-16).
-- Lambda: <https://aws.amazon.com/lambda/pricing/> (`AWSLambda`, 2026-10-16).
+**Sources** (all accessed 2026-10-18; the Price List API file is
+`https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/<service>/current/eu-central-1/index.json`,
+publication date and usage types in brackets):
+- API Gateway: <https://aws.amazon.com/api-gateway/pricing/> (`AmazonApiGateway`, 2026-10-13,
+  `EUC1-ApiGatewayRequest`; the same file prices HTTP APIs at $1.20 per million). Data transfer
+  is "charged at the EC2 data transfer rate" (`AWSDataTransfer`, 2026-09-16,
+  `EUC1-DataTransfer-Out-Bytes`, first 10 TB).
+- Lambda: <https://aws.amazon.com/lambda/pricing/> (`AWSLambda`, 2026-10-16, `EUC1-Request-ARM`
+  $0.20 per million and `EUC1-Lambda-GB-Second-ARM` $0.0000133334 per GB-second).
 - DynamoDB on-demand: <https://aws.amazon.com/dynamodb/pricing/on-demand/> (`AmazonDynamoDB`,
-  2026-09-11).
-- Cognito: <https://aws.amazon.com/cognito/pricing/> (`AmazonCognito`, 2026-09-25). The default
+  2026-09-11, `EUC1-WriteRequestUnits`, `EUC1-ReadRequestUnits`, `EUC1-TimedStorage-ByteHrs`).
+- Cognito: <https://aws.amazon.com/cognito/pricing/> (`AmazonCognito`, 2026-09-25,
+  `EUC1-CognitoEssentialsMAU`, `EUC1-CognitoLiteMAU`, `Global-CognitoFreeTierMAU`). The default
   tier is from the CloudFormation reference for `AWS::Cognito::UserPool` (`UserPoolTier`
   "Defaults to `ESSENTIALS`"):
   <https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cognito-userpool.html>.
-- WAF: <https://aws.amazon.com/waf/pricing/> (`awswaf`, 2026-09-14).
-- CloudWatch Logs: <https://aws.amazon.com/cloudwatch/pricing/> (`AmazonCloudWatch`, 2026-10-07).
+- WAF: <https://aws.amazon.com/waf/pricing/> (`awswaf`, 2026-09-14, `EUC1-WebACLV2`,
+  `EUC1-RuleV2`, `EUC1-RequestV2-Tier1`).
+- CloudWatch Logs: <https://aws.amazon.com/cloudwatch/pricing/> (`AmazonCloudWatch`, 2026-10-07,
+  `EUC1-DataProcessing-Bytes`, `EUC1-TimedStorage-ByteHrs`).
 - SSM Parameter Store: <https://aws.amazon.com/systems-manager/pricing/> (`AWSSystemsManager`,
-  2026-10-08).
+  2026-10-08; the file charges only advanced parameters and higher throughput).
 - Secrets Manager: <https://aws.amazon.com/secrets-manager/pricing/> (`AWSSecretsManager`,
-  2026-09-11).
+  2026-09-11, `EUC1-AWSSecretsManager-Secrets`).
+- The `us-east-1` comparison uses the same files for `us-east-1`, read on 2026-10-17 and again on
+  2026-10-18, with the same publication dates.
 
 ## 9. Known limitations and verification items
 

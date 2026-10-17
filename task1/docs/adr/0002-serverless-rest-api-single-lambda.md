@@ -22,7 +22,7 @@ The Orders API runs on **AWS Lambda behind an API Gateway REST API (v1)**. **One
 - *Verdict:* rejected for this workload. It becomes the right choice if traffic turns high and steady (see Consequences).
 
 **API Gateway flavour: HTTP API (v2).**
-- *For:* about $1.00 per million requests vs about $3.50 for v1, with slightly lower latency. Its native JWT authorizer works with any OIDC provider.
+- *For:* $1.20 per million requests vs $3.70 for v1 (`eu-central-1` list prices, [design document, section 8](../design.md#cost-model)), with slightly lower latency. Its native JWT authorizer works with any OIDC provider.
 - *Against:* no direct AWS WAF attachment (needs CloudFront in front), no request validation, no API keys or usage plans, no response caching.
 - *On Floci:* the JWT authorizer rejects Floci's own tokens without extra emulator flags. The Lambda authorizer ignores result caching and answers `500` instead of `401`. With payload 2.0, `sourceIp` is always `127.0.0.1`.
 - *Verdict:* rejected. WAF integration and faithful local behaviour (authorizer caching, real client IPs) outweigh the price difference at this scale. Revisit v2 if cost per request matters more than WAF and gateway-side validation.
