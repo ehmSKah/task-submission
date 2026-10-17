@@ -18,14 +18,14 @@ All AWS resources are defined in **one AWS CDK (Python) stack built from three c
 
 - **In production, data is protected without a separate stack:**
   - `RETAIN` removal policies on the data
-  - deletion protection on `orders`
+  - deletion protection on `orders` and on the user pool
   - **stack termination protection**
 
 **Environments.** `infra/config/<env>.yaml`, validated by a small Pydantic model, selected with `cdk deploy -c env=<env>`.
 
 | Setting | `local` (Floci) | `aws-dev` / `aws-prod` (real AWS; deployable unchanged) |
 |---|---|---|
-| Target | Floci, account `000000000000` | real account and region |
+| Target | Floci, account `000000000000` | real AWS: the region from the config, the account of the caller's credentials (none in the config) |
 | Issuer passed to the authorizer | `http://floci:4566/<poolId>` | `https://cognito-idp.<region>.amazonaws.com/<poolId>` |
 | Floci id pinning (`floci:override-id`, `floci:override-cognito-client-id` on the pool) | on, so issuer and client id are deterministic | off |
 | Lambda architecture | **host architecture** (auto-detected) | **`arm64`** |
@@ -35,6 +35,10 @@ All AWS resources are defined in **one AWS CDK (Python) stack built from three c
 | `testFixtures` (foreign pool, untrusted and short-lived clients, counter-reset helper; [ADR 0011](0011-testing-strategy.md)) | `true` | `aws-dev`: `true`; `aws-prod`: `false` |
 | `everyoneIsUser` (every authenticated person also holds `USER`; [ADR 0001](0001-role-based-access-control.md)) | `false` (the default) | `false` (the default) |
 | WAF | deployed, not enforced | enforced |
+| WAF flood limit per IP and 5 minutes (`wafRateLimit`, default 3,000; ADR 0006) | 3,000 | `aws-dev`: 10,000; `aws-prod`: 3,000 |
+| WAF test rule (`wafTestRuleLimit`, `testFixtures` only; ADR 0011) | 100 (deployed, not enforced) | `aws-dev`: 100; `aws-prod`: none |
+| API Gateway access logs (`accessLogs`; [ADR 0012](0012-observability-and-security-baseline.md)) | off | on |
+| Log retention | 7 days | `aws-dev`: 14 days; `aws-prod`: 90 days |
 | Log level | DEBUG | INFO |
 
 - **One local deployment serves every test suite.** Suites that need particular limits (tiny limits for `429` tests, high limits for the integration and Schemathesis suites) switch the SSM rate-limit parameter at runtime and wait for the 2-second cache. That also demonstrates ADR 0006's runtime configuration. As a result, such suites run one after another, not in parallel.
@@ -96,6 +100,23 @@ Rules:
 - **Idempotent:** existing users are left alone.
 - **Guarded:** the script **refuses to run when the environment has `seedUsers: false`**.
 
+**Refined when the AWS environments were built:**
+- **Account and region.** AWS configs name a region (`us-east-1`) and no account, and the config model refuses one. The stack is synthesised without an account (`aws://unknown-account/us-east-1`): `cdk synth` and `make lint` need no credentials and produce the same template for everyone, and CloudFormation deploys to the account of the caller's credentials (a profile or SSO locally, GitHub OIDC in the workflow). Floci's config keeps its fixed account. Nothing in the stack needs the account at synth time.
+- **`ENV` decides the target, and a guard checks it** (`orders_api_infra/preflight.py`):
+  - `ENV=local` always exports Floci's endpoint and dummy credentials, whatever the shell holds (they used to be defaults a shell could override), and drops `AWS_PROFILE`, so no local target can reach a real account.
+  - Any other `ENV` unexports `AWS_ENDPOINT_URL` and exports the config's region.
+  - `make guard` runs before every target that touches an environment. It refuses what make can't unset: service-specific `AWS_ENDPOINT_URL_<SERVICE>` overrides, Floci's dummy key or another region on AWS, and any endpoint but the emulator's on Floci. The test suites run the same check before their first AWS call.
+- **Targets on AWS:**
+  - `make up ENV=aws-dev` runs `install`, `doctor`, `bootstrap`, `deploy`, `endpoints`, `seed`; it skips Floci.
+  - `make doctor ENV=aws-dev` checks the host tools without Docker, then the account: the credentials resolve and aren't Floci's, the API Gateway logging role is set, CDK is bootstrapped. It never prints the account id or the caller, so its output is safe in CI logs.
+  - `make down ENV=aws-dev` runs `cdk destroy`, and nothing Docker. Termination protection refuses it for `aws-prod`.
+  - `deploy` keeps `--method=direct`, which AWS accepts too. `make lint` synthesises all three environments, so cdk-nag checks the AWS ones as well.
+- **Account prerequisites outside the stack,** once per account and region, by the account's owner ([`docs/aws.md`](../aws.md)):
+  - CDK's bootstrap
+  - API Gateway's CloudWatch Logs role, which access logs need. It is a setting of the account and region (`AWS::ApiGateway::Account`), shared by every API in it, so no application stack should own it.
+  - for the `aws-e2e` workflow: the GitHub OIDC provider and the workflow's role, whose trust policy and permissions are documented there, not created by code
+- **Production protections:** the user pool now has deletion protection as well, where data is retained. Log groups, including the access log group, follow the removal policy and the retention of the table above.
+
 ## Considered options
 
 - **One flat stack.** The same deployment unit, but without visible identity/data/API boundaries, so a later split would mean restructuring.
@@ -109,6 +130,9 @@ Rules:
 - **arm64 locally as well.** On an x86 machine Floci runs the host's architecture, so arm64-bundled native wheels (`cryptography`) would fail without emulation.
 - **CDK Docker bundling** (SAM build image). It needs Docker for building, an image per architecture, and is slower.
 - **A toolbox container** (Python, uv, Node and the CDK CLI in an image, so reviewers need only Docker and `make`). A nicer first run, but more to build and maintain than the deliverable (a README with setup and execution instructions) requires. A possible improvement.
+- **Naming the account in each AWS config,** or reading `CDK_DEFAULT_ACCOUNT` at synth. The first puts account ids in the repository; the second makes the template depend on whose credentials synthesised it, and synth would need credentials. Pinning an account belongs to a multi-account setup, through the CDK environment of a pipeline.
+- **Letting the stack own API Gateway's logging role** (CDK's `cloudWatchRole: true`). The account setting is shared by every API in the region, two stacks in one account would fight over it, and CDK retains the role on destroy, so each `aws-e2e` run would leave one behind.
+- **Overridable Floci defaults,** as before: a shell with real credentials or another endpoint exported could have sent a "local" run elsewhere.
 - **A CDK custom resource for seeding.** It would keep everything in CDK, at the cost of more code and a path that is less proven on Floci than plain API calls.
 
 ## Consequences
@@ -117,7 +141,8 @@ Rules:
 - **Test suites that change the rate-limit parameter run one after another** against the single local deployment.
 - **Floci specifics live in the `local` config and the Makefile:** the pinned pool id and issuer base (`flociUserPoolId`, `flociIssuerBaseUrl`), `--method=direct`, the URL lookup, `FLOCI_HOSTNAME`, the token-validity flag. The CDK code only reacts to whether those settings are present.
 - **Password sign-in** (`USER_PASSWORD_AUTH`) is for the demo and the tests. Real users would sign in through the hosted login with authorization code + PKCE, or SRP.
-- **Deploying to AWS** is supported: `aws-dev` can be deployed, tested with the same suites and destroyed, either locally or through a manually triggered workflow ([ADR 0011](0011-testing-strategy.md)). It is optional and not required for the local deliverable.
+- **Deploying to AWS** is supported: `aws-dev` can be deployed, tested with the same suites and destroyed, either locally or through a manually triggered workflow ([ADR 0011](0011-testing-strategy.md)). It is optional and not required for the local deliverable. Before the first deploy, the account's owner does the one-off setup in [`docs/aws.md`](../aws.md).
+- **Every make target that touches an environment** pays a second or so for the guard.
 - **To verify while building:**
   - the Floci setting that puts Lambda containers on the Compose network
   - that `AWS::SecretsManager::Secret` with `GenerateSecretString` works on Floci (supported in source, not yet run)

@@ -31,6 +31,10 @@ The build includes **what the assignment's requirements touch, and nothing beyon
 - **Client IPs in application logs are truncated** (IPv4 `/24`, IPv6 `/64`). IP addresses are personal data under the GDPR. The full address appears only in API Gateway's own access logs (under the retention below) and in rate-limit counter keys, which expire within minutes.
 - **Levels:** DEBUG locally, INFO on AWS, set by an environment variable. In `aws-*` environments, **1 % of requests** log at DEBUG (Powertools sampling).
 - **API Gateway access logs** (JSON: request id, status, latency, `sourceIp`, authorizer error) are on in `aws-*`, off locally.
+  - *Refined when built:* one JSON object per request with `requestId`, `requestTime`, `httpMethod`, `resourcePath`, `protocol`, `status`, `responseLatency`, `integrationLatency`, `sourceIp`, `errorType`, `authorizerError` and `wafResponseCode`. Every value is quoted, so a missing one (`-`) still parses. The format names no header, so neither `Authorization` nor a token can reach it; a unit test guards that.
+  - The log group is CDK's, with the environment's retention and removal policy (`accessLogs` in the config).
+  - Locally they stay off: Floci 2.3.0 accepts a stage's `AccessLogSetting` but neither keeps nor writes it (a throwaway CloudFormation probe; `GetStage` returns no access log settings). cdk-nag's `APIG1` is suppressed for Floci only.
+  - On AWS they need the account's API Gateway CloudWatch Logs role, set once outside the stack ([ADR 0010](0010-infrastructure-and-environments.md)).
 - **Retention:** log groups are owned by CDK with explicit retention: **14 days** in `aws-dev`, **90 days** in `aws-prod`, never unlimited.
 
 **Metrics, tracing, alarms: not built.**
@@ -64,8 +68,8 @@ The build includes **what the assignment's requirements touch, and nothing beyon
 - **Where the headers are set:**
   - by a response middleware in the API function, for every response including `/health`
   - as static parameters in every mapped Gateway Response
-  - in WAF's custom `429`
-- **Tested:** integration tests check the full set on one response from each of those layers (WAF on AWS only).
+  - in WAF's custom `429`, from the same constant. It can't carry `X-Request-Id`, and its `Content-Type` is `application/json`, since WAF sets that header itself ([ADR 0006](0006-rate-limiting.md)).
+- **Tested:** integration tests check the full set on one response from each of those layers (WAF on AWS only, `tests/integration/test_edge_firewall.py`).
 - **Headers API Gateway adds itself** (`x-amzn-RequestId`, `x-amz-apigw-id`) can't be removed and reveal nothing beyond "AWS".
 
 ## Considered options

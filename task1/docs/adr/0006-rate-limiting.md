@@ -87,6 +87,23 @@ Refined when it was built:
 - **Blocked requests** get a custom response: `429` with the standard error body and a static `Retry-After`.
 - **No forwarded-IP key:** WAF never aggregates on a forwarded-IP header.
 
+Refined when it was built:
+- **Where it lives:** a `WebAcl` construct inside `Api` (`infra/orders_api_infra/waf.py`). The web ACL is `orders-api-<env>`; a `WebACLAssociation` ties it to the stage; it allows everything its rules don't block.
+- **The limit is an environment setting,** `wafRateLimit` (3,000 by default and in `aws-prod`). `aws-dev` sets **10,000**: one CI runner sends every suite's requests (about 3,000 within a few minutes) from one address, and the flood rule must never decide a test.
+- **The deliberately low limit for testing is a second, test-only rule** (`wafTestRuleLimit`, 100 in `aws-dev`, allowed only with `testFixtures`, [ADR 0011](0011-testing-strategy.md)). It is the same rate-based rule with a scope-down statement: it counts and blocks only requests carrying the header `x-orders-api-waf-test: count-me`, so the `aws_only` test trips it while the other suites from the same address are never counted. It answers exactly like the flood rule. Anyone may send the header, and they only get their own address blocked sooner.
+- **The custom response:**
+  - `429`, with the `rate-limited` Problem Details from the same code as the function's (`problem_body`), with a `detail` but **without `requestId`**: WAF can't insert API Gateway's request id, and no `X-Request-Id` header is sent either
+  - **`Content-Type: application/json`, not `application/problem+json`.** A WAF custom body can only be `text/plain`, `text/html` or `application/json`, and WAF refuses `Content-Type` as a custom header. The contract's `429` says so in its description, and the `aws_only` test checks the body against the `Problem` schema itself.
+  - `Retry-After: 300`, the evaluation window. An address that pauses that long has nothing left in the window, whatever the limit.
+  - the security headers of [ADR 0012](0012-observability-and-security-baseline.md), from the same constant the function and the Gateway Responses use
+- **Visibility:** WAF's own CloudWatch metrics and sampled requests are on, for the web ACL and each rule. No WAF logging configuration is built: no custom metrics, alarms or log pipelines (ADR 0012).
+- **On Floci 2.3.0** CloudFormation creates the web ACL and the association. `tests/adapter/test_waf_web_acl.py` reads them back through the WAF API: rules, limits, `IP` key, window, custom response and body, and the stage association.
+
+Considered while building it:
+- **One low-limit rule in `aws-dev`:** the integration and contract suites would trip it themselves, since they share the runner's address.
+- **A separate web ACL or stage for the test:** another association to keep, and it would no longer test the stage clients use.
+- **Rewriting `Content-Type` to `application/problem+json`** (a CloudFront function or Lambda@Edge): needs a CloudFront distribution of our own, which the edge-optimized endpoint doesn't give us. Revisit with the own-CDN step in the Consequences.
+
 ## Considered options
 
 - **Counting in the authorizer as well.** It would catch invalid-token floods in-app. *Rejected:* an authorizer can't return `429`, only Allow, Deny (`403`), Unauthorized (`401`) or an error. A Deny is cached per token for 5 minutes, so a throttled user would stay blocked long after their window resets.
@@ -123,9 +140,11 @@ Refined when it was built:
 - **Limits are approximate during a counter-store outage:** with the in-memory fallback, the effective limit is the configured limit times the number of warm Lambda instances.
   - A single failed call moves about a second of one instance's traffic to the fallback, and an instance with more than 10,000 distinct clients in a window forgets the idlest ones' counts. Both only make the limits more lenient, briefly, never stricter.
   - The 200 ms bound has two gaps botocore's timeouts don't cover: **resolving the endpoint's DNS name**, and a server that keeps sending a byte now and then, since the read timeout applies per read. DynamoDB's answers are a few hundred bytes, and Lambda's resolver is local, so neither is expected; the per-request bound would need a hard deadline if they ever show up.
-- **To verify on the first real AWS deploy:**
+- **To verify on the first real AWS deploy** (the `aws_only` tests, [ADR 0011](0011-testing-strategy.md)):
   - that WAF's `IP` key and `sourceIp` both see the client's address for the edge-optimized endpoint. This is stated in an AWS re:Post expert article, but not clearly in the official documentation.
-  - how WAF aggregates IPv6 addresses. The app counts IPv6 per `/64`.
+  - that WAF really blocks, with the custom response as configured
+  - how WAF aggregates IPv6 addresses. The app counts IPv6 per `/64`. The tests run over IPv4 only, so this stays to be checked by hand.
+- **The edge's `429` differs from the function's** in its content type (`application/json`), and it has no request id. A client that reads the body as Problem Details by its fields, not by its media type, handles both.
 - **A CDN of our own in front later** (regional endpoint plus our own CloudFront): WAF moves to CloudFront (scope `CLOUDFRONT`), and the app's per-IP key switches to the client address appended by that trusted proxy (a configured number of hops counted from the right, never the leftmost value).
 - **Local tests** all come from one Docker IP, so per-IP behaviour is covered mainly by unit tests, and the per-IP integration test uses its own configuration.
 - **A parameter that can't be read at all** (deleted, or SSM unreachable once the cache has expired) is treated like an invalid value: the last known good limits (or the defaults) stay in force, a `WARNING` `rate_limit_config_unavailable` is logged with the error type, and SSM is not asked again until the cache time has passed, so requests don't each pay for the failed read. A missing configuration never takes the API down.

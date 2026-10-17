@@ -56,5 +56,26 @@ after 3 requests) or `tiny-ip` (the IP after 3). Responses carry `RateLimit-Limi
 `RateLimit-Remaining` and `RateLimit-Reset`.
 
 Other targets: `make lint` (Ruff, mypy, import-linter, the OpenAPI lint of `make lint-openapi`,
-cdk-nag), `make docs` (read-only Swagger UI on http://localhost:8080). `make help` lists them all.
-The test targets pass `PYTEST_ARGS` on to pytest, e.g. `make contract-test PYTEST_ARGS=-x`.
+actionlint on the workflows, cdk-nag for every environment), `make docs` (read-only Swagger UI on
+http://localhost:8080). `make help` lists them all. The test targets pass `PYTEST_ARGS` on to
+pytest, e.g. `make contract-test PYTEST_ARGS=-x`.
+
+## On AWS
+
+The same targets run against real AWS with `ENV=aws-dev`, using your own AWS credentials (a
+profile or SSO) and no Floci:
+
+```sh
+make up ENV=aws-dev                 # check the account, bootstrap, deploy, seed demo users
+make test-integration ENV=aws-dev   # includes the aws_only tests: WAF blocks, the client address
+make contract-test ENV=aws-dev
+make down ENV=aws-dev               # cdk destroy
+```
+
+- **`aws-prod`** is the hardened example: data retained, termination protection, no demo users.
+- **The `aws-e2e` workflow** does the same from GitHub Actions, on a manual trigger only, through
+  GitHub OIDC, and always destroys the stack at the end.
+- **Before the first deploy,** the account needs a one-off setup: CDK's bootstrap, API Gateway's
+  logging role and, for the workflow, an OIDC role.
+- [`docs/aws.md`](docs/aws.md) describes that setup, the role's trust policy and permissions,
+  and the costs.

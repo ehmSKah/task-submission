@@ -117,6 +117,24 @@ Each of the assignment's five required categories (successful requests, invalid 
 - **Branch protection** on `main` requires `static`, `unit` and `floci`.
 - **No continuous deployment to production.** Deploying to AWS is optional and manual; CD belongs to production evolution.
 
+**Refined when the AWS run was prepared** (the tests and the workflow exist; nothing has run on AWS yet):
+- **Skipping:** `floci_only` and `aws_only` are decided in a `pytest_runtest_setup` hook before any fixture runs, so a skipped module switches no limits and waits for no window. On Floci the reason reads "runs against AWS only: Floci enforces no WAF rule and has no edge in front of the API, and every local request comes from one Docker address".
+- **The client's public address** comes from an IP echo service: `checkip.amazonaws.com`, then `api.ipify.org` if that fails (`tests/integration/public_address.py`). It is the suites' only dependency outside the deployment; with neither reachable, the `aws_only` tests fail rather than skip. Those tests send every request over IPv4 (the client binds to `0.0.0.0`), so the address asked for and the one that reaches the API are of the same family; IPv6 stays to be checked by hand ([ADR 0006](0006-rate-limiting.md)).
+- **`sourceIp` behind the edge** (`test_client_address.py`): one request as alice, and the counter table's only `ip#…` key must hold the public address, not one of CloudFront's.
+- **Per-IP limiting from a real address** (same module, `tiny-ip`): three users are served, the fourth request is a `429` naming `ip`, and the public address's counter reads 3.
+- **WAF really blocks** (`test_edge_firewall.py`):
+  - **Which rule:** `aws-dev`'s test-only rule (`wafTestRuleLimit`: 100), which counts only requests carrying the test header, so the other suites' requests from the same runner never count.
+  - **Pace:** header-carrying requests to `/api/v1/health` (no token, never limited by the function), five in parallel at about 20 a second, until the first `429`.
+  - **Bounds:** at most 240 s, so at most about 4,800 requests. WAF counts over 5 minutes and acts after a delay of its own, so the test can't wait for a count.
+  - **Checks on the answer:** the custom response's status, body (also against the `Problem` schema, since it comes as `application/json`), `Retry-After` and security headers; that the same address is still served without the header; and that `GetRateBasedStatementManagedKeys` lists the public address as `/32`, which shows WAF's `IP` key is the client and not the edge.
+  - **Cleanup:** none. The block covers only header-carrying requests and lifts by itself within the window.
+- **`aws-e2e.yml`:**
+  - **Credentials:** the job runs in a GitHub environment `aws-dev`, and the role trusts only OIDC tokens for that environment of this repository. The role's ARN is a repository variable (`AWS_E2E_ROLE_ARN`). The trust policy and the permissions are documented in [`docs/aws.md`](../aws.md), not created by code.
+  - **Runs:** one at a time (`concurrency`, a second run queues). The account is checked first (`make doctor ENV=aws-dev`), then deploy and seed, the integration suite, and the contract suite, which runs whenever the deploy succeeded.
+  - **Teardown:** in an always-run step, after a second credentials step that issues fresh credentials, so a long run still gets its stack destroyed. Each long step has its own timeout, which leaves time for it.
+  - **Artifacts:** only the token-checked JUnit reports. `build/endpoints.json` stays on the runner, because its ARNs name the account.
+  - **Checked statically:** `make lint` runs a pinned actionlint image over the workflows, and `tests/unit/test_aws_e2e_workflow.py` pins the promises above (manual trigger, OIDC and no keys, concurrency, destroy last and always).
+
 ## Considered options
 
 - **`moto` for adapter tests.** It needs no Docker and is very fast, but it would be a second emulator with its own quirks, able to pass where Floci fails or the other way round. One emulator means one source of truth, with no `boto3` mocks anywhere but one: failures the emulator can't produce on cue (a throttled key, a hanging or unreachable table) are injected with botocore's `Stubber` and local sockets that never answer, in the unit tier (`tests/unit/test_dynamodb_rate_limit_failures.py`). They prove the counter adapter's error translation and time budget ([ADR 0006](0006-rate-limiting.md)), not any DynamoDB behaviour.
