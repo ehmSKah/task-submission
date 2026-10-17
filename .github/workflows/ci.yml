@@ -1,5 +1,5 @@
 # Static checks, unit tests with the coverage gates, then the adapter, integration and contract
-# suites against Floci (ADR 0011).
+# suites and the demo against Floci (ADR 0011).
 name: ci
 
 on:
@@ -79,6 +79,8 @@ jobs:
       - run: make test-adapter PYTEST_ARGS=--junitxml=build/junit-adapter.xml
       - run: make test-integration PYTEST_ARGS=--junitxml=build/junit-integration.xml
       - run: make contract-test PYTEST_ARGS=--junitxml=build/junit-contract.xml
+      # The reviewer's scenario: fails on any unexpected status, restores the limits it switched.
+      - run: make demo
       - if: failure()
         run: |
           docker logs orders-api-floci-1 > build/floci.log 2>&1 || true
