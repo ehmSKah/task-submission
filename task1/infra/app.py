@@ -118,11 +118,6 @@ if config.target == "floci":
             reason="Local Floci environment: API Gateway access logs are an AWS-environment "
             "setting (ADR 0012).",
         ),
-        NagPackSuppression(
-            id="AwsSolutions-APIG3",
-            reason="Local Floci environment: no web ACL is associated yet; ADR 0006 defines "
-            "the WAF edge layer.",
-        ),
     ]
 NagSuppressions.add_resource_suppressions(
     stack.api.rest_api, api_suppressions, apply_to_children=True

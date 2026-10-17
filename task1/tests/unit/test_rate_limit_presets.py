@@ -50,7 +50,7 @@ def test_a_test_starts_with_enough_of_its_window_left(second: float, slept: floa
 
 
 def test_the_test_helpers_refuse_to_run_without_test_fixtures() -> None:
-    production = config(testFixtures=False)
+    production = config(testFixtures=False, wafTestRuleLimit=None)
 
     with pytest.raises(SystemExit, match="testFixtures"):
         rate_limits.empty_counters(production)

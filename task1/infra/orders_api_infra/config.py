@@ -60,6 +60,15 @@ class EnvConfig(BaseModel):
     rate_limit_config_cache_seconds: int = Field(
         default=60, ge=1, le=300, alias="rateLimitConfigCacheSeconds"
     )
+    # WAF's rate-based rule: requests per client IP in any 5 minutes before the edge answers
+    # `429`. AWS WAF's minimum is 10 (ADR 0006).
+    waf_rate_limit: int = Field(default=3000, ge=10, le=2_000_000_000, alias="wafRateLimit")
+    # A second, test-only rate-based rule with a deliberately low limit that counts only requests
+    # carrying the WAF test header, so the `aws_only` test can trip it without the other suites'
+    # requests from the same address ever being blocked. Only with testFixtures (ADR 0011).
+    waf_test_rule_limit: int | None = Field(
+        default=None, ge=10, le=2_000_000_000, alias="wafTestRuleLimit"
+    )
     # Floci only: the issuer host tokens carry (FLOCI_HOSTNAME), reachable from Lambda
     # containers. On AWS the issuer comes from the user pool itself.
     floci_issuer_base_url: str | None = Field(default=None, alias="flociIssuerBaseUrl")
@@ -95,6 +104,12 @@ class EnvConfig(BaseModel):
                 raise ValueError(f"{key} is required when target is floci")
             if self.target == "aws" and value:
                 raise ValueError(f"{key} only applies when target is floci")
+        return self
+
+    @model_validator(mode="after")
+    def _test_rule_only_with_fixtures(self) -> "EnvConfig":
+        if self.waf_test_rule_limit is not None and not self.test_fixtures:
+            raise ValueError("wafTestRuleLimit needs testFixtures: true (ADR 0011)")
         return self
 
     def resolved_architecture(self, machine: str | None = None) -> Architecture:

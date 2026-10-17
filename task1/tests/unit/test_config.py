@@ -116,3 +116,22 @@ def test_rate_limits_are_cached_briefly_locally_and_for_a_minute_by_default(
 
 def test_each_environment_has_its_own_rate_limits_parameter() -> None:
     assert load_config("local", CONFIG_DIR).rate_limits_parameter == "/orders-api/local/rate-limits"
+
+
+def test_the_waf_limit_defaults_to_adr_0006s_and_respects_wafs_minimum(tmp_path: Path) -> None:
+    assert load_config("local", CONFIG_DIR).waf_rate_limit == 3000
+    (tmp_path / "tiny.yaml").write_text(
+        (CONFIG_DIR / "local.yaml").read_text() + "wafRateLimit: 9\n"
+    )
+
+    with pytest.raises(ValidationError):
+        load_config("tiny", tmp_path)
+
+
+def test_the_waf_test_rule_exists_only_with_the_test_fixtures(tmp_path: Path) -> None:
+    (tmp_path / "nofixtures.yaml").write_text(
+        (CONFIG_DIR / "local.yaml").read_text().replace("testFixtures: true", "testFixtures: false")
+    )
+
+    with pytest.raises(ValidationError, match="wafTestRuleLimit needs testFixtures"):
+        load_config("nofixtures", tmp_path)

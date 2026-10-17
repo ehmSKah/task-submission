@@ -42,6 +42,8 @@ def write(env: str, floci_url: str) -> dict[str, str]:
         "idempotencyTable": outputs["IdempotencyTableName"],
         "rateLimitTable": outputs["RateLimitTableName"],
         "rateLimitsParameter": outputs["RateLimitsParameterName"],
+        "webAclArn": outputs["WebAclArn"],
+        "apiStageArn": outputs["ApiStageArn"],
     }
     if "SeedUsersSecretName" in outputs:
         endpoints["seedUsersSecret"] = outputs["SeedUsersSecretName"]

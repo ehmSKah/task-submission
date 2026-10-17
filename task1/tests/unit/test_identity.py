@@ -23,6 +23,7 @@ def synth(env_config: EnvConfig) -> tuple[cdk.Stack, Identity, Template]:
 def test_test_fixtures_are_off_unless_an_environment_sets_them() -> None:
     settings = load_config("local").model_dump(by_alias=True)
     del settings["testFixtures"]
+    del settings["wafTestRuleLimit"]
     del settings["fixtureTokenValiditySeconds"]
 
     unset = EnvConfig.model_validate(settings)
@@ -40,7 +41,7 @@ def test_local_sets_up_the_test_fixtures_with_second_long_tokens() -> None:
 
 @pytest.fixture(scope="module")
 def without_fixtures() -> tuple[cdk.Stack, Identity, Template]:
-    return synth(config(testFixtures=False))
+    return synth(config(testFixtures=False, wafTestRuleLimit=None))
 
 
 @pytest.fixture(scope="module")
@@ -131,6 +132,6 @@ def test_the_authorizer_gets_the_cognito_profile(
 
 
 def test_the_authorizer_gets_the_everyone_is_user_switch_when_an_environment_sets_it() -> None:
-    _, identity, _ = synth(config(everyoneIsUser=True, testFixtures=False))
+    _, identity, _ = synth(config(everyoneIsUser=True, testFixtures=False, wafTestRuleLimit=None))
 
     assert identity.authorizer_environment["ROLES_EVERYONE_IS_USER"] == "true"

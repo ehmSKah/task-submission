@@ -14,3 +14,5 @@ rateLimitConfigCacheSeconds: 2
 fixtureTokenValiditySeconds: 1
 flociIssuerBaseUrl: http://floci:4566
 flociUserPoolId: us-east-1_ordersapilocal
+# Deployed and read back on Floci, not enforced there (ADR 0006).
+wafTestRuleLimit: 100

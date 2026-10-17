@@ -1,4 +1,5 @@
-"""The Api construct: the authorizer, the API function and the REST API built from OpenAPI."""
+"""The Api construct: the authorizer, the API function, the REST API built from OpenAPI and the
+WAF web ACL in front of it."""
 
 import aws_cdk as cdk
 from aws_cdk import aws_apigateway as apigateway
@@ -12,6 +13,7 @@ from orders_api.adapters.outbound.dynamodb_orders import BY_CREATED_INDEX, BY_OW
 from orders_api_infra.config import Architecture, EnvConfig
 from orders_api_infra.openapi_extensions import load_spec, with_aws_extensions
 from orders_api_infra.paths import BUNDLE_DIR
+from orders_api_infra.waf import WebAcl
 
 ARCHITECTURES = {
     Architecture.ARM_64: lambda_.Architecture.ARM_64,
@@ -134,6 +136,7 @@ class Api(Construct):
             deploy_options=apigateway.StageOptions(stage_name=config.stage_name),
             cloud_watch_role=False,
         )
+        self.web_acl = WebAcl(self, "WebAcl", config=config, stage=self.rest_api.deployment_stage)
 
         # Only this API may invoke either function (ADRs 0003 and 0012).
         stack = cdk.Stack.of(self)
