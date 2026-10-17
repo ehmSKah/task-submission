@@ -40,6 +40,7 @@ from orders_api.adapters.inbound.rate_limiting import (
     RateLimitExceeded,
     client_ip,
     rate_limit_headers,
+    report_rate_limiter_event,
 )
 from orders_api.adapters.inbound.request_checks import InvalidRequest
 from orders_api.adapters.outbound.dynamodb_idempotency import dynamodb_store
@@ -47,6 +48,7 @@ from orders_api.adapters.outbound.dynamodb_orders import DynamoDbOrderRepository
 from orders_api.adapters.outbound.dynamodb_rate_limits import DynamoDbRateLimitCounters
 from orders_api.adapters.outbound.ssm_rate_limits import SsmRateLimitConfig
 from orders_api.adapters.outbound.system import RandomOrderIds, SystemClock
+from orders_api.application.fail_open_counters import FailOpenCounterStore
 from orders_api.application.orders import (
     Clock,
     IdGenerator,
@@ -98,7 +100,10 @@ def rate_limiter() -> RateLimiter:
         os.environ["RATE_LIMITS_PARAMETER"],
         max_age_seconds=int(os.environ["RATE_LIMITS_MAX_AGE_SECONDS"]),
     )
-    return RateLimiter(DynamoDbRateLimitCounters(os.environ["RATE_LIMIT_TABLE"]), config, clock)
+    counters = FailOpenCounterStore(
+        DynamoDbRateLimitCounters(os.environ["RATE_LIMIT_TABLE"]), events=report_rate_limiter_event
+    )
+    return RateLimiter(counters, config, clock)
 
 
 # This request's rate-limit decision, once step 3 has made it: every response from then on, an

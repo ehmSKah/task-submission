@@ -15,6 +15,8 @@ from aws_lambda_powertools.utilities.idempotency.persistence.datarecord import (
     DataRecord,
 )
 
+from orders_api.adapters.inbound.rate_limiting import report_rate_limiter_event
+from orders_api.application.fail_open_counters import FailOpenCounterStore
 from orders_api.application.orders import Clock, OrderPage, PagePosition
 from orders_api.application.rate_limiting import RateLimitCounterStore, RateLimiter
 from orders_api.domain.order import Order
@@ -179,10 +181,53 @@ class InMemoryRateLimitCounters:
 
 
 class FailingRateLimitCounters:
-    """A counter store that can't be reached."""
+    """A counter store that fails with an error the port doesn't name, as a defect would."""
 
     def increment(self, key: str, *, limit: int, expires_at: datetime) -> int | None:
         raise ConnectionError("counter store unreachable")
+
+
+class UnreliableRateLimitCounters(InMemoryRateLimitCounters):
+    """In-memory counters that fail as the port says the real store may: set `failure` to a
+    `CounterStoreUnavailable` or `CounterStoreThrottled`, or back to `None` once it recovers."""
+
+    def __init__(self, failure: Exception | None = None) -> None:
+        super().__init__()
+        self.failure = failure
+        self.calls = 0
+
+    def increment(self, key: str, *, limit: int, expires_at: datetime) -> int | None:
+        self.calls += 1
+        if self.failure is not None:
+            raise self.failure
+        return super().increment(key, limit=limit, expires_at=expires_at)
+
+
+class ManualTime:
+    """A monotonic time source that moves only when told to, in seconds."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class RecordedEvents:
+    """Operational events as reported, in order: `(event, fields)`."""
+
+    def __init__(self) -> None:
+        self.reported: list[tuple[str, dict[str, object]]] = []
+
+    def __call__(self, event: str, /, **fields: object) -> None:
+        self.reported.append((event, fields))
+
+    @property
+    def names(self) -> list[str]:
+        return [event for event, _ in self.reported]
 
 
 class SwitchableRateLimitConfig:
@@ -197,17 +242,21 @@ class SwitchableRateLimitConfig:
 
 class RateLimitsInUse:
     """What the API function counts with in unit tests: in-memory counters and limits that a test
-    can switch, read through a real `RateLimiter`."""
+    can switch, read through a real `RateLimiter` and, as in the function, a fail-open store
+    that logs its events (on a time source that only moves when told to)."""
 
     def __init__(self, clock: Clock) -> None:
         self.counters = InMemoryRateLimitCounters()
         self.config = SwitchableRateLimitConfig()
-        self._store: RateLimitCounterStore = self.counters
+        self.time = ManualTime()
         self._clock = clock
+        self.use_counters(self.counters)
 
     def use_counters(self, store: RateLimitCounterStore) -> None:
         """Count in `store` instead, e.g. one that fails."""
-        self._store = store
+        self._store = FailOpenCounterStore(
+            store, events=report_rate_limiter_event, time_source=self.time
+        )
 
     def limiter(self) -> RateLimiter:
         return RateLimiter(self._store, self.config, self._clock)

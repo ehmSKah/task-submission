@@ -119,7 +119,7 @@ Each of the assignment's five required categories (successful requests, invalid 
 
 ## Considered options
 
-- **`moto` for adapter tests.** It needs no Docker and is very fast, but it would be a second emulator with its own quirks, able to pass where Floci fails or the other way round. One emulator means one source of truth, with no `boto3` mocks anywhere.
+- **`moto` for adapter tests.** It needs no Docker and is very fast, but it would be a second emulator with its own quirks, able to pass where Floci fails or the other way round. One emulator means one source of truth, with no `boto3` mocks anywhere but one: failures the emulator can't produce on cue (a throttled key, a hanging or unreachable table) are injected with botocore's `Stubber` and local sockets that never answer, in the unit tier (`tests/unit/test_dynamodb_rate_limit_failures.py`). They prove the counter adapter's error translation and time budget ([ADR 0006](0006-rate-limiting.md)), not any DynamoDB behaviour.
 - **Integration tests that call the handlers in-process.** Faster, but they skip the gateway validators, Gateway Responses and the authorizer cache, which several ADRs depend on.
 - **Isolating every token check end to end.** Impossible with a real provider: only Cognito can sign, and its key id is tied to the pool. Unit tests isolate the checks, and end-to-end tests cover realistic attacks.
 - **Separate deployments per test suite** (tiny or high limits). Replaced by switching the runtime SSM parameter, which also demonstrates ADR 0006.

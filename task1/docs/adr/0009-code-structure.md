@@ -19,7 +19,7 @@ The code is **one Python package** organised as **ports and adapters**. The doma
   - test fakes
   - the documented swaps: AppConfig for SSM, Redis for DynamoDB counters, a container for Lambda, another identity provider
 - **Ports:** `OrderRepository`, `RateLimitCounterStore`, `RateLimitConfigSource`, `Clock`, `IdGenerator`.
-- **Deep modules:** behind each port sits a module with a small interface hiding substantial behaviour. For example, `RateLimiter.check(ip, subject, roles) -> Decision` hides fixed windows, IPv6 `/64` keys, role tiers, the in-memory fallback and the circuit breaker. The OIDC validator hides discovery, JWKS caching and the nine checks.
+- **Deep modules:** behind each port sits a module with a small interface hiding substantial behaviour. For example, `RateLimiter.check(ip, subject, roles) -> Decision` hides fixed windows, IPv6 `/64` keys and role tiers; the counter store it is wired with, `FailOpenCounterStore`, hides the in-memory fallback and the circuit breaker behind the same `RateLimitCounterStore` port. The OIDC validator hides discovery, JWKS caching and the nine checks.
 - **Enforced:** an **import-linter** contract in CI fails the build if `domain` or `application` import `boto3`, `aws_lambda_powertools` or any adapter module.
 
 **Layout.**
