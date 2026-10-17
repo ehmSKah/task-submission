@@ -8,7 +8,6 @@ limits (ADR 0006) and restores the previous ones afterwards, also when it fails.
 Usage: python -m orders_api_infra.demo --env local
 """
 
-import argparse
 import base64
 import json
 import sys
@@ -24,7 +23,7 @@ import jwt
 
 from orders_api.domain.access import Role
 from orders_api_infra import endpoints, rate_limits
-from orders_api_infra.config import EnvConfig, load_config
+from orders_api_infra.config import EnvConfig
 from orders_api_infra.demo_users import access_token, demo_user
 from orders_api_infra.rate_limits import PRESETS
 
@@ -223,11 +222,7 @@ def _target(config: EnvConfig, client: httpx.Client) -> Target:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--env", default="local")
-    args = parser.parse_args()
-    config = load_config(args.env)
-    api_url = endpoints.read()["apiUrl"]
+    config, api_url = endpoints.deployed_api(__doc__)
     print(f"Orders API demo against {api_url} (env {config.name})\n")
     with httpx.Client(base_url=api_url, timeout=30) as client:
         passed = run(SCENARIO, _target(config, client))

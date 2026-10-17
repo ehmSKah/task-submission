@@ -7,11 +7,14 @@ Usage: python -m orders_api_infra.endpoints --env local --floci-url http://local
 
 import argparse
 import json
+from pathlib import Path
 from typing import Any
 
 from orders_api_infra.config import EnvConfig, load_config
 from orders_api_infra.identity import FIXTURE_OUTPUTS
 from orders_api_infra.paths import BUILD_DIR
+
+ENDPOINTS_FILE = BUILD_DIR / "endpoints.json"
 
 
 def api_base_url(config: EnvConfig, outputs: dict[str, str], floci_url: str) -> str:
@@ -28,13 +31,27 @@ def stack_outputs(config: EnvConfig) -> dict[str, str]:
     return outputs
 
 
-def read() -> dict[str, Any]:
-    """`build/endpoints.json`, as the last `make up` (or `make endpoints`) wrote it."""
-    path = BUILD_DIR / "endpoints.json"
+def read(env: str | None = None, *, path: Path = ENDPOINTS_FILE) -> dict[str, Any]:
+    """`build/endpoints.json`, as the last `make up` (or `make endpoints`) wrote it. With `env`,
+    a file written for another environment is refused, so one environment's config and tokens
+    never go to the other's API."""
     if not path.is_file():
         raise SystemExit("build/endpoints.json is missing: run `make up` first")
     endpoints: dict[str, Any] = json.loads(path.read_text())
+    if env is not None and endpoints["env"] != env:
+        raise SystemExit(
+            f"build/endpoints.json is for environment '{endpoints['env']}', not '{env}': "
+            f"run `make up ENV={env}` (or `make endpoints ENV={env}`) first"
+        )
     return endpoints
+
+
+def deployed_api(description: str | None) -> tuple[EnvConfig, str]:
+    """For a command that calls the deployed API: the config of `--env`, and its API URL."""
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--env", default="local")
+    config = load_config(parser.parse_args().env)
+    return config, read(config.name)["apiUrl"]
 
 
 def write(env: str, floci_url: str) -> dict[str, str]:
@@ -61,7 +78,7 @@ def write(env: str, floci_url: str) -> dict[str, str]:
     for output, key in FIXTURE_OUTPUTS.items():
         if output in outputs:
             endpoints[key] = outputs[output]
-    (BUILD_DIR / "endpoints.json").write_text(json.dumps(endpoints, indent=2) + "\n")
+    ENDPOINTS_FILE.write_text(json.dumps(endpoints, indent=2) + "\n")
     return endpoints
 
 

@@ -8,7 +8,6 @@ so it is git-ignored and readable by its owner only. Access tokens expire after 
 Usage: python -m orders_api_infra.http_env --env local
 """
 
-import argparse
 import json
 import os
 from collections.abc import Mapping
@@ -16,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 from orders_api_infra import endpoints
-from orders_api_infra.config import load_config
 from orders_api_infra.demo_users import DEMO_USERS, access_token
 from orders_api_infra.paths import PROJECT_DIR
 
@@ -55,11 +53,7 @@ def report(path: Path, env: str, values: Mapping[str, str]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--env", default="local")
-    args = parser.parse_args()
-    config = load_config(args.env)
-    api_url = endpoints.read()["apiUrl"]
+    config, api_url = endpoints.deployed_api(__doc__)
     tokens = {user.name: access_token(config, user) for user in DEMO_USERS}
     values = environment(api_url, tokens)
     write(ENV_FILE, config.name, values)

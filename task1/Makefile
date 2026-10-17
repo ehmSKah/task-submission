@@ -88,8 +88,10 @@ PRESET ?= defaults
 limits: guard ## Switch the runtime rate limits, no deploy: PRESET=defaults|high|tiny|tiny-ip
 	$(RUN_INFRA_MODULE) orders_api_infra.rate_limits --env $(ENV) --preset $(PRESET)
 
-# Needs the environment's testFixtures: the rate-limit step empties the counters and waits out
-# the cache, as the test suites do (ADR 0011).
+# `demo` and `http-env` call the API that build/endpoints.json names, with ENV's config and
+# tokens; they refuse a file written for another ENV (run `make endpoints ENV=…` first).
+# `demo` needs the environment's testFixtures: the rate-limit step empties the counters and waits
+# out the cache, as the test suites do (ADR 0011).
 demo: guard ## Run the one-minute scenario against the deployed stack; fails on any unexpected status
 	$(RUN_INFRA_MODULE) orders_api_infra.demo --env $(ENV)
 
