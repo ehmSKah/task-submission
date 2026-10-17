@@ -225,6 +225,19 @@ def delete_order_by_id(order_id: str) -> Response[str]:
     return Response(status_code=204)
 
 
+# After the routes above, so it only takes what they can't match: the router accepts word and
+# URI-safe characters in `<order_id>`, the gateway any one path segment for `{id}`. The gateway
+# has matched the resource, so the request is for an order and its id is malformed: a `400` after
+# steps 2 and 3, like any other id that isn't a UUID (ADR 0007).
+@app.route("/api/v1/orders/(.+)/status", method="PATCH")
+@app.route("/api/v1/orders/(.+)", method=["GET", "DELETE"])
+def unroutable_order_id() -> Response[str]:
+    admitted_caller()
+    requested_order_id((app.current_event.path_parameters or {}).get("id", ""))
+    # A UUID always matches the routes above, so the check has answered `400` by now.
+    return problem_response(ProblemType.NOT_FOUND)
+
+
 def problem_response(
     problem: ProblemType,
     detail: str | None = None,

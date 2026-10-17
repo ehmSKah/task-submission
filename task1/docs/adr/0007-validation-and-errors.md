@@ -78,7 +78,7 @@ Request bodies are validated **at API Gateway** by request validators, so an inv
 | `Content-Type` isn't `application/json` on `POST`/`PATCH` | `415` | function |
 | Body over 64 KB | `413` | function |
 | Unknown or repeated query parameter; `limit` not an integer 1–100; cursor doesn't decode or belongs to another list | `400` with `errors[]`, one entry per offending parameter | function |
-| Path `{id}` doesn't match the UUID pattern declared in the OpenAPI document | `400` with `errors[]` pointing at the path parameter | function (the gateway only checks that parameters are present, not their format) |
+| Path `{id}` doesn't match the UUID pattern declared in the OpenAPI document | `400` with `errors[]` pointing at the path parameter | function (the gateway only checks that parameters are present, not their format). That includes an id the function's router can't match at all (a control character, a zero-width space): a catch-all route behind the order routes answers it with the same `400` instead of "no such route" |
 | Unknown path or method | `404` | gateway (`MISSING_AUTHENTICATION_TOKEN` remapped from its default `403`) |
 | `Accept` asks for something other than JSON | ignored; responses are always JSON | — |
 

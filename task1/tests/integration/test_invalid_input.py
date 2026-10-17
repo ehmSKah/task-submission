@@ -134,6 +134,28 @@ def test_malformed_path_id_is_400_naming_the_parameter(
     assert [error["parameter"] for error in response.json()["errors"]] == ["id"]
 
 
+# Ids the function's router can't match (a control character, a zero-width space): the gateway
+# passes them on decoded, and they are malformed like any other id that isn't a UUID.
+@pytest.mark.parametrize("encoded_id", ["%C2%84", "abc%E2%80%8Bdef"])
+@pytest.mark.parametrize(
+    ("method", "suffix", "body"),
+    [("GET", "", None), ("DELETE", "", None), ("PATCH", "/status", {"status": "CANCELLED"})],
+    ids=["get", "delete", "change-status"],
+)
+def test_an_id_the_router_can_t_match_is_400_too(
+    api: httpx.Client,
+    alice: dict[str, str],
+    encoded_id: str,
+    method: str,
+    suffix: str,
+    body: Any,
+) -> None:
+    response = api.request(method, f"{ORDERS}/{encoded_id}{suffix}", json=body, headers=alice)
+
+    assert_problem(response, 400, "validation-error")
+    assert [error["parameter"] for error in response.json()["errors"]] == ["id"]
+
+
 def test_the_authorizer_runs_before_request_validation(api: httpx.Client) -> None:
     """An invalid body without a token is a 401, not a 400 (ADR 0007, to verify)."""
     response = post_json(api, {}, {**NEW_ORDER, "totalAmount": 1})
