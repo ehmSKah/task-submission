@@ -31,11 +31,11 @@ An idempotency key based on the event id alone catches S1 but not S2: order `3f1
 **Schema**
 ```
 orders            order_id PK, customer_id, placed_at, currency, total, item_count,
-                  accepted_at, first_event_id, correlation_id
+                  accepted_at, first_event_id, trace_id
 order_lines       order_id FK → orders, sku, quantity, unit_price, line_total
                   PK (order_id, sku); CHECK quantity > 0; CHECK unit_price >= 0
 processed_events  event_id PK, order_id FK → orders, outcome (accepted | duplicate),
-                  received_at, topic, partition, offset, correlation_id
+                  received_at, topic, partition, offset, trace_id
 ```
 - **One transaction** writes the order, its lines and the `processed_events` row. A duplicate writes only its `processed_events` row (if its event id is new).
 - **The `orders` primary key is the final guard.** When two consumers race on the same order, one insert wins; the other sees the existing order and becomes a duplicate or a conflict.

@@ -10,7 +10,7 @@ The consumer handles exactly one kind of event, the **order placed event**, whic
 
 **Shape**
 ```json
-// Kafka key: the order id.  Kafka header: correlation-id
+// Kafka key: the order id.  Kafka header: traceparent (W3C Trace Context)
 {
   "specversion": "1.0",
   "id": "7d2e…",                                   // event id (UUID)
@@ -32,7 +32,7 @@ The consumer handles exactly one kind of event, the **order placed event**, whic
 - **One event type, `order.placed`.** There are no updated or cancelled events. The README states the assumption that the assignment's "order events" are order placements.
 - **The event id and the order id are different identities.** A redelivery keeps its event id; a new event about the same order gets a new one.
 - **The Kafka key is the order id**, so all events for one order land on one partition.
-- **The correlation id travels in a Kafka header** (`correlation-id`), not in the body, so it can be read even when the body can't. When the header is missing, the event id stands in for it.
+- **The correlation id travels in a Kafka header**, not in the body, so it can be read even when the body can't. It is the trace id of a W3C Trace Context `traceparent` header (ADR 0008); when the header is missing or invalid, a new trace is started and the event id is logged next to it.
 - **Money** is an integer in minor units with an ISO 4217 currency from an allow-list. The allow-list records each currency's exponent, so minor units can be turned into a decimal amount.
 - **No personal data.** The customer is a reference id. Dead letters keep the original bytes for the topic's retention, and logs describe events, so personal data in the event would spread to both. Keeping it out is deliberate data minimisation.
 - **`placedAt` and `time` are kept apart.** `placedAt` is the business fact; `time` is when the event was emitted. They differ when an event is emitted again later.
@@ -64,7 +64,7 @@ Event v1 ──(1)──► Order ──(2)──► Downstream request
 producer's        our own        downstream's
 contract          model          contract
 ```
-1. **Event v1 → Order.** Timestamps are normalised to UTC. Line totals and the item count are derived. Unknown fields are dropped. The event id, event time and correlation id are kept next to the order as processing metadata, not as order fields.
+1. **Event v1 → Order.** Timestamps are normalised to UTC. Line totals and the item count are derived. Unknown fields are dropped. The event id, event time and trace id are kept next to the order as processing metadata, not as order fields.
 2. **Order → Downstream request.** The downstream has its own shape, for example money as a decimal string with its currency and the order id as an external reference. The exact contract is decided with the downstream API.
 
 - **Both mappings are pure functions**, unit-tested without Kafka, a database or HTTP. A change in the producer's schema touches only mapping 1; a change in the downstream touches only mapping 2.

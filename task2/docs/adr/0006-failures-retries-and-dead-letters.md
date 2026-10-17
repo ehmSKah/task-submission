@@ -78,7 +78,7 @@ An outage is not a property of the message. Without a guard, a 30-minute fulfilm
 **What a dead letter carries**
 - **Value:** the original bytes, unchanged, even when unreadable.
 - **Key:** the original key (the order id).
-- **Original headers:** copied unchanged, including `correlation-id`.
+- **Original headers:** copied unchanged, including `traceparent`; if the consumer had to start a new trace, its `traceparent` is set so the dead letter and its log lines share one trace id (ADR 0008).
 - **Failure headers**, each with its own key (kafka-ui shows headers as a map, so a repeated key would hide values):
 
 | Header | Content |
@@ -91,7 +91,7 @@ An outage is not a property of the message. Without a guard, a 30-minute fulfilm
 | `dlt.event-id`, `dlt.order-id` | when they could be read |
 | `dlt.consumer` | consumer group and instance |
 
-- **Never in a dead letter:** the bearer token and stack traces. Stack traces are in the error log, found through the correlation id.
+- **Never in a dead letter:** the bearer token and stack traces. Stack traces are in the error log, found through the trace id.
 - **The naming follows Spring Kafka's** dead-letter headers (`kafka_dlt-exception-message`, `kafka_dlt-original-topic`, …), so the scheme is familiar to anyone who knows that convention.
 - **Order of steps:** `handover_failed` is set (when an order exists), then the dead letter is written, then, **once the broker has confirmed it**, the offset is committed.
 - **Dead letters are at-least-once.** A crash after the confirmation but before the commit writes the same dead letter twice. Replaying both is harmless, because processing is idempotent.

@@ -14,7 +14,7 @@ POST /fulfilment-orders
 Authorization: Bearer <token>
 Content-Type: application/json
 Idempotency-Key: 3f1c…            # the order id (ADR 0002)
-X-Correlation-Id: …
+traceparent: 00-…               # W3C Trace Context, the correlation id (ADR 0008)
 
 {
   "externalReference": "3f1c…",
