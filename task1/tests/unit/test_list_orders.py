@@ -32,7 +32,7 @@ def walk(repository: OrderRepository, caller: Caller, limit: int) -> list[list[O
     """Every page, following positions until there is none."""
     pages, after = [], None
     while True:
-        page = list_orders(repository, caller, limit=limit, after=after)
+        page = list_orders(repository, listed_owner(caller), limit=limit, after=after)
         pages.append(list(page.orders))
         if page.next_position is None:
             return pages
@@ -42,7 +42,7 @@ def walk(repository: OrderRepository, caller: Caller, limit: int) -> list[list[O
 def test_a_user_lists_only_their_own_orders_newest_first() -> None:
     repository = InMemoryOrderRepository([order(1), order(2, "bob-sub"), order(3)])
 
-    page = list_orders(repository, ALICE, limit=10, after=None)
+    page = list_orders(repository, listed_owner(ALICE), limit=10, after=None)
 
     assert page.orders == (order(3), order(1))
     assert page.next_position is None
@@ -53,7 +53,7 @@ def test_staff_with_read_any_list_everyone_s_orders(role: Role) -> None:
     staff = Caller(subject="staff-sub", roles=frozenset({role}))
     repository = InMemoryOrderRepository([order(1), order(2, "bob-sub")])
 
-    assert list_orders(repository, staff, limit=10, after=None).orders == (
+    assert list_orders(repository, listed_owner(staff), limit=10, after=None).orders == (
         order(2, "bob-sub"),
         order(1),
     )
@@ -64,9 +64,9 @@ def test_listed_owner_is_the_scope_of_the_caller_s_list() -> None:
     assert listed_owner(MANAGER) is None
 
 
-def test_a_caller_without_any_read_permission_lists_nothing() -> None:
+def test_a_caller_without_any_read_permission_has_no_list() -> None:
     with pytest.raises(PermissionDenied):
-        list_orders(InMemoryOrderRepository([order(1, "nobody-sub")]), NOBODY, limit=10, after=None)
+        listed_owner(NOBODY)
 
 
 def test_walking_the_pages_returns_every_order_once_newest_first() -> None:
@@ -97,10 +97,10 @@ def test_equal_timestamps_are_ordered_by_id_so_pages_never_repeat_or_skip() -> N
 
 def test_orders_created_during_a_walk_are_not_part_of_it() -> None:
     repository = InMemoryOrderRepository([order(n) for n in range(1, 5)])
-    first = list_orders(repository, ALICE, limit=2, after=None)
+    first = list_orders(repository, listed_owner(ALICE), limit=2, after=None)
     repository.add(order(9))
 
-    rest = list_orders(repository, ALICE, limit=10, after=first.next_position)
+    rest = list_orders(repository, listed_owner(ALICE), limit=10, after=first.next_position)
 
     assert first.orders + rest.orders == (order(4), order(3), order(2), order(1))
 
@@ -109,7 +109,7 @@ def test_a_position_survives_the_deletion_of_the_order_it_names() -> None:
     repository = InMemoryOrderRepository([order(n) for n in range(1, 4)])
     gone = PagePosition(created_at=order(5).created_at, order_id=order(5).id)
 
-    assert list_orders(repository, ALICE, limit=10, after=gone).orders == (
+    assert list_orders(repository, listed_owner(ALICE), limit=10, after=gone).orders == (
         order(3),
         order(2),
         order(1),

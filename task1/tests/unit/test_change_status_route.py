@@ -86,6 +86,22 @@ def test_a_change_the_lifecycle_doesn_t_allow_is_a_409(wire_api: WireApi) -> Non
     assert stored_status(repository) == (OrderStatus.SHIPPED, 1)
 
 
+@pytest.mark.parametrize(
+    ("order_id", "status", "expected"),
+    [(UNKNOWN_ID, "CONFIRMED", 404), (ALICES_ORDER.id, "DELIVERED", 409)],
+    ids=["404", "409"],
+)
+def test_a_refused_change_logs_the_order_it_was_for(
+    log_output: io.StringIO, order_id: str, status: str, expected: int
+) -> None:
+    invoke(change_status_event(order_id, status=status, authorizer=ADMIN))
+
+    lines = [json.loads(line) for line in log_output.getvalue().splitlines() if line]
+    access = next(line for line in lines if line["message"] == "request")
+    assert access["status"] == expected
+    assert access["orderId"] == order_id
+
+
 def test_the_owner_losing_a_race_against_shipping_gets_a_409(wire_api: WireApi) -> None:
     repository = wire_api([an_order(owner_id="alice-sub", status=OrderStatus.CONFIRMED)])
     repository.interleave(lambda: invoke(change_status_event(ALICES_ORDER.id, status="SHIPPED")))

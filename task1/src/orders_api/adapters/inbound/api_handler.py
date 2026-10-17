@@ -100,6 +100,14 @@ def identified_caller() -> Caller:
     return caller
 
 
+def requested_order_id(order_id: str) -> str:
+    """Step 4 for the path `{id}`: a UUID or a `400`. Logged from here on, so every outcome
+    for the order, `404`, `409` or `412` included, carries its id (ADR 0012)."""
+    order_id = valid_order_id(order_id)
+    logger.append_keys(orderId=order_id)
+    return order_id
+
+
 def order_response(order: Order, status_code: int) -> Response[str]:
     """An order in its published shape, with its version as the `ETag` (ADR 0004)."""
     logger.append_keys(orderId=order.id)
@@ -136,7 +144,7 @@ def post_order() -> Response[str]:
 @app.get("/api/v1/orders/<order_id>")
 def get_order_by_id(order_id: str) -> Response[str]:
     caller = identified_caller()
-    order_id = valid_order_id(order_id)
+    order_id = requested_order_id(order_id)
     check_may_read(caller)
     return order_response(get_order(orders(), caller, order_id), 200)
 
@@ -145,10 +153,9 @@ def get_order_by_id(order_id: str) -> Response[str]:
 def get_orders() -> Response[str]:
     caller = identified_caller()
     query = order_list_query(app.current_event)
-    check_may_read(caller)
-    # Which list the caller sees is known only now, so a cursor's binding is checked here.
+    # Step 6. Which list the caller sees is known only now, so a cursor's binding is checked here.
     owner_id = listed_owner(caller)
-    page = list_orders(orders(), caller, limit=query.limit, after=query.start_in(owner_id))
+    page = list_orders(orders(), owner_id, limit=query.limit, after=query.start_in(owner_id))
     return Response(
         status_code=200,
         content_type=JSON_MEDIA_TYPE,
@@ -159,7 +166,7 @@ def get_orders() -> Response[str]:
 @app.patch("/api/v1/orders/<order_id>/status")
 def patch_order_status(order_id: str) -> Response[str]:
     caller = identified_caller()
-    order_id = valid_order_id(order_id)
+    order_id = requested_order_id(order_id)
     status = requested_status_from(app.current_event)
     # Step 6 needs the body: cancelling and every other status need different permissions.
     check_may_change_status(caller, status)
@@ -177,9 +184,8 @@ def patch_order_status(order_id: str) -> Response[str]:
 @app.delete("/api/v1/orders/<order_id>")
 def delete_order_by_id(order_id: str) -> Response[str]:
     caller = identified_caller()
-    order_id = valid_order_id(order_id)
+    order_id = requested_order_id(order_id)
     check_may_delete(caller)
-    logger.append_keys(orderId=order_id)
     delete_order(orders(), order_id)
     return Response(status_code=204)
 

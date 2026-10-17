@@ -115,16 +115,16 @@ def create_order(
 
 def listed_owner(caller: Caller) -> str | None:
     """Whose orders the caller lists: everyone's (`None`) with `order:read:any`, else only their
-    own (ADR 0001). `PermissionDenied` if they may read no orders at all."""
+    own (ADR 0001). The list's permission step: `PermissionDenied` if they may read no orders."""
     check_may_read(caller)
     return None if Permission.READ_ANY in caller.permissions else caller.subject
 
 
 def list_orders(
-    repository: OrderRepository, caller: Caller, *, limit: int, after: PagePosition | None
+    repository: OrderRepository, owner_id: str | None, *, limit: int, after: PagePosition | None
 ) -> OrderPage:
-    """One page of the orders the caller may see, newest first (ADR 0004)."""
-    return repository.list_newest_first(owner_id=listed_owner(caller), limit=limit, after=after)
+    """One page of the list `listed_owner` chose for the caller, newest first (ADR 0004)."""
+    return repository.list_newest_first(owner_id=owner_id, limit=limit, after=after)
 
 
 class VersionMismatch(Exception):
@@ -145,8 +145,9 @@ def check_may_change_status(caller: Caller, status: OrderStatus) -> None:
     caller.require(*permissions_to_change_to(status))
 
 
-# Each lost race means another status change succeeded. Changes only move forward, so an order
-# can win at most three races against one request; the bound only guards against a broken store.
+# Each lost race means another status change succeeded. Changes only move forward, at most three
+# steps from PENDING to DELIVERED, so a request loses at most three races and writes at most four
+# times. One attempt per status leaves room for that; the bound only guards against a broken store.
 _MAX_WRITE_ATTEMPTS = len(OrderStatus)
 
 
