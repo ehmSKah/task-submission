@@ -54,9 +54,35 @@ def test_a_blocked_request_gets_a_429_with_a_static_retry_after_and_the_security
 
     response = rule["Action"]["Block"]["CustomResponse"]
     assert response["ResponseCode"] == 429
-    headers = {header["Name"]: header["Value"] for header in response["ResponseHeaders"]}
-    assert headers == {"Retry-After": "300", **SECURITY_HEADERS}
+    assert blocked_response_headers(template) == {
+        "Retry-After": "300",
+        **SECURITY_HEADERS,
+        # local allows Swagger UI's origin, which a static value can name (ADR 0014).
+        "Access-Control-Allow-Origin": "http://localhost:8080",
+        "Access-Control-Expose-Headers": (
+            "ETag, RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset, Retry-After, X-Request-Id"
+        ),
+        "Vary": "Origin",
+    }
     assert response["CustomResponseBodyKey"] in web_acl(template)["CustomResponseBodies"]
+
+
+def blocked_response_headers(template: Template) -> dict[str, str]:
+    [rule] = rules_by_name(template).values()
+    headers = rule["Action"]["Block"]["CustomResponse"]["ResponseHeaders"]
+    return {header["Name"]: header["Value"] for header in headers}
+
+
+@pytest.mark.parametrize("origins", [[], ["http://localhost:8080", "https://app.example.com"]])
+def test_the_429_names_no_origin_unless_exactly_one_is_allowed(
+    origins: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WAF takes static headers only, so it can't choose among several origins (ADR 0014)."""
+    template = synth(
+        config(wafTestRuleLimit=None, corsAllowedOrigins=origins), tmp_path, monkeypatch
+    )[2]
+
+    assert blocked_response_headers(template) == {"Retry-After": "300", **SECURITY_HEADERS}
 
 
 def test_the_429_body_is_the_rate_limited_problem_without_a_request_id(

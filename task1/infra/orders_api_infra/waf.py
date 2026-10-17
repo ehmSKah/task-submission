@@ -6,12 +6,14 @@ can be read back through the WAF API, but nothing is enforced.
 """
 
 import json
+from collections.abc import Sequence
 
 import aws_cdk as cdk
 from aws_cdk import aws_apigateway as apigateway
 from aws_cdk import aws_wafv2 as wafv2
 from constructs import Construct
 
+from orders_api.adapters.inbound.cors import static_cors_headers
 from orders_api.adapters.inbound.http_headers import SECURITY_HEADERS
 from orders_api.adapters.inbound.problems import ProblemType, problem_body
 from orders_api_infra.config import EnvConfig
@@ -40,14 +42,23 @@ def rate_limited_problem() -> dict[str, object]:
     return problem_body(ProblemType.RATE_LIMITED, request_id=None, detail=RATE_LIMITED_DETAIL)
 
 
-def rate_limited_headers() -> dict[str, str]:
+def rate_limited_headers(cors_allowed_origins: Sequence[str]) -> dict[str, str]:
     """The custom response's headers. WAF sets `Content-Type` itself from the body's content type
-    and refuses it as a custom header, so it is `application/json` here (ADR 0006)."""
-    return {"Retry-After": str(RETRY_AFTER_SECONDS), **SECURITY_HEADERS}
+    and refuses it as a custom header, so it is `application/json` here (ADR 0006). They are
+    static, so they name an allowed browser origin only where there is exactly one (ADR 0014)."""
+    return {
+        "Retry-After": str(RETRY_AFTER_SECONDS),
+        **SECURITY_HEADERS,
+        **static_cors_headers(cors_allowed_origins),
+    }
 
 
 def _rule(
-    name: str, priority: int, limit: int, scope_down: wafv2.CfnWebACL.StatementProperty | None
+    name: str,
+    priority: int,
+    limit: int,
+    scope_down: wafv2.CfnWebACL.StatementProperty | None,
+    headers: dict[str, str],
 ) -> wafv2.CfnWebACL.RuleProperty:
     # Aggregated by the address WAF sees, never by a forwarded-IP header (ADR 0006).
     return wafv2.CfnWebACL.RuleProperty(
@@ -68,7 +79,7 @@ def _rule(
                     custom_response_body_key=RATE_LIMITED_BODY,
                     response_headers=[
                         wafv2.CfnWebACL.CustomHTTPHeaderProperty(name=header, value=value)
-                        for header, value in rate_limited_headers().items()
+                        for header, value in headers.items()
                     ],
                 )
             )
@@ -107,10 +118,11 @@ class WebAcl(Construct):
         self, scope: Construct, construct_id: str, *, config: EnvConfig, stage: apigateway.Stage
     ) -> None:
         super().__init__(scope, construct_id)
-        rules = [_rule(FLOOD_RULE, 0, config.waf_rate_limit, scope_down=None)]
+        headers = rate_limited_headers(config.cors_allowed_origins)
+        rules = [_rule(FLOOD_RULE, 0, config.waf_rate_limit, None, headers)]
         if config.waf_test_rule_limit is not None:
             rules.append(
-                _rule(TEST_RULE, 1, config.waf_test_rule_limit, scope_down=_test_header_matches())
+                _rule(TEST_RULE, 1, config.waf_test_rule_limit, _test_header_matches(), headers)
             )
         name = f"orders-api-{config.name}"
         self.web_acl = wafv2.CfnWebACL(

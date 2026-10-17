@@ -18,6 +18,7 @@ import httpx
 import pytest
 from openapi_schema_validator import OAS30Validator
 
+from orders_api.adapters.inbound.cors import static_cors_headers
 from orders_api.adapters.inbound.http_headers import SECURITY_HEADERS
 from orders_api_infra.config import load_config
 from orders_api_infra.openapi_extensions import load_spec
@@ -98,6 +99,10 @@ def test_waf_blocks_an_address_over_the_limit_with_the_rate_limited_problem(
     OAS30Validator(problem_schema).validate(blocked.json())
     assert blocked.headers["Retry-After"] == str(RETRY_AFTER_SECONDS)
     for header, value in SECURITY_HEADERS.items():
+        assert blocked.headers.get(header) == value, header
+    # Static, so a browser page from the one allowed origin can read the 429 too (ADR 0014).
+    origins = load_config(endpoints["env"]).cors_allowed_origins
+    for header, value in static_cors_headers(origins).items():
         assert blocked.headers.get(header) == value, header
     assert "RateLimit-Limit" not in blocked.headers
     # Only the test rule's requests are blocked: the same address is still served without the

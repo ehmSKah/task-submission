@@ -78,12 +78,14 @@ def test_the_flood_rule_limits_each_ip_over_five_minutes(
     assert web_acl["DefaultAction"] == {"Allow": {}}
 
 
-def test_blocked_requests_get_the_rate_limited_problem_as_a_429(web_acl: dict[str, Any]) -> None:
+def test_blocked_requests_get_the_rate_limited_problem_as_a_429(
+    web_acl: dict[str, Any], endpoints: dict[str, Any]
+) -> None:
     response = rules(web_acl)[FLOOD_RULE]["Action"]["Block"]["CustomResponse"]
 
     assert response["ResponseCode"] == 429
     headers = {header["Name"]: header["Value"] for header in response["ResponseHeaders"]}
-    assert headers == rate_limited_headers()
+    assert headers == rate_limited_headers(load_config(endpoints["env"]).cors_allowed_origins)
     body = web_acl["CustomResponseBodies"][response["CustomResponseBodyKey"]]
     assert body["ContentType"] == "APPLICATION_JSON"
     assert json.loads(body["Content"]) == rate_limited_problem()

@@ -157,6 +157,7 @@ class Api(Construct):
                     api_integration_uri=self._invocation_uri(self.api_function),
                     authorizer_uri=self._invocation_uri(self.authorizer_function),
                     target=config.target,
+                    cors_allowed_origins=config.cors_allowed_origins,
                 )
             ),
             endpoint_types=[apigateway.EndpointType.EDGE],

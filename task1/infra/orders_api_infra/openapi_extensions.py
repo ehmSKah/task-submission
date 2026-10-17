@@ -6,9 +6,17 @@ extensions that make the same file define the gateway's routes and error respons
 
 import copy
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from orders_api.adapters.inbound.cors import (
+    ALLOW_ORIGIN_HEADER,
+    ALLOWED_REQUEST_HEADERS,
+    ORIGIN_HEADER,
+    PREFLIGHT_MAX_AGE_SECONDS,
+    static_cors_headers,
+)
 from orders_api.adapters.inbound.http_headers import (
     PROBLEM_JSON_MEDIA_TYPE,
     REQUEST_ID_HEADER,
@@ -75,6 +83,81 @@ GATEWAY_ERRORS: dict[str, GatewayError] = {
 }
 
 
+# A browser's CORS preflight is answered by API Gateway itself through a MOCK integration, so it
+# needs no token, invokes no function and spends no rate limit (ADR 0014).
+PREFLIGHT_STATUS = 204
+
+
+def _override(header: str, value: str) -> str:
+    """A VTL line setting a response header. By index, because Floci 2.3.0's Velocity can't parse
+    a hyphenated name in `$context.responseOverride.header.Name` (docs/verification.md)."""
+    return f"#set($context.responseOverride.header['{header}'] = {value})"
+
+
+def _preflight_access_control(methods: str) -> dict[str, str]:
+    """The headers a preflight from an allowed origin gets, as VTL values."""
+    return {
+        ALLOW_ORIGIN_HEADER: "$origin",
+        "Access-Control-Allow-Methods": f"'{methods}'",
+        "Access-Control-Allow-Headers": f"'{', '.join(ALLOWED_REQUEST_HEADERS)}'",
+        "Access-Control-Max-Age": f"'{PREFLIGHT_MAX_AGE_SECONDS}'",
+    }
+
+
+def _preflight_template(allowed_origins: Sequence[str], access_control: dict[str, str]) -> str:
+    """VTL for the preflight's answer: the request id always; the `Access-Control-*` headers
+    only for an allowed origin, echoed. The `Origin` header is looked up in any casing, because
+    HTTP/2 clients send it lower-cased and Floci's `$input.params('Origin')` matches exactly.
+    The origins are validated (config.py), so they can't break out of the quotes."""
+    allowed = " || ".join(f"$origin == '{origin}'" for origin in allowed_origins)
+    lines = [
+        "#set($origin = '')",
+        "#foreach($name in $input.params().header.keySet())",
+        f"#if($name.equalsIgnoreCase('{ORIGIN_HEADER}'))"
+        "#set($origin = $input.params().header.get($name))#end",
+        "#end",
+        _override(REQUEST_ID_HEADER, "$context.requestId"),
+        f"#if({allowed})",
+        *(_override(name, value) for name, value in access_control.items()),
+        "#end",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _preflight(path_item: dict[str, Any], allowed_origins: Sequence[str]) -> dict[str, Any]:
+    """The `OPTIONS` operation answering a CORS preflight for one path."""
+    methods = ", ".join(sorted(method.upper() for method in path_item if method in HTTP_METHODS))
+    access_control = _preflight_access_control(methods)
+    static_headers = {**SECURITY_HEADERS, "Vary": ORIGIN_HEADER}
+    template = _preflight_template(allowed_origins, access_control)
+    # API Gateway maps only the headers the method response declares.
+    declared = [*static_headers, REQUEST_ID_HEADER, *access_control]
+    return {
+        "security": [],
+        "responses": {
+            str(PREFLIGHT_STATUS): {
+                "description": "CORS preflight",
+                "headers": {name: {"schema": {"type": "string"}} for name in declared},
+            }
+        },
+        "x-amazon-apigateway-integration": {
+            "type": "mock",
+            "requestTemplates": {"application/json": json.dumps({"statusCode": PREFLIGHT_STATUS})},
+            "passthroughBehavior": "when_no_match",
+            "responses": {
+                "default": {
+                    "statusCode": str(PREFLIGHT_STATUS),
+                    "responseParameters": {
+                        f"method.response.header.{name}": f"'{value}'"
+                        for name, value in static_headers.items()
+                    },
+                    "responseTemplates": {"application/json": template},
+                }
+            },
+        },
+    }
+
+
 def _problem_template(error: GatewayError, target: Target) -> str:
     if error.problem is None:
         # $context.error.messageString is already a quoted JSON string.
@@ -90,8 +173,14 @@ def _problem_template(error: GatewayError, target: Target) -> str:
     )
 
 
-def _gateway_response(error: GatewayError, target: Target) -> dict[str, Any]:
-    static_headers = {**SECURITY_HEADERS, **error.extra_headers}
+def _gateway_response(
+    error: GatewayError, target: Target, cors_allowed_origins: Sequence[str]
+) -> dict[str, Any]:
+    static_headers = {
+        **SECURITY_HEADERS,
+        **error.extra_headers,
+        **static_cors_headers(cors_allowed_origins),
+    }
     headers = {
         f"gatewayresponse.header.{name}": f"'{value}'" for name, value in static_headers.items()
     }
@@ -131,9 +220,15 @@ def _lambda_authorizer(authorizer_uri: str) -> dict[str, Any]:
 
 
 def with_aws_extensions(
-    spec: dict[str, Any], *, api_integration_uri: str, authorizer_uri: str, target: Target
+    spec: dict[str, Any],
+    *,
+    api_integration_uri: str,
+    authorizer_uri: str,
+    target: Target,
+    cors_allowed_origins: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """Return a copy of `spec` with the API Gateway extensions added for `target`."""
+    """Return a copy of `spec` with the API Gateway extensions added for `target`, and with CORS
+    for browser clients from `cors_allowed_origins`, if any (ADR 0014)."""
     definition = copy.deepcopy(spec)
     definition["components"]["securitySchemes"][BEARER_SCHEME] = _lambda_authorizer(authorizer_uri)
     for path_item in definition["paths"].values():
@@ -148,8 +243,11 @@ def with_aws_extensions(
                 operation["x-amazon-apigateway-request-validator"] = (
                     BODY_AND_PARAMETERS if "requestBody" in operation else PARAMETERS
                 )
+        if cors_allowed_origins:
+            path_item["options"] = _preflight(path_item, cors_allowed_origins)
     definition["x-amazon-apigateway-request-validators"] = copy.deepcopy(REQUEST_VALIDATORS)
     definition["x-amazon-apigateway-gateway-responses"] = {
-        name: _gateway_response(error, target) for name, error in GATEWAY_ERRORS.items()
+        name: _gateway_response(error, target, cors_allowed_origins)
+        for name, error in GATEWAY_ERRORS.items()
     }
     return definition
