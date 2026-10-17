@@ -13,16 +13,8 @@ import pytest
 from orders_api_infra.paths import PROJECT_DIR
 
 THIS_FILE = Path(__file__).resolve()
-SKIPPED_DIRS = {
-    "build",
-    "node_modules",
-    "cdk.out",
-    ".venv",
-    "__pycache__",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-}
+SKIPPED_DIRS = {"build", "node_modules", "cdk.out", "__pycache__"}
+"""Plus every directory whose name starts with a dot: `.venv` and the tools' caches."""
 DELIVERABLE_SUFFIXES = {".md", ".py", ".http", ".yaml", ".yml", ".toml", ".sh", ".json"}
 DELIVERABLE_NAMES = {"Makefile", ".gitignore"}
 GENERATED = {"package-lock.json", "http-client.private.env.json"}
@@ -42,8 +34,10 @@ HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
 def deliverables() -> list[Path]:
     found = []
     for path in PROJECT_DIR.rglob("*"):
-        parts = set(path.relative_to(PROJECT_DIR).parts)
-        if parts & SKIPPED_DIRS or not path.is_file() or path.resolve() == THIS_FILE:
+        directories = path.relative_to(PROJECT_DIR).parts[:-1]
+        if any(part in SKIPPED_DIRS or part.startswith(".") for part in directories):
+            continue
+        if not path.is_file() or path.resolve() == THIS_FILE:
             continue
         if path.name in GENERATED:
             continue
