@@ -50,7 +50,7 @@ jobs:
       - run: make coverage
       - id: no-tokens
         if: always()
-        run: '! grep -lE "$TOKEN_PATTERN" build/*.xml'
+        run: '! grep -rlE "$TOKEN_PATTERN" build/*.xml build/coverage-html'
       - if: always() && steps.no-tokens.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:

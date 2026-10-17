@@ -30,7 +30,8 @@ rules:
       function: undefined
 
   no-read-only-or-write-only:
-    description: Validators don't honour `readOnly`/`writeOnly`; use separate request and response schemas.
+    description: >-
+      Validators don't honour `readOnly`/`writeOnly`; use separate request and response schemas.
     message: "{{description}}"
     severity: error
     resolved: false
@@ -42,7 +43,8 @@ rules:
         function: undefined
 
   no-format:
-    description: Draft-04 validators don't enforce `format`; use `pattern` for anything that must hold.
+    description: >-
+      Draft-04 validators don't enforce `format`; use `pattern` for anything that must hold.
     message: "{{description}}"
     severity: error
     resolved: false
@@ -88,7 +90,8 @@ rules:
         notMatch: "Request$"
 
   request-schemas-are-self-contained:
-    description: Request schemas contain no `$ref`; Floci rejects every body whose gateway model has one.
+    description: >-
+      Request schemas contain no `$ref`; Floci rejects every body whose gateway model has one.
     message: "{{description}} ({{path}})"
     severity: error
     resolved: false
@@ -97,7 +100,9 @@ rules:
       function: falsy
 
   schema-refs-point-at-components-schemas:
-    description: "Inside schemas, `$ref` only points at `#/components/schemas/…`, which API Gateway and fastjsonschema resolve."
+    description: >-
+      Inside schemas, `$ref` only points at `#/components/schemas/…`, which API Gateway and
+      fastjsonschema resolve.
     message: "{{description}} ({{path}})"
     severity: error
     resolved: false
