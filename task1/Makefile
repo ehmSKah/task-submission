@@ -26,7 +26,8 @@ RUN_INFRA_MODULE := cd infra && uv run python -m
 
 .DEFAULT_GOAL := help
 .PHONY: help doctor guard install up floci-up bootstrap bundle deploy endpoints seed token down \
-	limits test test-adapter test-integration contract-test coverage lint lint-openapi docs
+	limits test test-adapter test-integration contract-test coverage lint lint-openapi \
+	lint-workflows docs
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -135,7 +136,7 @@ coverage: ## Enforce the coverage thresholds (after make test); writes XML and H
 # credentials: AWS environments leave the account to deploy time (ADR 0010).
 SYNTH_ENVS := local aws-dev aws-prod
 
-lint: lint-openapi bundle ## Ruff, mypy, import-linter, OpenAPI lint and cdk-nag (via cdk synth)
+lint: lint-openapi lint-workflows bundle ## Ruff, mypy, import-linter, OpenAPI and workflow lint, cdk-nag
 	uv run ruff check .
 	uv run ruff format --check .
 	uv run mypy
@@ -150,6 +151,17 @@ lint-openapi: ## Validate the OpenAPI document and lint it with Spectral
 	uv run openapi-spec-validator openapi/openapi.yaml
 	cd infra && npx --no-install spectral lint ../openapi/openapi.yaml \
 		--ruleset ../openapi/.spectral.yaml --fail-severity warn
+
+# actionlint, pinned by digest. The workflows are piped in, so no bind mount (or SELinux relabelling)
+# is needed; the image brings shellcheck for the run steps.
+ACTIONLINT_IMAGE := rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+
+lint-workflows: ## Check the GitHub Actions workflows with actionlint, without running them
+	@for workflow in ../.github/workflows/*.yml; do \
+		echo "actionlint $${workflow#../}"; \
+		docker run --rm -i $(ACTIONLINT_IMAGE) -stdin-filename "$${workflow#../}" - \
+			< "$$workflow" || exit 1; \
+	done
 
 docs: ## Serve the OpenAPI document in a read-only Swagger UI on http://localhost:8080
 	docker compose --profile docs up -d swagger-ui

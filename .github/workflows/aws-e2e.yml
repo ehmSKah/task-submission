@@ -1,0 +1,91 @@
+# Deploys aws-dev to real AWS, runs the integration and contract suites against it (the aws_only
+# tests included) and always destroys it again (ADR 0011). Manual trigger only. Credentials come
+# from GitHub OIDC for the IAM role in the repository variable AWS_E2E_ROLE_ARN; no AWS key is
+# stored anywhere. The role, its trust policy and the one-off account setup are described in
+# task1/docs/aws.md.
+name: aws-e2e
+
+on:
+  workflow_dispatch:
+
+# One run at a time: a second one waits instead of deploying over the first or destroying the
+# stack under it.
+concurrency:
+  group: aws-e2e-aws-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+defaults:
+  run:
+    working-directory: task1
+
+env:
+  # As in ci.yml: reports are uploaded only without a token in them (ADR 0012).
+  TOKEN_PATTERN: 'eyJ[A-Za-z0-9_-]+\.eyJ'
+
+jobs:
+  aws-dev:
+    runs-on: ubuntu-24.04
+    # The OIDC token's subject names this environment, which the role's trust policy requires;
+    # its protection rules (branch, reviewers) decide who may run this.
+    environment: aws-dev
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: task1/infra/package-lock.json
+      - run: make install
+      - id: config
+        run: |
+          echo "region=$(sed -n 's/^region: *//p' infra/config/aws-dev.yaml)" >> "$GITHUB_OUTPUT"
+      - uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_E2E_ROLE_ARN }}
+          role-session-name: orders-api-e2e-${{ github.run_id }}
+          aws-region: ${{ steps.config.outputs.region }}
+          mask-aws-account-id: true
+          role-duration-seconds: 3600
+      # Credentials, the account's API Gateway logging role and CDK's bootstrap, before anything
+      # is created.
+      - run: make doctor ENV=aws-dev
+      - id: deploy
+        timeout-minutes: 30
+        run: make deploy endpoints seed ENV=aws-dev
+      - timeout-minutes: 30
+        run: make test-integration ENV=aws-dev PYTEST_ARGS=--junitxml=build/junit-integration.xml
+      - if: ${{ !cancelled() && steps.deploy.outcome == 'success' }}
+        timeout-minutes: 20
+        run: make contract-test ENV=aws-dev PYTEST_ARGS=--junitxml=build/junit-contract.xml
+      # build/endpoints.json is not uploaded: its ARNs name the account.
+      - id: no-tokens
+        if: always()
+        run: '! grep -lE "$TOKEN_PATTERN" build/*.xml'
+      - if: always() && steps.no-tokens.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: aws-dev-run
+          path: |
+            task1/build/junit-integration.xml
+            task1/build/junit-contract.xml
+          if-no-files-found: ignore
+      # Fresh credentials for the teardown, however long the run took.
+      - if: always()
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_E2E_ROLE_ARN }}
+          role-session-name: orders-api-e2e-${{ github.run_id }}-destroy
+          aws-region: ${{ steps.config.outputs.region }}
+          mask-aws-account-id: true
+          role-duration-seconds: 3600
+      - if: always()
+        timeout-minutes: 45
+        run: make down ENV=aws-dev
