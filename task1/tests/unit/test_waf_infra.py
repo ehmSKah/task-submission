@@ -78,13 +78,14 @@ def test_the_429_body_is_the_rate_limited_problem_without_a_request_id(
     assert set(schema["required"]) <= set(problem)
 
 
-def test_waf_reports_its_own_metrics_and_sampled_requests(template: Template) -> None:
+def test_waf_reports_its_own_metrics_but_keeps_no_sampled_requests(template: Template) -> None:
+    """A sampled request holds the full client address and headers, the token included."""
     acl = web_acl(template)
     [rule] = acl["Rules"]
 
     for visibility in (acl["VisibilityConfig"], rule["VisibilityConfig"]):
         assert visibility["CloudWatchMetricsEnabled"] is True
-        assert visibility["SampledRequestsEnabled"] is True
+        assert visibility["SampledRequestsEnabled"] is False
 
 
 def test_the_web_acl_is_associated_with_the_api_stage(

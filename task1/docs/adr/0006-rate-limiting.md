@@ -96,7 +96,7 @@ Refined when it was built:
   - **`Content-Type: application/json`, not `application/problem+json`.** A WAF custom body can only be `text/plain`, `text/html` or `application/json`, and WAF refuses `Content-Type` as a custom header. The contract's `429` says so in its description, and the `aws_only` test checks the body against the `Problem` schema itself.
   - `Retry-After: 300`, the evaluation window. An address that pauses that long has nothing left in the window, whatever the limit.
   - the security headers of [ADR 0012](0012-observability-and-security-baseline.md), from the same constant the function and the Gateway Responses use
-- **Visibility:** WAF's own CloudWatch metrics and sampled requests are on, for the web ACL and each rule. No WAF logging configuration is built: no custom metrics, alarms or log pipelines (ADR 0012).
+- **Visibility:** WAF's own CloudWatch metrics are on, for the web ACL and each rule. **Sampled requests are off:** WAF would keep each sample's full client address and headers, `Authorization` and so the bearer token included, for about three hours, which ADR 0012 rules out. The metrics say how much is blocked; the access logs say from where. No WAF logging configuration is built: no custom metrics, alarms or log pipelines (ADR 0012).
 - **On Floci 2.3.0** CloudFormation creates the web ACL and the association. `tests/adapter/test_waf_web_acl.py` reads them back through the WAF API: rules, limits, `IP` key, window, custom response and body, and the stage association.
 
 Considered while building it:

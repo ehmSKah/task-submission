@@ -29,6 +29,7 @@ The build includes **what the assignment's requirements touch, and nothing beyon
   - `rate_limiter_circuit_closed` (`INFO`): the counter store answers again after the circuit was open, so an outage's end is visible too ([ADR 0006](0006-rate-limiting.md))
 - **Never logged:** tokens or `Authorization` headers, passwords or secrets, request and response bodies.
 - **Client IPs in application logs are truncated** (IPv4 `/24`, IPv6 `/64`). IP addresses are personal data under the GDPR. The full address appears only in API Gateway's own access logs (under the retention below) and in rate-limit counter keys, which expire within minutes.
+- **Nothing else keeps requests.** WAF's sampled requests stay off ([ADR 0006](0006-rate-limiting.md)): a sample holds the full client address and every header, the token included.
 - **Levels:** DEBUG locally, INFO on AWS, set by an environment variable. In `aws-*` environments, **1 % of requests** log at DEBUG (Powertools sampling).
 - **API Gateway access logs** (JSON: request id, status, latency, `sourceIp`, authorizer error) are on in `aws-*`, off locally.
   - *Refined when built:* one JSON object per request with `requestId`, `requestTime`, `httpMethod`, `resourcePath`, `protocol`, `status`, `responseLatency`, `integrationLatency`, `sourceIp`, `errorType`, `authorizerError` and `wafResponseCode`. Every value is quoted, so a missing one (`-`) still parses. The format names no header, so neither `Authorization` nor a token can reach it; a unit test guards that.

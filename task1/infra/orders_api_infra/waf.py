@@ -37,9 +37,7 @@ RATE_LIMITED_DETAIL = (
 def rate_limited_problem() -> dict[str, object]:
     """The Problem Details WAF answers a blocked request with. WAF can't insert API Gateway's
     request id, so unlike every other error body it carries none."""
-    body = problem_body(ProblemType.RATE_LIMITED, request_id="", detail=RATE_LIMITED_DETAIL)
-    del body["requestId"]
-    return body
+    return problem_body(ProblemType.RATE_LIMITED, request_id=None, detail=RATE_LIMITED_DETAIL)
 
 
 def rate_limited_headers() -> dict[str, str]:
@@ -95,10 +93,11 @@ def _test_header_matches() -> wafv2.CfnWebACL.StatementProperty:
 
 
 def _visibility(metric_name: str) -> wafv2.CfnWebACL.VisibilityConfigProperty:
-    # WAF's own metrics and sampled requests; no custom metrics are built (ADR 0012).
+    # WAF's own metrics, no custom ones (ADR 0012). No sampled requests: WAF keeps a sample's
+    # full client address and headers, `Authorization` included, which ADR 0012 never stores.
     return wafv2.CfnWebACL.VisibilityConfigProperty(
         cloud_watch_metrics_enabled=True,
-        sampled_requests_enabled=True,
+        sampled_requests_enabled=False,
         metric_name=metric_name,
     )
 

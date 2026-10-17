@@ -70,7 +70,7 @@ def json_pointer(path: Iterable[str | int]) -> str:
 def problem_body(
     problem: ProblemType,
     *,
-    request_id: str,
+    request_id: str | None,
     instance: str | None = None,
     detail: str | None = None,
     errors: Sequence[FieldError] = (),
@@ -85,7 +85,8 @@ def problem_body(
         body["detail"] = detail
     if instance is not None:
         body["instance"] = instance
-    body["requestId"] = request_id
+    if request_id is not None:  # only the edge firewall can't know it (ADR 0006)
+        body["requestId"] = request_id
     if errors:
         body["errors"] = [error.to_json() for error in errors]
     if scope is not None:
