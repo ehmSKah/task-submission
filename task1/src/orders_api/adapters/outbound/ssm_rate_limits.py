@@ -1,16 +1,19 @@
 """The rate limits in force, from one JSON parameter in SSM Parameter Store (ADRs 0006 and 0009).
 
 Operators change the parameter at runtime; every Lambda instance reads it through Powertools
-Parameters, cached for a configured number of seconds. A value that breaks the schema is logged
-and ignored: the last valid one (or the defaults) stays in force.
+Parameters, cached for a configured number of seconds. A value that breaks the schema, or a
+parameter that can't be read at all, is logged and ignored: the last valid limits (or the
+defaults) stay in force.
 """
 
 import json
+import time
 from typing import Any
 
 from aws_lambda_powertools import Logger
 from aws_lambda_powertools.utilities.parameters import SSMProvider
 from aws_lambda_powertools.utilities.parameters.base import BaseProvider
+from aws_lambda_powertools.utilities.parameters.exceptions import GetParameterError
 from aws_lambda_powertools.utilities.validation import SchemaValidationError, validate
 
 from orders_api.domain.access import Role
@@ -82,11 +85,23 @@ class SsmRateLimitConfig:
         self._provider = provider or SSMProvider()
         self._last_good = fallback
         self._last_value: str | None = None
+        self._unreadable_until = 0.0
 
     def current(self) -> RateLimits:
         """The parameter's limits, re-read once the cache expires. The raw value is cached, not
-        the parsed one, so an invalid value isn't fetched again on every request either."""
-        value = str(self._provider.get(self._name, max_age=self._max_age))
+        the parsed one, so an invalid value isn't fetched again on every request either; after a
+        failed read, SSM is left alone for the same time, so requests don't each pay for it."""
+        if time.monotonic() < self._unreadable_until:
+            return self._last_good
+        try:
+            value = str(self._provider.get(self._name, max_age=self._max_age))
+        except GetParameterError as error:
+            self._unreadable_until = time.monotonic() + self._max_age
+            logger.warning(
+                "rate_limit_config_unavailable",
+                extra={"parameter": self._name, "errorType": type(error).__name__},
+            )
+            return self._last_good
         if value != self._last_value:
             self._last_value = value
             try:

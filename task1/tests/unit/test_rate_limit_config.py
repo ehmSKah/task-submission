@@ -28,9 +28,13 @@ class InMemoryParameters(BaseProvider):
         super().__init__()
         self.values = values
         self.reads = 0
+        self.failure: Exception | None = None
+        """Raised by every read while set, as an SSM outage or a deleted parameter would."""
 
     def _get(self, name: str, **sdk_options: Any) -> str:
         self.reads += 1
+        if self.failure is not None:
+            raise self.failure
         return self.values[name]
 
     def _get_multiple(self, path: str, **sdk_options: Any) -> dict[str, str]:
@@ -140,3 +144,44 @@ def test_a_valid_value_after_an_invalid_one_takes_effect() -> None:
     parameters.values[PARAMETER] = json.dumps(VALID)
 
     assert config.current() == TINY
+
+
+def unavailable_config_lines(log_output: io.StringIO) -> list[dict[str, Any]]:
+    lines = [json.loads(line) for line in log_output.getvalue().splitlines() if line]
+    return [line for line in lines if line["message"] == "rate_limit_config_unavailable"]
+
+
+def test_an_unreadable_parameter_leaves_the_last_known_good_limits_in_force(
+    log_output: io.StringIO,
+) -> None:
+    config, parameters = source(json.dumps(VALID), max_age=0)
+    config.current()
+
+    parameters.failure = ConnectionError("SSM is unreachable")
+
+    assert config.current() == TINY
+    [line] = unavailable_config_lines(log_output)
+    assert line["level"] == "WARNING"
+    assert line["parameter"] == PARAMETER
+    assert line["errorType"] == "GetParameterError"
+
+
+def test_without_any_readable_value_yet_the_defaults_are_in_force() -> None:
+    config, parameters = source(json.dumps(VALID), max_age=0)
+    parameters.failure = ConnectionError("SSM is unreachable")
+
+    assert config.current() == DEFAULT_RATE_LIMITS
+
+
+def test_an_unreadable_parameter_is_tried_again_only_once_the_cache_time_has_passed() -> None:
+    config, parameters = source(json.dumps(VALID), max_age=1)
+    parameters.failure = ConnectionError("SSM is unreachable")
+    config.current()
+
+    config.current()
+    assert parameters.reads == 1
+
+    parameters.failure = None
+    time.sleep(1.1)
+    assert config.current() == TINY
+    assert parameters.reads == 2
