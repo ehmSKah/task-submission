@@ -47,15 +47,16 @@ install: ## Install Python and CDK CLI dependencies
 	uv sync --frozen
 	npm ci --prefix infra --no-audit --no-fund
 
+# `up` ends by writing the .http collection's env file: git-ignored, owner-only, never printed.
 ifeq ($(ENV),local)
-UP_STEPS := install floci-up bootstrap deploy endpoints seed
+UP_STEPS := install floci-up bootstrap deploy endpoints seed http-env
 DOWN_STEPS :=
 else
-UP_STEPS := install doctor bootstrap deploy endpoints seed
+UP_STEPS := install doctor bootstrap deploy endpoints seed http-env
 DOWN_STEPS := guard bundle
 endif
 
-up: $(UP_STEPS) ## Deploy and seed users: on Floci, started first (ENV=local), or on AWS (ENV=aws-dev)
+up: $(UP_STEPS) ## Deploy, seed users, write the .http env: on Floci (ENV=local) or AWS (ENV=aws-dev)
 
 floci-up: ## Start the Floci emulator
 	docker compose up -d floci

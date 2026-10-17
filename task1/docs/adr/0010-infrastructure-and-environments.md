@@ -71,7 +71,7 @@ Rules:
 | Target | Does |
 |---|---|
 | `make doctor` | checks Docker (with Compose), `make`, `uv` and Node and their versions, and names anything missing; with `ENV=aws-*` also the AWS credentials, CDK's bootstrap and API Gateway's logging role |
-| `make up` | starts Floci and waits for it; `cdk bootstrap` (idempotent); builds the bundle; `cdk deploy --method=direct -c env=local`; seeds users; writes and prints the local API URL |
+| `make up` | starts Floci and waits for it; `cdk bootstrap` (idempotent); builds the bundle; `cdk deploy --method=direct -c env=local`; seeds users; writes and prints the local API URL; writes the `.http` env file (`make http-env`) |
 | `make token ROLE=user\|manager\|admin` | prints an access token for a seeded user |
 | `make limits PRESET=defaults\|high\|tiny\|tiny-ip` | writes a rate-limit preset to the SSM parameter, in force within the cache TTL ([ADR 0006](0006-rate-limiting.md)) |
 | `make test` / `make test-integration` / `make contract-test` | unit / Floci integration / Schemathesis |
@@ -107,7 +107,7 @@ Rules:
   - Any other `ENV` unexports `AWS_ENDPOINT_URL` and exports the config's region.
   - `make guard` runs before every target that touches an environment. It refuses what make can't unset: service-specific `AWS_ENDPOINT_URL_<SERVICE>` overrides, Floci's dummy key or another region on AWS, and any endpoint but the emulator's on Floci. The test suites run the same check before their first AWS call.
 - **Targets on AWS:**
-  - `make up ENV=aws-dev` runs `install`, `doctor`, `bootstrap`, `deploy`, `endpoints`, `seed`; it skips Floci.
+  - `make up ENV=aws-dev` runs `install`, `doctor`, `bootstrap`, `deploy`, `endpoints`, `seed`, `http-env`; it skips Floci.
   - `make doctor ENV=aws-dev` checks the host tools without Docker, then the account: the credentials resolve and aren't Floci's, the API Gateway logging role is set, CDK is bootstrapped. It never prints the account id or the caller, so its output is safe in CI logs.
   - `make down ENV=aws-dev` runs `cdk destroy`, and nothing Docker. Termination protection refuses it for `aws-prod`.
   - `deploy` keeps `--method=direct`, which AWS accepts too. `make lint` synthesises all three environments, so cdk-nag checks the AWS ones as well.

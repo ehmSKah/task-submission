@@ -49,8 +49,9 @@ make down     # stops Floci and removes everything
 ```
 
 The first `make up` takes a few minutes: it pulls the Floci image, installs the Python and Node
-dependencies and deploys with CDK. It ends by printing the local API URL, which is also in
-`build/endpoints.json`.
+dependencies and deploys with CDK. It prints the local API URL, which is also in
+`build/endpoints.json`, and ends by writing the [request collection](#trying-requests)'s
+environment file.
 
 `make demo` prints every request and its status, and fails on the first status that isn't the
 expected one. It never prints a token.
@@ -158,6 +159,8 @@ curl -i -H "Authorization: Bearer $(make -s token ROLE=user)" "$API/api/v1/order
 ```sh
 make http-env   # writes http/http-client.private.env.json: baseUrl and a token per demo user
 ```
+
+`make up` writes it too; `make http-env` refreshes it.
 
 - **Running it:** open the files in IntelliJ IDEA or PyCharm (built in) or in VS Code with the
   httpyac extension, and pick the environment `local`. The httpyac CLI works too:
