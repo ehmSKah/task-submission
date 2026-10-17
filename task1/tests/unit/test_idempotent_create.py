@@ -175,10 +175,10 @@ def test_a_failed_create_leaves_the_key_free_for_a_retry(
         def add(self, order: Any) -> None:
             raise RuntimeError("storage unavailable")
 
-    monkeypatch.setattr(api_handler, "_orders", FailingRepository())
+    monkeypatch.setattr(api_handler, "orders", lambda: FailingRepository())
     assert create()["statusCode"] == 500
 
-    monkeypatch.setattr(api_handler, "_orders", repository)
+    monkeypatch.setattr(api_handler, "orders", lambda: repository)
     retried = create()
 
     assert retried["statusCode"] == 201

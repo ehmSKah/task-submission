@@ -63,7 +63,7 @@ def test_an_unknown_order_is_a_404() -> None:
 
 
 def test_a_malformed_id_is_a_400_without_data_access(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(api_handler, "_orders", UntouchableRepository())
+    monkeypatch.setattr(api_handler, "orders", lambda: UntouchableRepository())
 
     body = problem_of(invoke(delete_order_event("not-a-uuid")), 400, "validation-error")
 

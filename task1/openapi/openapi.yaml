@@ -5,6 +5,13 @@ info:
   description: >-
     Orders REST API with Amazon Cognito authentication, role-based authorization and rate
     limiting. Every error is an RFC 9457 Problem Details document.
+
+
+    Every order operation is rate limited per client IP and per user, in fixed 60-second
+    windows; malformed and forbidden requests count too. Each response the API function sends
+    after counting, errors included, carries `RateLimit-Limit`, `RateLimit-Remaining` and
+    `RateLimit-Reset` for the more restrictive of the two limits. Errors from the gateway
+    itself (an invalid token, a body that fails its schema, an unknown path) carry none.
 tags:
   - name: health
   - name: orders
@@ -70,6 +77,12 @@ paths:
               $ref: "#/components/headers/ETag"
             X-Request-Id:
               $ref: "#/components/headers/X-Request-Id"
+            RateLimit-Limit:
+              $ref: "#/components/headers/RateLimit-Limit"
+            RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimit-Remaining"
+            RateLimit-Reset:
+              $ref: "#/components/headers/RateLimit-Reset"
           content:
             application/json:
               schema:
@@ -88,6 +101,8 @@ paths:
           $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/IdempotencyKeyMismatch"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
         "502":
@@ -131,6 +146,12 @@ paths:
           headers:
             X-Request-Id:
               $ref: "#/components/headers/X-Request-Id"
+            RateLimit-Limit:
+              $ref: "#/components/headers/RateLimit-Limit"
+            RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimit-Remaining"
+            RateLimit-Reset:
+              $ref: "#/components/headers/RateLimit-Reset"
           content:
             application/json:
               schema:
@@ -141,6 +162,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
         "502":
@@ -173,6 +196,12 @@ paths:
               $ref: "#/components/headers/ETag"
             X-Request-Id:
               $ref: "#/components/headers/X-Request-Id"
+            RateLimit-Limit:
+              $ref: "#/components/headers/RateLimit-Limit"
+            RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimit-Remaining"
+            RateLimit-Reset:
+              $ref: "#/components/headers/RateLimit-Reset"
           content:
             application/json:
               schema:
@@ -185,6 +214,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
         "502":
@@ -206,6 +237,12 @@ paths:
           headers:
             X-Request-Id:
               $ref: "#/components/headers/X-Request-Id"
+            RateLimit-Limit:
+              $ref: "#/components/headers/RateLimit-Limit"
+            RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimit-Remaining"
+            RateLimit-Reset:
+              $ref: "#/components/headers/RateLimit-Reset"
         "400":
           $ref: "#/components/responses/ValidationError"
         "401":
@@ -214,6 +251,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
         "502":
@@ -270,6 +309,12 @@ paths:
               $ref: "#/components/headers/ETag"
             X-Request-Id:
               $ref: "#/components/headers/X-Request-Id"
+            RateLimit-Limit:
+              $ref: "#/components/headers/RateLimit-Limit"
+            RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimit-Remaining"
+            RateLimit-Reset:
+              $ref: "#/components/headers/RateLimit-Reset"
           content:
             application/json:
               schema:
@@ -290,6 +335,8 @@ paths:
           $ref: "#/components/responses/PayloadTooLarge"
         "415":
           $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
         "502":
@@ -312,6 +359,32 @@ components:
       description: API Gateway's request id; also in every error body and in the logs.
       schema:
         type: string
+    RateLimit-Limit:
+      description: >-
+        Requests allowed per 60-second window by the more restrictive of the two limits that
+        apply (per client IP, per user), or by the one exceeded on a `429`.
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+    RateLimit-Remaining:
+      description: Requests left in the current window under that limit.
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+    RateLimit-Reset:
+      description: Seconds until the current window ends and the counts start again.
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+    Retry-After:
+      description: Seconds until the window ends; retrying earlier is refused again.
+      required: true
+      schema:
+        type: integer
+        minimum: 0
     ETag:
       description: The order's `version` as a strong entity tag, e.g. `"1"`.
       required: true
@@ -471,6 +544,10 @@ components:
           type: string
         requestId:
           type: string
+        scope:
+          description: On a `429`, the limit that was hit, per client IP or per user.
+          type: string
+          enum: [ip, user]
         errors:
           description: >-
             Field-level errors, present only when the API function found them (gateway
@@ -509,6 +586,26 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
+    TooManyRequests:
+      description: >-
+        A rate limit is exhausted: per client IP or per user (`scope` names which), counted in
+        fixed 60-second windows. Requests over the limit don't count against it. Retry after
+        `Retry-After` seconds.
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/Retry-After"
+        X-Request-Id:
+          $ref: "#/components/headers/X-Request-Id"
+        RateLimit-Limit:
+          $ref: "#/components/headers/RateLimit-Limit"
+        RateLimit-Remaining:
+          $ref: "#/components/headers/RateLimit-Remaining"
+        RateLimit-Reset:
+          $ref: "#/components/headers/RateLimit-Reset"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
     Forbidden:
       description: >-
         The caller's roles lack the permission for this operation, e.g. a valid token without any
@@ -516,6 +613,12 @@ components:
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
+        RateLimit-Limit:
+          $ref: "#/components/headers/RateLimit-Limit"
+        RateLimit-Remaining:
+          $ref: "#/components/headers/RateLimit-Remaining"
+        RateLimit-Reset:
+          $ref: "#/components/headers/RateLimit-Reset"
       content:
         application/problem+json:
           schema:
@@ -530,7 +633,9 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     NotFound:
-      description: Unknown path or method, or a resource the caller can't see.
+      description: >-
+        Unknown path or method, or a resource the caller can't see. Carries the `RateLimit-*`
+        headers for an order the caller can't see.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
@@ -545,6 +650,12 @@ components:
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
+        RateLimit-Limit:
+          $ref: "#/components/headers/RateLimit-Limit"
+        RateLimit-Remaining:
+          $ref: "#/components/headers/RateLimit-Remaining"
+        RateLimit-Reset:
+          $ref: "#/components/headers/RateLimit-Reset"
       content:
         application/problem+json:
           schema:
@@ -556,6 +667,12 @@ components:
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
+        RateLimit-Limit:
+          $ref: "#/components/headers/RateLimit-Limit"
+        RateLimit-Remaining:
+          $ref: "#/components/headers/RateLimit-Remaining"
+        RateLimit-Reset:
+          $ref: "#/components/headers/RateLimit-Reset"
       content:
         application/problem+json:
           schema:
@@ -565,12 +682,20 @@ components:
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
+        RateLimit-Limit:
+          $ref: "#/components/headers/RateLimit-Limit"
+        RateLimit-Remaining:
+          $ref: "#/components/headers/RateLimit-Remaining"
+        RateLimit-Reset:
+          $ref: "#/components/headers/RateLimit-Reset"
       content:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
     InternalError:
-      description: Unexpected error. The body contains no internals.
+      description: >-
+        Unexpected error. The body contains no internals. Carries the `RateLimit-*` headers if
+        the request was counted first.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
@@ -600,7 +725,8 @@ components:
       description: >-
         The request breaks the contract: a body that fails its schema (unknown fields included),
         isn't JSON or is empty; duplicate SKUs; a malformed path parameter; an unknown, repeated
-        or malformed query parameter.
+        or malformed query parameter. Carries the `RateLimit-*` headers when the API function
+        answers, not when the gateway does.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
@@ -613,6 +739,12 @@ components:
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
+        RateLimit-Limit:
+          $ref: "#/components/headers/RateLimit-Limit"
+        RateLimit-Remaining:
+          $ref: "#/components/headers/RateLimit-Remaining"
+        RateLimit-Reset:
+          $ref: "#/components/headers/RateLimit-Reset"
       content:
         application/problem+json:
           schema:
@@ -622,6 +754,12 @@ components:
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
+        RateLimit-Limit:
+          $ref: "#/components/headers/RateLimit-Limit"
+        RateLimit-Remaining:
+          $ref: "#/components/headers/RateLimit-Remaining"
+        RateLimit-Reset:
+          $ref: "#/components/headers/RateLimit-Reset"
       content:
         application/problem+json:
           schema:

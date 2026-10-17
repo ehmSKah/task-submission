@@ -128,7 +128,7 @@ def test_the_last_page_may_be_empty_and_has_no_next_cursor(wire_api: WireApi) ->
 
 @pytest.fixture
 def unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(api_handler, "_orders", UnreadableRepository())
+    monkeypatch.setattr(api_handler, "orders", lambda: UnreadableRepository())
 
 
 def errors_of(body: dict[str, Any]) -> list[tuple[str, str]]:

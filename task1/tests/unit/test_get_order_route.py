@@ -19,7 +19,7 @@ class ExplodingRepository(InMemoryOrderRepository):
 @pytest.fixture(autouse=True)
 def repository(monkeypatch: pytest.MonkeyPatch) -> InMemoryOrderRepository:
     fake = InMemoryOrderRepository([ORDER])
-    monkeypatch.setattr(api_handler, "_orders", fake)
+    monkeypatch.setattr(api_handler, "orders", lambda: fake)
     return fake
 
 
@@ -54,7 +54,7 @@ def test_unknown_order_is_a_problem_404() -> None:
 def test_malformed_id_is_a_400_naming_the_parameter_without_data_access(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(api_handler, "_orders", ExplodingRepository())
+    monkeypatch.setattr(api_handler, "orders", lambda: ExplodingRepository())
 
     response = invoke(get_order_event("not-a-uuid", ALICE))
 

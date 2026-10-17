@@ -216,7 +216,7 @@ def test_a_stale_if_match_is_a_412_before_a_no_op_or_a_409(status: str) -> None:
 def test_invalid_requests_are_problems_without_data_access(
     monkeypatch: pytest.MonkeyPatch, event: dict[str, Any], status: int, slug: str
 ) -> None:
-    monkeypatch.setattr(api_handler, "_orders", UntouchableRepository())
+    monkeypatch.setattr(api_handler, "orders", lambda: UntouchableRepository())
 
     problem_of(invoke(event), status, slug)
 

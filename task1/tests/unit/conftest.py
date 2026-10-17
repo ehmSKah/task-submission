@@ -11,6 +11,7 @@ from tests.unit.fakes import (
     FixedClock,
     InMemoryIdempotencyStore,
     InMemoryOrderRepository,
+    RateLimitsInUse,
     SequentialIds,
     WireApi,
 )
@@ -24,7 +25,7 @@ def wire_api(monkeypatch: pytest.MonkeyPatch) -> WireApi:
 
     def wire(orders: Iterable[Order] = (), *, ids: Iterable[str] = ()) -> InMemoryOrderRepository:
         repository = InMemoryOrderRepository(orders)
-        monkeypatch.setattr(api_handler, "_orders", repository)
+        monkeypatch.setattr(api_handler, "orders", lambda: repository)
         monkeypatch.setattr(api_handler, "clock", FixedClock(NOW))
         monkeypatch.setattr(api_handler, "order_ids", SequentialIds(list(ids)))
         return repository
@@ -47,5 +48,13 @@ def log_output() -> Iterator[io.StringIO]:
 def idempotency_store(monkeypatch: pytest.MonkeyPatch) -> InMemoryIdempotencyStore:
     """Every unit test gets a fresh in-memory idempotency store instead of the table."""
     store = InMemoryIdempotencyStore()
-    monkeypatch.setattr(api_handler, "_idempotency_store", store)
+    monkeypatch.setattr(api_handler, "idempotency_store", lambda: store)
     return store
+
+
+@pytest.fixture(autouse=True)
+def rate_limits(monkeypatch: pytest.MonkeyPatch) -> RateLimitsInUse:
+    """Every unit test counts requests in memory, at the default limits, on the fixed clock."""
+    in_use = RateLimitsInUse(FixedClock(NOW))
+    monkeypatch.setattr(api_handler, "rate_limiter", in_use.limiter)
+    return in_use

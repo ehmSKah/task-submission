@@ -3,6 +3,8 @@
 import json
 import os
 import time
+from contextvars import ContextVar
+from functools import cache
 from typing import Any
 
 from aws_lambda_powertools import Logger
@@ -32,9 +34,18 @@ from orders_api.adapters.inbound.order_requests import (
     valid_order_id,
 )
 from orders_api.adapters.inbound.problems import FieldError, ProblemType, problem_body
+from orders_api.adapters.inbound.rate_limiting import (
+    RETRY_AFTER_HEADER,
+    MissingSourceIp,
+    RateLimitExceeded,
+    client_ip,
+    rate_limit_headers,
+)
 from orders_api.adapters.inbound.request_checks import InvalidRequest
 from orders_api.adapters.outbound.dynamodb_idempotency import dynamodb_store
 from orders_api.adapters.outbound.dynamodb_orders import DynamoDbOrderRepository
+from orders_api.adapters.outbound.dynamodb_rate_limits import DynamoDbRateLimitCounters
+from orders_api.adapters.outbound.ssm_rate_limits import SsmRateLimitConfig
 from orders_api.adapters.outbound.system import RandomOrderIds, SystemClock
 from orders_api.application.orders import (
     Clock,
@@ -53,34 +64,48 @@ from orders_api.application.orders import (
     list_orders,
     listed_owner,
 )
+from orders_api.application.rate_limiting import RateLimiter
 from orders_api.domain.order import Order, StatusChangeNotAllowed
 from orders_api.domain.permissions import Caller, PermissionDenied
+from orders_api.domain.rate_limits import RateLimitDecision, logged_network
 
 UNEXPECTED_ERROR_DETAIL = "An unexpected error occurred"
 
 logger = Logger(service="orders-api")
 app = APIGatewayRestResolver()
 
-_orders: OrderRepository | None = None
-_idempotency_store: BasePersistenceLayer | None = None
 clock: Clock = SystemClock()
 order_ids: IdGenerator = RandomOrderIds()
 
+# The adapters each Lambda instance needs are made on first use and then kept (`cache` on a
+# function without arguments), so a cold start pays only for what its request touches. Unit
+# tests replace these functions with their own fakes.
 
+
+@cache
 def orders() -> OrderRepository:
-    """The order repository, created once per Lambda instance."""
-    global _orders
-    if _orders is None:
-        _orders = DynamoDbOrderRepository(os.environ["ORDERS_TABLE"])
-    return _orders
+    return DynamoDbOrderRepository(os.environ["ORDERS_TABLE"])
 
 
+@cache
 def idempotency_store() -> BasePersistenceLayer:
-    """The idempotency table's persistence layer, created once per Lambda instance."""
-    global _idempotency_store
-    if _idempotency_store is None:
-        _idempotency_store = dynamodb_store(os.environ["IDEMPOTENCY_TABLE"])
-    return _idempotency_store
+    return dynamodb_store(os.environ["IDEMPOTENCY_TABLE"])
+
+
+@cache
+def rate_limiter() -> RateLimiter:
+    config = SsmRateLimitConfig(
+        os.environ["RATE_LIMITS_PARAMETER"],
+        max_age_seconds=int(os.environ["RATE_LIMITS_MAX_AGE_SECONDS"]),
+    )
+    return RateLimiter(
+        DynamoDbRateLimitCounters(os.environ["RATE_LIMIT_TABLE"]), config, SystemClock()
+    )
+
+
+# This request's rate-limit decision, once step 3 has made it: every response from then on, an
+# error included, carries its `RateLimit-*` headers (ADR 0006).
+_rate_limit: ContextVar[RateLimitDecision | None] = ContextVar("rate_limit", default=None)
 
 
 def health_status() -> dict[str, str]:
@@ -93,10 +118,17 @@ def get_health() -> Response[str]:
     return Response(status_code=200, content_type=JSON_MEDIA_TYPE, body=json.dumps(health_status()))
 
 
-def identified_caller() -> Caller:
-    """Step 2 of the request pipeline: the authorizer's identity, or fail closed (ADR 0009)."""
+def admitted_caller() -> Caller:
+    """Steps 2 and 3 of the request pipeline (ADR 0009): the authorizer's identity, or fail
+    closed; then the rate limits, per IP and per user, or `429`."""
     caller = caller_from_event(app.current_event.raw_event)
     logger.append_keys(sub=caller.subject, roles=sorted(caller.roles))
+    ip = client_ip(app.current_event.raw_event)
+    decision = rate_limiter().check(ip, caller.subject, caller.roles)
+    _rate_limit.set(decision)
+    if not decision.allowed:
+        logger.append_keys(rateLimitScope=decision.exceeded, clientNetwork=logged_network(ip))
+        raise RateLimitExceeded(decision)
     return caller
 
 
@@ -121,7 +153,7 @@ def order_response(order: Order, status_code: int) -> Response[str]:
 
 @app.post(ORDERS_PATH)
 def post_order() -> Response[str]:
-    caller = identified_caller()
+    caller = admitted_caller()
     request = new_order_from(app.current_event)
     # Step 6 before step 7: a caller without the permission never creates an idempotency record.
     check_may_create(caller)
@@ -143,7 +175,7 @@ def post_order() -> Response[str]:
 
 @app.get("/api/v1/orders/<order_id>")
 def get_order_by_id(order_id: str) -> Response[str]:
-    caller = identified_caller()
+    caller = admitted_caller()
     order_id = requested_order_id(order_id)
     check_may_read(caller)
     return order_response(get_order(orders(), caller, order_id), 200)
@@ -151,7 +183,7 @@ def get_order_by_id(order_id: str) -> Response[str]:
 
 @app.get(ORDERS_PATH)
 def get_orders() -> Response[str]:
-    caller = identified_caller()
+    caller = admitted_caller()
     query = order_list_query(app.current_event)
     # Step 6. Which list the caller sees is known only now, so a cursor's binding is checked here.
     owner_id = listed_owner(caller)
@@ -165,7 +197,7 @@ def get_orders() -> Response[str]:
 
 @app.patch("/api/v1/orders/<order_id>/status")
 def patch_order_status(order_id: str) -> Response[str]:
-    caller = identified_caller()
+    caller = admitted_caller()
     order_id = requested_order_id(order_id)
     status = requested_status_from(app.current_event)
     # Step 6 needs the body: cancelling and every other status need different permissions.
@@ -183,7 +215,7 @@ def patch_order_status(order_id: str) -> Response[str]:
 
 @app.delete("/api/v1/orders/<order_id>")
 def delete_order_by_id(order_id: str) -> Response[str]:
-    caller = identified_caller()
+    caller = admitted_caller()
     order_id = requested_order_id(order_id)
     check_may_delete(caller)
     delete_order(orders(), order_id)
@@ -191,7 +223,12 @@ def delete_order_by_id(order_id: str) -> Response[str]:
 
 
 def problem_response(
-    problem: ProblemType, detail: str | None = None, errors: tuple[FieldError, ...] = ()
+    problem: ProblemType,
+    detail: str | None = None,
+    errors: tuple[FieldError, ...] = (),
+    *,
+    scope: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Response[str]:
     body = problem_body(
         problem,
@@ -199,9 +236,13 @@ def problem_response(
         instance=app.current_event.path,
         request_id=app.current_event.request_context.request_id,
         errors=errors,
+        scope=scope,
     )
     return Response(
-        status_code=problem.status, content_type=PROBLEM_JSON_MEDIA_TYPE, body=json.dumps(body)
+        status_code=problem.status,
+        content_type=PROBLEM_JSON_MEDIA_TYPE,
+        body=json.dumps(body),
+        headers=headers,
     )
 
 
@@ -213,6 +254,17 @@ def not_found(_: Exception) -> Response[str]:
 @app.exception_handler(InvalidRequest)  # type: ignore[untyped-decorator]
 def invalid_request(error: InvalidRequest) -> Response[str]:
     return problem_response(error.problem, error.detail, error.errors)
+
+
+@app.exception_handler(RateLimitExceeded)  # type: ignore[untyped-decorator]
+def rate_limit_exceeded(error: RateLimitExceeded) -> Response[str]:
+    """Names the limit that was hit; the `RateLimit-*` headers are added with every other one."""
+    return problem_response(
+        ProblemType.RATE_LIMITED,
+        error.detail,
+        scope=error.scope.value,
+        headers={RETRY_AFTER_HEADER: str(error.decision.reset_seconds)},
+    )
 
 
 @app.exception_handler(PermissionDenied)  # type: ignore[untyped-decorator]
@@ -262,6 +314,12 @@ def missing_caller_identity(_: MissingCallerIdentity) -> Response[str]:
     return problem_response(ProblemType.INTERNAL_ERROR, UNEXPECTED_ERROR_DETAIL)
 
 
+@app.exception_handler(MissingSourceIp)  # type: ignore[untyped-decorator]
+def missing_source_ip(_: MissingSourceIp) -> Response[str]:
+    logger.error("source_ip_missing")
+    return problem_response(ProblemType.INTERNAL_ERROR, UNEXPECTED_ERROR_DETAIL)
+
+
 @app.exception_handler(Exception)  # type: ignore[untyped-decorator]  # Powertools leaves it untyped
 def unexpected_error(error: Exception) -> Response[str]:
     logger.exception("unhandled_error", extra={"errorType": type(error).__name__})
@@ -292,8 +350,12 @@ def _problem_type(response: dict[str, Any]) -> str | None:
     return problem_type
 
 
-def _with_contract_headers(response: dict[str, Any], request_id: str) -> dict[str, Any]:
+def _with_contract_headers(
+    response: dict[str, Any], request_id: str, rate_limit: RateLimitDecision | None
+) -> dict[str, Any]:
     extra = {**SECURITY_HEADERS, REQUEST_ID_HEADER: request_id}
+    if rate_limit is not None:
+        extra.update(rate_limit_headers(rate_limit))
     if "multiValueHeaders" in response:
         multi = response["multiValueHeaders"] or {}
         multi.update({name: [value] for name, value in extra.items()})
@@ -308,6 +370,7 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
     request_id = (event.get("requestContext") or {}).get("requestId", "")
     logger.append_keys(requestId=request_id, env=os.environ.get("ORDERS_API_ENV", "unknown"))
     started = time.perf_counter()
+    _rate_limit.set(None)
     try:
         response = app.resolve(event, context)
     except Exception:
@@ -322,4 +385,4 @@ def handler(event: dict[str, Any], context: LambdaContext) -> dict[str, Any]:
             "problemType": _problem_type(response),
         },
     )
-    return _with_contract_headers(response, request_id)
+    return _with_contract_headers(response, request_id, _rate_limit.get())

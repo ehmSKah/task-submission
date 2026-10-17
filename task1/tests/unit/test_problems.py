@@ -33,6 +33,13 @@ def test_problem_body_omits_detail_when_not_given() -> None:
     assert body["status"] == 500
 
 
+def test_a_rate_limited_problem_names_the_scope_and_others_don_t() -> None:
+    limited = problem_body(ProblemType.RATE_LIMITED, request_id="r", scope="user")
+
+    assert limited["scope"] == "user"
+    assert "scope" not in problem_body(ProblemType.NOT_FOUND, request_id="r")
+
+
 def test_every_problem_type_has_a_urn_title_and_status() -> None:
     for problem in ProblemType:
         assert problem.urn.startswith("urn:problem:orders-api:")

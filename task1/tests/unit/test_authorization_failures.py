@@ -65,7 +65,7 @@ def repository(wire_api: WireApi) -> InMemoryOrderRepository:
 
 @pytest.fixture
 def untouchable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(api_handler, "_orders", UntouchableRepository())
+    monkeypatch.setattr(api_handler, "orders", lambda: UntouchableRepository())
 
 
 def with_roles(roles: str) -> dict[str, str]:

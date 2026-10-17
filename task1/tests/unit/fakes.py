@@ -15,7 +15,8 @@ from aws_lambda_powertools.utilities.idempotency.persistence.datarecord import (
     DataRecord,
 )
 
-from orders_api.application.orders import OrderPage, PagePosition
+from orders_api.application.orders import Clock, OrderPage, PagePosition
+from orders_api.application.rate_limiting import RateLimitCounterStore, RateLimiter
 from orders_api.domain.order import Order
 from orders_api.domain.rate_limits import DEFAULT_RATE_LIMITS, RateLimits
 
@@ -192,6 +193,24 @@ class SwitchableRateLimitConfig:
 
     def current(self) -> RateLimits:
         return self.limits
+
+
+class RateLimitsInUse:
+    """What the API function counts with in unit tests: in-memory counters and limits that a test
+    can switch, read through a real `RateLimiter`."""
+
+    def __init__(self, clock: Clock) -> None:
+        self.counters = InMemoryRateLimitCounters()
+        self.config = SwitchableRateLimitConfig()
+        self._store: RateLimitCounterStore = self.counters
+        self._clock = clock
+
+    def use_counters(self, store: RateLimitCounterStore) -> None:
+        """Count in `store` instead, e.g. one that fails."""
+        self._store = store
+
+    def limiter(self) -> RateLimiter:
+        return RateLimiter(self._store, self.config, self._clock)
 
 
 WireApi = Callable[..., InMemoryOrderRepository]

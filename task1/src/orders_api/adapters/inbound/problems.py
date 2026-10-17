@@ -72,6 +72,7 @@ def problem_body(
     instance: str | None = None,
     detail: str | None = None,
     errors: Sequence[FieldError] = (),
+    scope: str | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "type": problem.urn,
@@ -85,4 +86,6 @@ def problem_body(
     body["requestId"] = request_id
     if errors:
         body["errors"] = [error.to_json() for error in errors]
+    if scope is not None:
+        body["scope"] = scope  # which rate limit a `429` hit: `ip` or `user` (ADR 0006)
     return body

@@ -59,3 +59,62 @@ def test_schemas_follow_the_draft_04_safe_rules(where: str, schema: dict[str, An
         assert schema.get("additionalProperties") is False, where
     if "$ref" in schema:
         assert schema["$ref"].startswith("#/components/schemas/"), where
+
+
+RATE_LIMIT_HEADERS = {"RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"}
+
+
+def operations() -> list[tuple[str, str, dict[str, Any]]]:
+    return [
+        (path, method, operation)
+        for path, path_item in load_spec()["paths"].items()
+        for method, operation in path_item.items()
+        if isinstance(operation, dict) and "responses" in operation
+    ]
+
+
+def resolved(response: dict[str, Any]) -> dict[str, Any]:
+    if "$ref" in response:
+        resolved_response: dict[str, Any] = load_spec()["components"]["responses"][
+            response["$ref"].split("/")[-1]
+        ]
+        return resolved_response
+    return response
+
+
+def header_names(response: dict[str, Any]) -> set[str]:
+    return set(resolved(response).get("headers", {}))
+
+
+@pytest.mark.parametrize(
+    ("path", "method", "operation"),
+    [op for op in operations() if op[0] != "/api/v1/health"],
+    ids=lambda value: value if isinstance(value, str) else "",
+)
+def test_every_rate_limited_operation_documents_its_429_and_headers(
+    path: str, method: str, operation: dict[str, Any]
+) -> None:
+    """Every order operation is limited (ADR 0006): its success answers carry the headers, and
+    so does the `429`, with `Retry-After`."""
+    responses = operation["responses"]
+
+    assert responses["429"] == {"$ref": "#/components/responses/TooManyRequests"}
+    assert header_names(responses["429"]) >= RATE_LIMIT_HEADERS | {"Retry-After"}
+    for status, response in responses.items():
+        if status.startswith("2"):
+            assert header_names(response) >= RATE_LIMIT_HEADERS, status
+
+
+def test_health_is_not_rate_limited() -> None:
+    responses = load_spec()["paths"]["/api/v1/health"]["get"]["responses"]
+
+    assert "429" not in responses
+    assert not header_names(responses["200"]) & RATE_LIMIT_HEADERS
+
+
+def test_the_rate_limit_headers_are_required_wherever_they_are_documented() -> None:
+    headers = load_spec()["components"]["headers"]
+
+    for name in RATE_LIMIT_HEADERS | {"Retry-After"}:
+        assert headers[name]["required"] is True
+        assert headers[name]["schema"] == {"type": "integer", "minimum": 0}
