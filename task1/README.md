@@ -263,12 +263,10 @@ make down ENV=aws-dev               # cdk destroy
   an emulator endpoint, Floci's dummy key or another region.
 - **`aws-e2e` workflow:** deploys `aws-dev` through GitHub OIDC (no stored keys), runs both
   suites, and always destroys the stack. It runs on a manual trigger only.
-- **Cost:** mostly pay per request.
-  - WAF charges $5 a month per web ACL and $1 per rule, pro rata by the hour, so about a cent
-    per hour `aws-dev` is up.
-  - The demo users' secret is $0.40 a month, pro rata.
-  - The edge-optimized endpoint adds a few minutes to deploy and destroy.
-  - The cost at scale is in [design §8](docs/design.md#cost-model).
+- **Cost:** mostly pay per request; the monthly fees (WAF's web ACL and rules, the demo users'
+  secret) are charged pro rata by the hour, so an `aws-dev` run costs cents. The prices and the
+  cost at scale are in [design §8](docs/design.md#cost-model).
+- **Time:** the edge-optimized endpoint adds a few minutes to deploy and destroy.
 - **Status:** nothing has been run on AWS yet. The AWS rows of
   [`docs/verification.md`](docs/verification.md) are `pending` until the first run.
 

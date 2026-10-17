@@ -227,12 +227,7 @@ policy, `<REGION>` is `us-east-1` and `<ACCOUNT_ID>` is the account.
 
 ## Cost
 
-- **Per request:** mostly pay-per-request pennies (API Gateway, Lambda, DynamoDB, CloudWatch
-  Logs). Per run, the WAF test sends at most a few thousand requests to `/health`.
-- **WAF:** $5 a month for the web ACL and $1 per rule (`aws-dev` has two), charged pro rata
-  by the hour, so about a cent per hour `aws-dev` is up, plus $0.60 per million requests.
-- **Secrets Manager:** $0.40 a month for the demo users' secret, pro rata.
-- **Cognito:** nothing at the demo's handful of users (10,000 monthly active users are free).
-- These are `us-east-1` list prices of 2026-10-17. The cost model at 1 M, 10 M and 100 M
-  requests a month, with its sources, is in the
-  [design document, section 8](design.md#cost-model).
+- **A run costs cents:** mostly pay per request, and the monthly fees (WAF's web ACL and its two
+  rules in `aws-dev`, the demo users' secret) are charged pro rata by the hour. The prices, with
+  their sources and date, are in the [design document, section 8](design.md#cost-model).
+- **Per run,** the WAF test sends at most a few thousand requests to `/health`.
