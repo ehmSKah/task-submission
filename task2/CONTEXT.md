@@ -28,6 +28,14 @@ _Avoid_: downstream API, target system
 Passing an accepted order to the fulfilment service. A handover is complete once the fulfilment service has confirmed it with its fulfilment order id.
 _Avoid_: forwarding, sync, push
 
+**Dead letter**:
+An event set aside because it could not be processed, kept unchanged together with the reason, for a person to inspect and, where it makes sense, replay. Invalid events, conflicting events and failed handovers become dead letters; an outage does not.
+_Avoid_: failed message, error event
+
+**Replay**:
+Feeding a dead letter back into processing, unchanged, once the cause has been fixed.
+_Avoid_: retry, resend
+
 **Failed handover**:
 A handover the consumer has given up on, because it ran out of retries or because the fulfilment service refused the order. The order stays accepted, and the handover can still be completed later.
 _Avoid_: lost order, rejected order
