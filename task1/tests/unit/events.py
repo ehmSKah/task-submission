@@ -80,3 +80,20 @@ def problem_of(
     if slug is not None:
         assert body["type"] == f"urn:problem:orders-api:{slug}"
     return body
+
+
+def list_orders_event(
+    query: dict[str, str | list[str]] | None = None, authorizer: dict[str, Any] | None = ALICE
+) -> dict[str, Any]:
+    """A `GET /api/v1/orders`; a list value repeats the parameter. Like the REST API, repeated
+    parameters keep their last value in the single-value map and all of them in the other."""
+    event = rest_event("GET", "/api/v1/orders")
+    if query:
+        multi = {
+            name: value if isinstance(value, list) else [value] for name, value in query.items()
+        }
+        event["queryStringParameters"] = {name: values[-1] for name, values in multi.items()}
+        event["multiValueQueryStringParameters"] = multi
+    if authorizer is not None:
+        event["requestContext"]["authorizer"] = authorizer
+    return event

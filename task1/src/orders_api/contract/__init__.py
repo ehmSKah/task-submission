@@ -53,3 +53,14 @@ def path_parameter_schema(path: str, name: str) -> dict[str, Any]:
         if parameter["in"] == "path" and parameter["name"] == name:
             return _draft_04(parameter["schema"])
     raise KeyError(f"{path} declares no path parameter {name!r}")
+
+
+@cache
+def query_parameter_schemas(method: str, path: str) -> dict[str, dict[str, Any]]:
+    """Every query parameter one operation declares, by name, with its schema."""
+    operation = load_contract()["paths"][path][method]
+    return {
+        parameter["name"]: _draft_04(parameter["schema"])
+        for parameter in operation.get("parameters", [])
+        if parameter["in"] == "query"
+    }

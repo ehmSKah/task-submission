@@ -14,6 +14,7 @@ from aws_lambda_powertools.utilities.idempotency.persistence.datarecord import (
     DataRecord,
 )
 
+from orders_api.application.orders import OrderPage, PagePosition
 from orders_api.domain.order import Order
 
 
@@ -27,6 +28,31 @@ class InMemoryOrderRepository:
     def add(self, order: Order) -> None:
         assert order.id not in self._orders, f"order {order.id} already exists"
         self._orders[order.id] = order
+
+    def list_newest_first(
+        self, *, owner_id: str | None, limit: int, after: PagePosition | None
+    ) -> OrderPage:
+        """Ordered by `createdAt#id` like the DynamoDB indexes. As with a DynamoDB `Limit`, a full
+        page always names a next position, even when no order follows."""
+
+        def sort_key(created_at: str, order_id: str) -> str:
+            return f"{created_at}#{order_id}"
+
+        listed = sorted(
+            (o for o in self._orders.values() if owner_id is None or o.owner_id == owner_id),
+            key=lambda o: sort_key(o.created_at, o.id),
+            reverse=True,
+        )
+        if after is not None:
+            start = sort_key(after.created_at, after.order_id)
+            listed = [o for o in listed if sort_key(o.created_at, o.id) < start]
+        page = tuple(listed[:limit])
+        if len(page) < limit:
+            return OrderPage(orders=page, next_position=None)
+        last = page[-1]
+        return OrderPage(
+            orders=page, next_position=PagePosition(created_at=last.created_at, order_id=last.id)
+        )
 
 
 class FixedClock:

@@ -71,6 +71,8 @@ task1/
 - **Rate limiting comes before validation**, so clients sending garbage still spend their budget; malformed requests are no way around the limiter.
 - **Request and body validation come before the permission check.** For `PATCH` the required permission depends on the body (cancellation needs `order:cancel:own`, anything else `order:status:any`). The gateway also rejects invalid bodies before the function, so a `400` precedes a `403` in both layers.
 - **A malformed path id is a `400`**, because the UUID format is part of the published contract ([ADR 0007](0007-validation-and-errors.md)). A well-formed id that doesn't exist or isn't visible is a `404` (ADR 0001).
+- **A list cursor is decoded at step 4, and its list checked after step 6.** Whether a cursor belongs to the caller's list depends on their permissions ([ADR 0004](0004-order-model-and-lifecycle.md)), so a caller without any read permission gets `403` for a well-formed cursor, and `400` only for one that doesn't decode. Either way nothing is read.
+- **Where the cursor lives:** encoding it is an inbound-adapter concern. The `OrderRepository` port takes and returns a storage-neutral `PagePosition` (`createdAt` and `id`), from which the DynamoDB adapter builds its key condition; no DynamoDB type reaches the application layer.
 
 **Packaging.**
 - **One code bundle, two functions:** the authorizer (`orders_api.adapters.inbound.authorizer_handler.handler`) and the API function (`orders_api.adapters.inbound.api_handler.handler`).

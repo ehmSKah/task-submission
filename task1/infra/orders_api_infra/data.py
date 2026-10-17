@@ -8,6 +8,7 @@ import aws_cdk as cdk
 from aws_cdk import aws_dynamodb as dynamodb
 from constructs import Construct
 
+from orders_api.adapters.outbound.dynamodb_orders import BY_CREATED_INDEX, BY_OWNER_INDEX
 from orders_api_infra.config import EnvConfig
 
 STRING = dynamodb.AttributeType.STRING
@@ -30,13 +31,13 @@ class Data(Construct):
             removal_policy=config.data_removal_policy,
         )
         self.orders_table.add_global_secondary_index(
-            index_name="byOwner",
+            index_name=BY_OWNER_INDEX,
             partition_key=dynamodb.Attribute(name="ownerId", type=STRING),
             sort_key=dynamodb.Attribute(name="createdAtId", type=STRING),
             projection_type=dynamodb.ProjectionType.ALL,
         )
         self.orders_table.add_global_secondary_index(
-            index_name="byCreated",
+            index_name=BY_CREATED_INDEX,
             partition_key=dynamodb.Attribute(name="listAll", type=STRING),
             sort_key=dynamodb.Attribute(name="createdAtId", type=STRING),
             projection_type=dynamodb.ProjectionType.ALL,

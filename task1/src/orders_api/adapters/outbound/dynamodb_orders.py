@@ -4,13 +4,24 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import boto3
+from boto3.dynamodb.conditions import ConditionBase, Key
 
+from orders_api.application.orders import OrderPage, PagePosition
 from orders_api.domain.order import LineItem, Order, OrderStatus
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.service_resource import Table
 
 LIST_ALL_PARTITION = "ORDER"
+# The two list indexes (ADR 0005): partition attribute, and the sort key both share.
+BY_OWNER_INDEX = "byOwner"
+BY_CREATED_INDEX = "byCreated"
+LIST_SORT_KEY = "createdAtId"
+
+
+def list_sort_key(created_at: str, order_id: str) -> str:
+    """Newest first, `id` breaking ties between equal timestamps (ADR 0005)."""
+    return f"{created_at}#{order_id}"
 
 
 def to_item(order: Order) -> dict[str, Any]:
@@ -27,7 +38,7 @@ def to_item(order: Order) -> dict[str, Any]:
         "updatedAt": order.updated_at,
         "version": order.version,
         # Sort key of both list indexes: newest first, `id` breaks ties (ADR 0005).
-        "createdAtId": f"{order.created_at}#{order.id}",
+        LIST_SORT_KEY: list_sort_key(order.created_at, order.id),
         "listAll": LIST_ALL_PARTITION,
     }
 
@@ -64,3 +75,36 @@ class DynamoDbOrderRepository:
     def add(self, order: Order) -> None:
         """One `PutItem` that refuses to replace an existing order with the same id."""
         self._table.put_item(Item=to_item(order), ConditionExpression="attribute_not_exists(id)")
+
+    def list_newest_first(
+        self, *, owner_id: str | None, limit: int, after: PagePosition | None
+    ) -> OrderPage:
+        """One `Query` on `byOwner` (one owner's orders) or `byCreated` (every order), newest
+        first. The position is the sort key of the last order read, from `LastEvaluatedKey`.
+
+        The next page seeks with `createdAtId < position` in the key condition rather than
+        passing an `ExclusiveStartKey`: the position then stays valid after its order is deleted
+        (Floci restarts from the first item when the start key's item is gone; see
+        docs/verification.md), and a position can never leave the queried partition.
+        """
+        index, partition, value = (
+            (BY_CREATED_INDEX, "listAll", LIST_ALL_PARTITION)
+            if owner_id is None
+            else (BY_OWNER_INDEX, "ownerId", owner_id)
+        )
+        condition: ConditionBase = Key(partition).eq(value)
+        if after is not None:
+            condition &= Key(LIST_SORT_KEY).lt(list_sort_key(after.created_at, after.order_id))
+        response = self._table.query(
+            IndexName=index, KeyConditionExpression=condition, ScanIndexForward=False, Limit=limit
+        )
+        last = response.get("LastEvaluatedKey")
+        return OrderPage(
+            orders=tuple(from_item(item) for item in response["Items"]),
+            next_position=_position(str(last[LIST_SORT_KEY])) if last else None,
+        )
+
+
+def _position(sort_key: str) -> PagePosition:
+    created_at, _, order_id = sort_key.partition("#")
+    return PagePosition(created_at=created_at, order_id=order_id)

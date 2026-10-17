@@ -6,6 +6,8 @@ import json
 import pytest
 
 from orders_api.adapters.inbound import api_handler
+from orders_api.adapters.inbound.order_list import Cursor, encode_cursor
+from orders_api.application.orders import PagePosition
 from tests.builders import an_order
 from tests.unit.events import (
     ADMIN,
@@ -18,6 +20,7 @@ from tests.unit.events import (
     get_order_event,
     headers_of,
     invoke,
+    list_orders_event,
     problem_of,
 )
 from tests.unit.fakes import InMemoryOrderRepository, WireApi
@@ -35,6 +38,9 @@ class UntouchableRepository(InMemoryOrderRepository):
 
     def add(self, order: object) -> None:
         raise AssertionError("the repository must not be written")
+
+    def list_newest_first(self, **_: object) -> None:
+        raise AssertionError("the repository must not be read")
 
 
 @pytest.fixture(autouse=True)
@@ -71,6 +77,23 @@ def test_nobody_may_not_read_an_order_whether_or_not_it_exists(order_id: str) ->
 
 
 @pytest.mark.usefixtures("untouchable")
+def test_nobody_may_not_list_orders() -> None:
+    body = problem_of(invoke(list_orders_event(authorizer=NOBODY)), 403, "forbidden")
+
+    assert body["instance"] == "/api/v1/orders"
+    assert body["detail"] == "Missing permission: order:read:any or order:read:own"
+
+
+@pytest.mark.usefixtures("untouchable")
+def test_nobody_may_not_resume_someone_else_s_list_either() -> None:
+    """A well-formed cursor doesn't get past the permission check, whoever's list it is from."""
+    position = PagePosition(created_at=ALICES_ORDER.created_at, order_id=ALICES_ORDER.id)
+    cursor = encode_cursor(Cursor(owner_id="alice-sub", position=position))
+
+    problem_of(invoke(list_orders_event({"cursor": cursor}, NOBODY)), 403, "forbidden")
+
+
+@pytest.mark.usefixtures("untouchable")
 def test_only_unknown_groups_are_no_role_at_all() -> None:
     problem_of(
         invoke(get_order_event(ALICES_ORDER.id, with_roles("marketing,staff"))), 403, "forbidden"
@@ -90,6 +113,14 @@ def test_an_invalid_body_is_a_400_even_for_nobody() -> None:
 @pytest.mark.usefixtures("untouchable")
 def test_a_malformed_path_id_is_a_400_even_for_nobody() -> None:
     problem_of(invoke(get_order_event("not-a-uuid", NOBODY)), 400, "validation-error")
+
+
+@pytest.mark.usefixtures("untouchable")
+@pytest.mark.parametrize(
+    "query", [{"limit": "0"}, {"cursor": "nope"}, {"status": "PENDING"}], ids=str
+)
+def test_a_malformed_list_query_is_a_400_even_for_nobody(query: dict[str, str]) -> None:
+    problem_of(invoke(list_orders_event(query, NOBODY)), 400, "validation-error")
 
 
 def test_someone_else_s_order_is_a_404_identical_to_an_unknown_one() -> None:

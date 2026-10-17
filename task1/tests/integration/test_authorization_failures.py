@@ -55,6 +55,20 @@ def test_nobody_may_not_read_an_order_whether_or_not_it_exists(
     assert_problem(response, 403, "forbidden")
 
 
+def test_nobody_may_not_list_orders(api: httpx.Client, token_for: Callable[[str], str]) -> None:
+    response = api.get("/api/v1/orders", headers=bearer(token_for("nobody")))
+
+    assert_problem(response, 403, "forbidden")
+
+
+def test_an_invalid_list_query_from_nobody_is_a_400_not_a_403(
+    api: httpx.Client, token_for: Callable[[str], str]
+) -> None:
+    response = api.get("/api/v1/orders", params={"limit": "0"}, headers=bearer(token_for("nobody")))
+
+    assert_problem(response, 400, "validation-error")
+
+
 def test_an_invalid_body_from_nobody_is_a_400_not_a_403(
     api: httpx.Client, token_for: Callable[[str], str]
 ) -> None:
