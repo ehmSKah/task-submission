@@ -32,7 +32,7 @@ jobs:
     # The OIDC token's subject names this environment, which the role's trust policy requires;
     # its protection rules (branch, reviewers) decide who may run this.
     environment: aws-dev
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v10.3.0
