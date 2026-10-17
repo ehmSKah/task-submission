@@ -18,9 +18,9 @@ it comes from is revisited (amended or superseded).
   - `pending`: not run yet.
 - **Version / date:** what the check last ran against, and when; `—` while pending.
 
-**State on 2026-10-18:** 89 assumptions: 50 `verified`, 5 `failed` (each with its
-workaround), 34 `pending`.
-- **31 of the pending rows need AWS and have not yet been run on AWS.** They stay
+**State on 2026-10-18:** 91 assumptions: 51 `verified`, 5 `failed` (each with its
+workaround), 35 `pending`.
+- **32 of the pending rows need AWS and have not yet been run on AWS.** They stay
   `pending` until the first deploy to `aws-dev` (`make up`, `make test-integration` and
   `make contract-test` with `ENV=aws-dev`, or the `aws-e2e` workflow), which fills them in.
   Most are executable `aws_only` or integration tests; a few are done by hand.
@@ -86,6 +86,7 @@ workaround), 34 `pending`.
 | A user pool with `DeletionProtection` (`INACTIVE` locally) deploys and redeploys ([ADR 0010](adr/0010-infrastructure-and-environments.md)) | Floci | `make deploy` on the existing stack | verified | Floci 2.3.0, 2026-10-17 |
 | `cdk synth` with cdk-nag passes for `local`, `aws-dev` and `aws-prod` without AWS credentials; the AWS stacks are synthesised for `aws://unknown-account/eu-central-1` ([ADR 0010](adr/0010-infrastructure-and-environments.md)) | Local | `make lint` (no AWS credentials on the machine); `tests/unit/test_environments_infra.py` for the template | verified | CDK CLI 2.1145.0, cdk-nag 2.38.2, 2026-10-17 |
 | The `aws_only` tests are skipped on Floci with their reason, before any fixture switches limits ([ADR 0011](adr/0011-testing-strategy.md)) | Floci | `make test-integration` (3 skipped) | verified | Floci 2.3.0, 2026-10-17 |
+| The user pool is created in Cognito's Lite tier (`UserPoolTier: LITE`, [ADR 0013](adr/0013-production-readiness-and-evolution.md)): CloudFormation accepts the property, `DescribeUserPool` returns `LITE`, and seeding, sign-in, the demo and the integration suite work unchanged | Floci | `make deploy`, then `describe-user-pool`; `make demo`; `make test-integration` (174 passed); `tests/unit/test_environments_infra.py::test_every_environment_pins_the_user_pool_to_the_lite_tier` | verified | Floci 2.3.0, 2026-10-18 |
 
 ## Not yet triggerable locally
 
@@ -130,3 +131,4 @@ workaround), 34 `pending`.
 | `aws-prod` deploys with termination protection, retained data, PITR and deletion protection, and `make down ENV=aws-prod` is refused ([ADR 0010](adr/0010-infrastructure-and-environments.md)) | AWS | By hand, optional | pending | — |
 | A cancelled `aws-e2e` run still tears the stack down: the destroy step runs on cancellation too, and `cdk destroy` waits out a deploy still in progress instead of failing on it ([ADR 0011](adr/0011-testing-strategy.md)) | AWS | cancel a run during its deploy step once | pending | — |
 | The integration tests' log reads stay inside CloudWatch Logs' `FilterLogEvents` limit in `eu-central-1` (5 calls a second, against 25 in `us-east-1`, not raisable): `tests/integration/function_logs.py` polls once a second across at most two log groups, and botocore retries a throttled call ([ADR 0010](adr/0010-infrastructure-and-environments.md)) | AWS | `aws-dev` integration run: no `ThrottlingException` from the log assertions | pending | — |
+| The same on AWS, and Lite's limits fit the design: password sign-in, groups in the access token, no managed login ([ADR 0013](adr/0013-production-readiness-and-evolution.md)) | AWS | `aws-dev` deploy and integration run; `describe-user-pool` | pending | — |

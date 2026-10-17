@@ -261,7 +261,6 @@ you do differently in production?" before anyone asks.
 9. A rehearsed point-in-time restore.
 10. A revocation runbook.
 11. Erasure of everything belonging to one person (GDPR).
-12. The user pool pinned to Cognito's Lite tier (see the cost table).
 
 **When load grows,** each step has a measurable trigger:
 
@@ -311,8 +310,8 @@ so each Frankfurt figure was read from AWS's official Price List API file for `e
 | SSM Parameter Store (standard parameter, standard throughput) | 0 | 0 | 0 |
 | Secrets Manager ($0.40 per secret; `aws-prod` has none, `aws-dev` one) | 0 | 0 | 0 |
 | **Subtotal: the request path** | **14.27** | **88.68** | **832.76** |
-| Cognito, 5k / 50k / 500k MAU, **Essentials** tier (the stack's default today), $0.015/MAU over 10k free | 0 | 600 | 7,350 |
-| Cognito, same MAU, **Lite** tier, from $0.0055/MAU over 10k free | 0 | 220 | 2,335 |
+| Cognito, 5k / 50k / 500k MAU, **Lite** tier (the stack's), from $0.0055/MAU over 10k free | 0 | 220 | 2,335 |
+| For comparison: the same MAU in **Essentials**, CloudFormation's default, $0.015/MAU over 10k free | 0 | 600 | 7,350 |
 | **Total with Lite** | **14.27** | **308.68** | **3,167.76** |
 
 **Assumptions:**
@@ -341,10 +340,10 @@ so each Frankfurt figure was read from AWS's official Price List API file for `e
 **What the table shows:**
 - **Identity dominates from 10 M requests on.** The request path costs about $8.30 per million
   requests plus WAF's $6 base. Cognito is billed per active user, not per request.
-- **The tier matters most.** The stack sets no feature plan, so CloudFormation creates the pool
-  in **Essentials**. The design uses none of Essentials' features: groups already arrive in the
-  access token, and there is no managed login or token customization. Pinning **Lite** saves
-  60–70 % of the identity bill (go-live item 12).
+- **The tier matters most.** The stack pins the user pool to **Lite**. The design uses none of
+  Essentials' features: groups already arrive in the access token, and there is no managed login
+  or token customization. Against Essentials, CloudFormation's default, that saves 60–70 % of
+  the identity bill. Managed login or token customization would mean moving to Essentials.
 - **The counter writes are the largest DynamoDB item.** At $1.53 per million requests they cost
   about 40 % of the REST API's $3.70. That is the trigger for ElastiCache only when latency
   or hot keys matter, not on cost alone.
@@ -371,9 +370,9 @@ publication date and usage types in brackets):
 - DynamoDB on-demand: <https://aws.amazon.com/dynamodb/pricing/on-demand/> (`AmazonDynamoDB`,
   2026-09-11, `EUC1-WriteRequestUnits`, `EUC1-ReadRequestUnits`, `EUC1-TimedStorage-ByteHrs`).
 - Cognito: <https://aws.amazon.com/cognito/pricing/> (`AmazonCognito`, 2026-09-25,
-  `EUC1-CognitoEssentialsMAU`, `EUC1-CognitoLiteMAU`, `Global-CognitoFreeTierMAU`). The default
-  tier is from the CloudFormation reference for `AWS::Cognito::UserPool` (`UserPoolTier`
-  "Defaults to `ESSENTIALS`"):
+  `EUC1-CognitoEssentialsMAU`, `EUC1-CognitoLiteMAU`, `Global-CognitoFreeTierMAU`). The stack
+  sets `UserPoolTier: LITE`; the default it overrides is from the CloudFormation reference for
+  `AWS::Cognito::UserPool` (`UserPoolTier` "Defaults to `ESSENTIALS`"):
   <https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cognito-userpool.html>.
 - WAF: <https://aws.amazon.com/waf/pricing/> (`awswaf`, 2026-09-14, `EUC1-WebACLV2`,
   `EUC1-RuleV2`, `EUC1-RequestV2-Tier1`).
