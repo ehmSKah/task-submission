@@ -8,15 +8,9 @@ from typing import Any
 import pytest
 from aws_cdk.assertions import Template
 
-from orders_api.adapters.inbound.http_headers import SECURITY_HEADERS
 from orders_api.contract import load_contract
-from orders_api_infra.waf import HEADERS_WAF_SETS_ITSELF, TEST_HEADER, TEST_HEADER_VALUE
+from orders_api_infra.waf import TEST_HEADER, TEST_HEADER_VALUE
 from tests.unit.data_stack import config, synth
-
-# WAF adds `Cache-Control: no-store` to a custom response itself; ours doubled it on aws-dev.
-SECURITY_HEADERS_WAF_DOESNT_SET = {
-    name: value for name, value in SECURITY_HEADERS.items() if name not in HEADERS_WAF_SETS_ITSELF
-}
 
 
 def web_acl(template: Template) -> dict[str, Any]:
@@ -52,23 +46,13 @@ def test_the_flood_rule_counts_requests_per_ip_over_five_minutes_at_the_configur
     }
 
 
-def test_a_blocked_request_gets_a_429_with_a_static_retry_after_and_the_security_headers(
-    template: Template,
-) -> None:
+def test_a_blocked_request_gets_a_429_with_a_static_retry_after_only(template: Template) -> None:
+    """API Gateway adds its `DEFAULT_4XX` headers (security, CORS) to a WAF block itself."""
     [rule] = rules_by_name(template).values()
 
     response = rule["Action"]["Block"]["CustomResponse"]
     assert response["ResponseCode"] == 429
-    assert blocked_response_headers(template) == {
-        "Retry-After": "300",
-        **SECURITY_HEADERS_WAF_DOESNT_SET,
-        # local allows Swagger UI's origin, which a static value can name (ADR 0014).
-        "Access-Control-Allow-Origin": "http://localhost:8080",
-        "Access-Control-Expose-Headers": (
-            "ETag, RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset, Retry-After, X-Request-Id"
-        ),
-        "Vary": "Origin",
-    }
+    assert blocked_response_headers(template) == {"Retry-After": "300"}
     assert response["CustomResponseBodyKey"] in web_acl(template)["CustomResponseBodies"]
 
 
@@ -79,18 +63,15 @@ def blocked_response_headers(template: Template) -> dict[str, str]:
 
 
 @pytest.mark.parametrize("origins", [[], ["http://localhost:8080", "https://app.example.com"]])
-def test_the_429_names_no_origin_unless_exactly_one_is_allowed(
+def test_the_429_s_headers_are_the_same_whatever_origins_are_allowed(
     origins: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """WAF takes static headers only, so it can't choose among several origins (ADR 0014)."""
+    """The CORS headers come from the gateway's `DEFAULT_4XX`, like on its own errors (ADR 0014)."""
     template = synth(
         config(wafTestRuleLimit=None, corsAllowedOrigins=origins), tmp_path, monkeypatch
     )[2]
 
-    assert blocked_response_headers(template) == {
-        "Retry-After": "300",
-        **SECURITY_HEADERS_WAF_DOESNT_SET,
-    }
+    assert blocked_response_headers(template) == {"Retry-After": "300"}
 
 
 def test_the_429_body_is_the_rate_limited_problem_without_a_request_id(

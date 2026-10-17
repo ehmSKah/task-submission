@@ -97,13 +97,17 @@ def test_waf_blocks_an_address_over_the_limit_with_the_rate_limited_problem(
         "components": load_spec()["components"],
     }
     OAS30Validator(problem_schema).validate(blocked.json())
-    assert blocked.headers["Retry-After"] == str(RETRY_AFTER_SECONDS)
-    for header, value in SECURITY_HEADERS.items():
-        assert blocked.headers.get(header) == value, header
-    # Static, so a browser page from the one allowed origin can read the 429 too (ADR 0014).
+    # WAF sets `Retry-After`; API Gateway adds its `DEFAULT_4XX` headers, the security headers and,
+    # so a page from the one allowed origin can read the 429 too, the CORS ones (ADR 0014). Each
+    # must arrive exactly once: every header that doesn't is reported, not only the first.
     origins = load_config(endpoints["env"]).cors_allowed_origins
-    for header, value in static_cors_headers(origins).items():
-        assert blocked.headers.get(header) == value, header
+    expected = {
+        "Retry-After": str(RETRY_AFTER_SECONDS),
+        **SECURITY_HEADERS,
+        **static_cors_headers(origins),
+    }
+    arrived = {name: blocked.headers.get_list(name) for name in expected}
+    assert {name: values for name, values in arrived.items() if values != [expected[name]]} == {}
     assert "RateLimit-Limit" not in blocked.headers
     # Only the test rule's requests are blocked: the same address is still served without the
     # header, so no other suite is ever affected.

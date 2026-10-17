@@ -85,7 +85,7 @@ def test_blocked_requests_get_the_rate_limited_problem_as_a_429(
 
     assert response["ResponseCode"] == 429
     headers = {header["Name"]: header["Value"] for header in response["ResponseHeaders"]}
-    assert headers == rate_limited_headers(load_config(endpoints["env"]).cors_allowed_origins)
+    assert headers == rate_limited_headers()
     body = web_acl["CustomResponseBodies"][response["CustomResponseBodyKey"]]
     assert body["ContentType"] == "APPLICATION_JSON"
     assert json.loads(body["Content"]) == rate_limited_problem()

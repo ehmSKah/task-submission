@@ -6,15 +6,12 @@ can be read back through the WAF API, but nothing is enforced.
 """
 
 import json
-from collections.abc import Sequence
 
 import aws_cdk as cdk
 from aws_cdk import aws_apigateway as apigateway
 from aws_cdk import aws_wafv2 as wafv2
 from constructs import Construct
 
-from orders_api.adapters.inbound.cors import static_cors_headers
-from orders_api.adapters.inbound.http_headers import SECURITY_HEADERS
 from orders_api.adapters.inbound.problems import ProblemType, problem_body
 from orders_api_infra.config import EnvConfig
 
@@ -42,24 +39,14 @@ def rate_limited_problem() -> dict[str, object]:
     return problem_body(ProblemType.RATE_LIMITED, request_id=None, detail=RATE_LIMITED_DETAIL)
 
 
-HEADERS_WAF_SETS_ITSELF = frozenset({"Cache-Control"})
-"""WAF adds `Cache-Control: no-store` to a custom response on its own: setting it too sent it
-twice on aws-dev (docs/verification.md)."""
-
-
-def rate_limited_headers(cors_allowed_origins: Sequence[str]) -> dict[str, str]:
-    """The custom response's headers. WAF sets `Content-Type` itself from the body's content type
-    and refuses it as a custom header, so it is `application/json` here (ADR 0006). They are
-    static, so they name an allowed browser origin only where there is exactly one (ADR 0014)."""
-    return {
-        "Retry-After": str(RETRY_AFTER_SECONDS),
-        **{
-            name: value
-            for name, value in SECURITY_HEADERS.items()
-            if name not in HEADERS_WAF_SETS_ITSELF
-        },
-        **static_cors_headers(cors_allowed_origins),
-    }
+def rate_limited_headers() -> dict[str, str]:
+    """The custom response's headers: only `Retry-After`. API Gateway answers a request WAF
+    blocked as one of its own responses (`WAF_FILTERED`, which falls back to our `DEFAULT_4XX`)
+    and adds that response's headers, the security and CORS headers, to WAF's: setting them
+    here too sent each one twice on aws-dev (docs/verification.md). WAF sets `Content-Type`
+    itself from the body's content type and refuses it as a custom header, so it is
+    `application/json` here (ADR 0006)."""
+    return {"Retry-After": str(RETRY_AFTER_SECONDS)}
 
 
 def _rule(
@@ -127,7 +114,7 @@ class WebAcl(Construct):
         self, scope: Construct, construct_id: str, *, config: EnvConfig, stage: apigateway.Stage
     ) -> None:
         super().__init__(scope, construct_id)
-        headers = rate_limited_headers(config.cors_allowed_origins)
+        headers = rate_limited_headers()
         rules = [_rule(FLOOD_RULE, 0, config.waf_rate_limit, None, headers)]
         if config.waf_test_rule_limit is not None:
             rules.append(
