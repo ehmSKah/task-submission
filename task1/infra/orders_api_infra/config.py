@@ -1,13 +1,14 @@
 """Typed per-environment configuration, loaded from `infra/config/<env>.yaml` (ADR 0010)."""
 
 import platform
+import re
 from enum import Enum
 from pathlib import Path
 from typing import Literal
 
 import aws_cdk as cdk
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from orders_api_infra.paths import CONFIG_DIR
 
@@ -16,6 +17,27 @@ Target = Literal["floci", "aws"]
 
 # The CloudWatch retention periods this project uses.
 LogRetentionDays = Literal[1, 3, 7, 14, 30, 90]
+
+# An origin as a browser sends it in `Origin`: scheme, lower-case host, and a port only where it
+# isn't the scheme's default. No wildcard, path or trailing slash, so it can be compared exactly
+# (ADR 0014).
+_ORIGIN = re.compile(r"(?P<scheme>https?)://[a-z0-9-]+(\.[a-z0-9-]+)*(:(?P<port>[0-9]{1,5}))?")
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _check_origin(origin: str) -> str:
+    match = _ORIGIN.fullmatch(origin)
+    port = match and match["port"]
+    if not match or (port and not 0 < int(port) < 65536):
+        raise ValueError(
+            f"corsAllowedOrigins: {origin!r} is not an origin as browsers send it: "
+            "http(s)://host[:port], lower case, no wildcard, path or trailing slash"
+        )
+    if port and int(port) == _DEFAULT_PORTS[match["scheme"]]:
+        raise ValueError(
+            f"corsAllowedOrigins: {origin!r} names the default port, which browsers leave out"
+        )
+    return origin
 
 
 class Architecture(Enum):
@@ -65,6 +87,9 @@ class EnvConfig(BaseModel):
     # API Gateway access logs on the stage (ADR 0012). Off locally: Floci accepts the setting but
     # neither keeps nor writes it.
     access_logs: bool = Field(default=False, alias="accessLogs")
+    # The browser origins allowed to call the API cross-origin (ADR 0014). Empty, the default,
+    # turns CORS off: no `Access-Control-*` headers and no `OPTIONS` routes, as before.
+    cors_allowed_origins: tuple[str, ...] = Field(default=(), alias="corsAllowedOrigins")
     # WAF's rate-based rule: requests per client IP in any 5 minutes before the edge answers
     # `429`. AWS WAF's minimum is 10 (ADR 0006).
     waf_rate_limit: int = Field(default=3000, ge=10, le=2_000_000_000, alias="wafRateLimit")
@@ -97,6 +122,15 @@ class EnvConfig(BaseModel):
     @property
     def data_removal_policy(self) -> "cdk.RemovalPolicy":
         return cdk.RemovalPolicy.RETAIN if self.retains_data else cdk.RemovalPolicy.DESTROY
+
+    @field_validator("cors_allowed_origins")
+    @classmethod
+    def _origins_as_browsers_send_them(cls, origins: tuple[str, ...]) -> tuple[str, ...]:
+        for origin in origins:
+            _check_origin(origin)
+            if origins.count(origin) > 1:
+                raise ValueError(f"corsAllowedOrigins: {origin!r} is listed more than once")
+        return origins
 
     @model_validator(mode="after")
     def _floci_settings_match_the_target(self) -> "EnvConfig":

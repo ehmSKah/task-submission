@@ -18,3 +18,7 @@ accessLogs: true
 # flood rule sits well above them; the test-only rule below is the one the WAF test trips.
 wafRateLimit: 10000
 wafTestRuleLimit: 100
+# A developer's local Swagger UI (`make docs ENV=aws-dev`); also what the integration suite's CORS
+# tests check on AWS (ADR 0014).
+corsAllowedOrigins:
+  - http://localhost:8080

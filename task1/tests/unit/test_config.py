@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from orders_api_infra.config import Architecture, EnvConfig, load_config
@@ -203,3 +204,76 @@ def test_the_waf_test_rule_exists_only_with_the_test_fixtures(tmp_path: Path) ->
 
     with pytest.raises(ValidationError, match="wafTestRuleLimit needs testFixtures"):
         load_config("nofixtures", tmp_path)
+
+
+def with_cors_origins(tmp_path: Path, origins: list[str] | None) -> EnvConfig:
+    """aws-prod's config with `corsAllowedOrigins` set to `origins`, or left out for `None`."""
+    data = load_config("aws-prod", CONFIG_DIR).model_dump(by_alias=True, exclude_defaults=True)
+    if origins is not None:
+        data["corsAllowedOrigins"] = origins
+    (tmp_path / "cors.yaml").write_text(yaml.safe_dump(data))
+    return load_config("cors", tmp_path)
+
+
+def test_cors_is_off_unless_an_environment_names_its_origins(tmp_path: Path) -> None:
+    """Without origins the API stays as it was: no CORS headers, no `OPTIONS` (ADR 0014)."""
+    assert with_cors_origins(tmp_path, None).cors_allowed_origins == ()
+
+
+@pytest.mark.parametrize(
+    ("env", "origins"),
+    [
+        ("local", ("http://localhost:8080",)),
+        ("aws-dev", ("http://localhost:8080",)),
+        ("aws-prod", ()),
+    ],
+)
+def test_swagger_ui_on_localhost_is_the_only_browser_client_and_never_in_production(
+    env: str, origins: tuple[str, ...]
+) -> None:
+    assert load_config(env, CONFIG_DIR).cors_allowed_origins == origins
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://app.example.com",
+        "http://localhost:8080",
+        "http://127.0.0.1:3000",
+        "https://orders-ui.example.co.uk:8443",
+    ],
+)
+def test_an_allowed_origin_is_a_scheme_a_host_and_an_optional_port(
+    tmp_path: Path, origin: str
+) -> None:
+    assert with_cors_origins(tmp_path, [origin]).cors_allowed_origins == (origin,)
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "*",
+        "https://*.example.com",
+        "https://app.example.com/",
+        "https://app.example.com/orders",
+        "https://App.Example.com",
+        "ftp://app.example.com",
+        "app.example.com",
+        "null",
+        "https://app.example.com:443",
+        "http://localhost:80",
+        "https://app.example.com?x=1",
+        "https://user@app.example.com",
+        "https://app.example.com:99999",
+    ],
+)
+def test_an_allowed_origin_is_exactly_what_a_browser_sends(tmp_path: Path, origin: str) -> None:
+    """Browsers send an origin lower-cased, without path, trailing slash or default port. An
+    entry that could never match one, or a wildcard, is refused rather than silently ignored."""
+    with pytest.raises(ValidationError, match="corsAllowedOrigins"):
+        with_cors_origins(tmp_path, [origin])
+
+
+def test_an_allowed_origin_is_listed_once(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="more than once"):
+        with_cors_origins(tmp_path, ["https://app.example.com", "https://app.example.com"])

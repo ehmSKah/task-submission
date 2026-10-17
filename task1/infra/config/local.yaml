@@ -16,3 +16,6 @@ flociIssuerBaseUrl: http://floci:4566
 flociUserPoolId: us-east-1_ordersapilocal
 # Deployed and read back on Floci, not enforced there (ADR 0006).
 wafTestRuleLimit: 100
+# Swagger UI from `make docs` calls the API from the browser (ADR 0014).
+corsAllowedOrigins:
+  - http://localhost:8080

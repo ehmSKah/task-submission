@@ -13,3 +13,4 @@ testFixtures: false
 rateLimitConfigCacheSeconds: 60
 accessLogs: true
 wafRateLimit: 3000
+# No corsAllowedOrigins: CORS stays off until a real browser client has an origin (ADR 0014).
