@@ -10,8 +10,13 @@ from aws_cdk.assertions import Template
 
 from orders_api.adapters.inbound.http_headers import SECURITY_HEADERS
 from orders_api.contract import load_contract
-from orders_api_infra.waf import TEST_HEADER, TEST_HEADER_VALUE
+from orders_api_infra.waf import HEADERS_WAF_SETS_ITSELF, TEST_HEADER, TEST_HEADER_VALUE
 from tests.unit.data_stack import config, synth
+
+# WAF adds `Cache-Control: no-store` to a custom response itself; ours doubled it on aws-dev.
+SECURITY_HEADERS_WAF_DOESNT_SET = {
+    name: value for name, value in SECURITY_HEADERS.items() if name not in HEADERS_WAF_SETS_ITSELF
+}
 
 
 def web_acl(template: Template) -> dict[str, Any]:
@@ -56,7 +61,7 @@ def test_a_blocked_request_gets_a_429_with_a_static_retry_after_and_the_security
     assert response["ResponseCode"] == 429
     assert blocked_response_headers(template) == {
         "Retry-After": "300",
-        **SECURITY_HEADERS,
+        **SECURITY_HEADERS_WAF_DOESNT_SET,
         # local allows Swagger UI's origin, which a static value can name (ADR 0014).
         "Access-Control-Allow-Origin": "http://localhost:8080",
         "Access-Control-Expose-Headers": (
@@ -82,7 +87,10 @@ def test_the_429_names_no_origin_unless_exactly_one_is_allowed(
         config(wafTestRuleLimit=None, corsAllowedOrigins=origins), tmp_path, monkeypatch
     )[2]
 
-    assert blocked_response_headers(template) == {"Retry-After": "300", **SECURITY_HEADERS}
+    assert blocked_response_headers(template) == {
+        "Retry-After": "300",
+        **SECURITY_HEADERS_WAF_DOESNT_SET,
+    }
 
 
 def test_the_429_body_is_the_rate_limited_problem_without_a_request_id(

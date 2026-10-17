@@ -42,13 +42,22 @@ def rate_limited_problem() -> dict[str, object]:
     return problem_body(ProblemType.RATE_LIMITED, request_id=None, detail=RATE_LIMITED_DETAIL)
 
 
+HEADERS_WAF_SETS_ITSELF = frozenset({"Cache-Control"})
+"""WAF adds `Cache-Control: no-store` to a custom response on its own: setting it too sent it
+twice on aws-dev (docs/verification.md)."""
+
+
 def rate_limited_headers(cors_allowed_origins: Sequence[str]) -> dict[str, str]:
     """The custom response's headers. WAF sets `Content-Type` itself from the body's content type
     and refuses it as a custom header, so it is `application/json` here (ADR 0006). They are
     static, so they name an allowed browser origin only where there is exactly one (ADR 0014)."""
     return {
         "Retry-After": str(RETRY_AFTER_SECONDS),
-        **SECURITY_HEADERS,
+        **{
+            name: value
+            for name, value in SECURITY_HEADERS.items()
+            if name not in HEADERS_WAF_SETS_ITSELF
+        },
         **static_cors_headers(cors_allowed_origins),
     }
 
