@@ -115,7 +115,9 @@ rules:
         match: "^#/components/schemas/"
 
   errors-are-problem-details:
-    description: Every error response is an RFC 9457 Problem Details document (ADR 0007).
+    description: >-
+      Every error response is an RFC 9457 Problem Details document (ADR 0007), also where it
+      may come as `application/json` (the edge firewall's `429`, ADR 0006).
     message: "{{description}} ({{path}})"
     severity: error
     given: "$.paths.*.*.responses[?(@property >= '400')].content"
@@ -128,3 +130,4 @@ rules:
             additionalProperties: false
             properties:
               application/problem+json: {}
+              application/json: {}

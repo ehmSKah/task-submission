@@ -390,7 +390,9 @@ components:
         type: integer
         minimum: 0
     Retry-After:
-      description: Seconds until the window ends; retrying earlier is refused again.
+      description: >-
+        Seconds to wait before retrying: until the current 60-second window ends for the API's own
+        limits, one whole 5-minute window for the edge firewall's.
       schema:
         type: integer
         minimum: 0
@@ -611,6 +613,9 @@ components:
           $ref: "#/components/headers/X-Request-Id"
       content:
         application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+        application/json:
           schema:
             $ref: "#/components/schemas/Problem"
     Forbidden:
