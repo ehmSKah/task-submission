@@ -74,6 +74,8 @@ Rules:
 | `make up` | starts Floci and waits for it; `cdk bootstrap` (idempotent); builds the bundle; `cdk deploy --method=direct -c env=local`; seeds users; writes and prints the local API URL; writes the `.http` env file (`make http-env`) |
 | `make token ROLE=user\|manager\|admin` | prints an access token for a seeded user |
 | `make limits PRESET=defaults\|high\|tiny\|tiny-ip` | writes a rate-limit preset to the SSM parameter, in force within the cache TTL ([ADR 0006](0006-rate-limiting.md)) |
+| `make demo` | the reviewer's one-minute scenario against the deployed stack; fails on any unexpected response; needs `testFixtures` |
+| `make http-env` | writes the `.http` collection's git-ignored, owner-only env file: the API URL and a token per demo user |
 | `make test` / `make test-integration` / `make contract-test` | unit / Floci integration / Schemathesis |
 | `make coverage` | the coverage thresholds of ADR 0011, after `make test` (and `make test-adapter`) |
 | `make lint` | Ruff, mypy, import-linter, OpenAPI lint (`make lint-openapi`), actionlint, `cdk-nag` at synth for `local`, `aws-dev` and `aws-prod` |
