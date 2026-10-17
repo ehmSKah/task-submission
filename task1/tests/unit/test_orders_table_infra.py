@@ -1,12 +1,12 @@
-"""The list indexes and the API function's access to them (ADRs 0005 and 0012)."""
+"""The orders table, its list indexes and the API function's access to them (ADRs 0005 and
+0012)."""
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from orders_api.adapters.outbound.dynamodb_orders import BY_CREATED_INDEX, BY_OWNER_INDEX
-from tests.unit.test_idempotency_infra import config, synth
+from tests.unit.data_stack import ITEM_ACTIONS, as_list, config, synth
 
 
 def test_the_api_function_may_query_exactly_the_two_list_indexes_and_nothing_else(
@@ -19,7 +19,7 @@ def test_the_api_function_may_query_exactly_the_two_list_indexes_and_nothing_els
         statement
         for policy in template.find_resources("AWS::IAM::Policy").values()
         for statement in policy["Properties"]["PolicyDocument"]["Statement"]
-        if "dynamodb:Query" in _as_list(statement["Action"])
+        if "dynamodb:Query" in as_list(statement["Action"])
     ]
 
     assert len(statements) == 1
@@ -41,5 +41,20 @@ def test_the_indexes_the_adapter_queries_are_the_ones_the_table_has(
     assert {index["IndexName"] for index in indexes} == {BY_OWNER_INDEX, BY_CREATED_INDEX}
 
 
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else [value]
+def test_the_api_function_gets_exactly_the_four_item_actions_on_the_orders_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Get, create, change status and delete (ADRs 0005 and 0012); queries are not item actions."""
+    stack, data, template = synth(config(), tmp_path, monkeypatch)
+    table_id = stack.get_logical_id(data.orders_table.node.default_child)  # type: ignore[arg-type]
+    table_arn = {"Fn::GetAtt": [table_id, "Arn"]}
+
+    granted = {
+        action
+        for policy in template.find_resources("AWS::IAM::Policy").values()
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]
+        if table_arn in as_list(statement["Resource"])
+        for action in as_list(statement["Action"])
+    }
+
+    assert sorted(action for action in granted if action.endswith("Item")) == ITEM_ACTIONS

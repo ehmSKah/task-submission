@@ -61,18 +61,6 @@ def subject_for(token_for: Callable[[str], str]) -> Callable[[str], str]:
 
 
 @pytest.fixture
-def stored_order(endpoints: dict[str, Any], subject_for: Callable[[str], str]) -> Order:
-    """An order of alice's, written straight to the table, bypassing the API. It is created now,
-    like an order from the API, so it never sits ahead of newer orders in her list."""
-    now = format_timestamp(datetime.now(UTC))
-    order = an_order(
-        id=str(uuid.uuid4()), owner_id=subject_for("alice"), created_at=now, updated_at=now
-    )
-    store_order(endpoints, order)
-    return order
-
-
-@pytest.fixture
 def alices_order_in(
     endpoints: dict[str, Any], subject_for: Callable[[str], str]
 ) -> Callable[..., Order]:
@@ -95,6 +83,12 @@ def alices_order_in(
         return order
 
     return store
+
+
+@pytest.fixture
+def stored_order(alices_order_in: Callable[..., Order]) -> Order:
+    """A `PENDING` order of alice's, written straight to the table, bypassing the API."""
+    return alices_order_in(OrderStatus.PENDING)
 
 
 @pytest.fixture

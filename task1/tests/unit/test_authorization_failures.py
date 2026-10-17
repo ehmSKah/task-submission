@@ -2,6 +2,7 @@
 
 import io
 import json
+from typing import Any
 
 import pytest
 
@@ -50,6 +51,11 @@ class UntouchableRepository(InMemoryOrderRepository):
 
     def delete(self, order_id: str) -> bool:
         raise AssertionError("the repository must not be written")
+
+
+def without_instance(body: dict[str, Any]) -> dict[str, Any]:
+    """A problem without the path it echoes, which is all two `404`s may differ in."""
+    return {name: value for name, value in body.items() if name != "instance"}
 
 
 @pytest.fixture(autouse=True)
@@ -102,6 +108,7 @@ def test_nobody_may_not_resume_someone_else_s_list_either() -> None:
     problem_of(invoke(list_orders_event({"cursor": cursor}, NOBODY)), 403, "forbidden")
 
 
+@pytest.mark.usefixtures("untouchable")
 @pytest.mark.parametrize("status", [status.value for status in OrderStatus])
 @pytest.mark.parametrize("order_id", [ALICES_ORDER.id, UNKNOWN_ID], ids=["existing", "unknown"])
 def test_nobody_may_not_change_any_status_whether_or_not_the_order_exists(
@@ -152,6 +159,7 @@ def test_a_malformed_list_query_is_a_400_even_for_nobody(query: dict[str, str]) 
     problem_of(invoke(list_orders_event(query, NOBODY)), 400, "validation-error")
 
 
+@pytest.mark.usefixtures("untouchable")
 def test_an_invalid_status_body_is_a_400_even_for_nobody() -> None:
     event = change_status_event(ALICES_ORDER.id, status="LOST", authorizer=NOBODY)
 
@@ -195,9 +203,7 @@ def test_bob_cancelling_alice_s_order_is_a_404_identical_to_an_unknown_one() -> 
 
     foreign_body = problem_of(foreign, 404, "not-found")
     unknown_body = problem_of(unknown, 404, "not-found")
-    assert {k: v for k, v in foreign_body.items() if k != "instance"} == {
-        k: v for k, v in unknown_body.items() if k != "instance"
-    }
+    assert without_instance(foreign_body) == without_instance(unknown_body)
 
 
 def test_the_owner_cancels_their_own_order() -> None:
@@ -220,9 +226,7 @@ def test_someone_else_s_order_is_a_404_identical_to_an_unknown_one() -> None:
     foreign_body = problem_of(foreign, 404, "not-found")
     unknown_body = problem_of(unknown, 404, "not-found")
     # Only the echoed path differs; nothing tells that the order exists.
-    assert {k: v for k, v in foreign_body.items() if k != "instance"} == {
-        k: v for k, v in unknown_body.items() if k != "instance"
-    }
+    assert without_instance(foreign_body) == without_instance(unknown_body)
     assert set(headers_of(foreign)) == set(headers_of(unknown))
 
 
