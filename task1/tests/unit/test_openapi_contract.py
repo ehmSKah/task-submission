@@ -94,12 +94,13 @@ def header_names(response: dict[str, Any]) -> set[str]:
 def test_every_rate_limited_operation_documents_its_429_and_headers(
     path: str, method: str, operation: dict[str, Any]
 ) -> None:
-    """Every order operation is limited (ADR 0006): its success answers carry the headers, and
-    so does the `429`, with `Retry-After`."""
+    """Every order operation is limited (ADR 0006): its success answers carry the headers. Its
+    `429` may come from flood protection in front of the API too, so it promises only an
+    optional `Retry-After`; the function's own `RateLimit-*` are described in prose."""
     responses = operation["responses"]
 
     assert responses["429"] == {"$ref": "#/components/responses/TooManyRequests"}
-    assert header_names(responses["429"]) >= RATE_LIMIT_HEADERS | {"Retry-After"}
+    assert header_names(responses["429"]) == {"Retry-After", "X-Request-Id"}
     for status, response in responses.items():
         if status.startswith("2"):
             assert header_names(response) >= RATE_LIMIT_HEADERS, status
@@ -115,6 +116,7 @@ def test_health_is_not_rate_limited() -> None:
 def test_the_rate_limit_headers_are_required_wherever_they_are_documented() -> None:
     headers = load_spec()["components"]["headers"]
 
-    for name in RATE_LIMIT_HEADERS | {"Retry-After"}:
+    for name in RATE_LIMIT_HEADERS:
         assert headers[name]["required"] is True
         assert headers[name]["schema"] == {"type": "integer", "minimum": 0}
+    assert "required" not in headers["Retry-After"]

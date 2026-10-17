@@ -11,7 +11,9 @@ info:
     windows; malformed and forbidden requests count too. Each response the API function sends
     after counting, errors included, carries `RateLimit-Limit`, `RateLimit-Remaining` and
     `RateLimit-Reset` for the more restrictive of the two limits. Errors from the gateway
-    itself (an invalid token, a body that fails its schema, an unknown path) carry none.
+    itself (an invalid token, a body that fails its schema, an unknown path, a body over the
+    gateway's own size limit, a `429` from the gateway's or the edge firewall's flood
+    protection) carry none.
 tags:
   - name: health
   - name: orders
@@ -381,7 +383,6 @@ components:
         minimum: 0
     Retry-After:
       description: Seconds until the window ends; retrying earlier is refused again.
-      required: true
       schema:
         type: integer
         minimum: 0
@@ -588,20 +589,17 @@ components:
             $ref: "#/components/schemas/Problem"
     TooManyRequests:
       description: >-
-        A rate limit is exhausted: per client IP or per user (`scope` names which), counted in
-        fixed 60-second windows. Requests over the limit don't count against it. Retry after
-        `Retry-After` seconds.
+        A rate limit is exhausted: per client IP or per user, counted in fixed 60-second
+        windows. Requests over the limit don't count against it. The API function's `429` names
+        the limit in `scope` and carries `Retry-After` and the `RateLimit-*` headers for it.
+        Flood protection in front of the API (the gateway's throttling, the edge firewall)
+        answers `429` too, without `scope` or `RateLimit-*` and at most with a fixed
+        `Retry-After`.
       headers:
         Retry-After:
           $ref: "#/components/headers/Retry-After"
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
-        RateLimit-Limit:
-          $ref: "#/components/headers/RateLimit-Limit"
-        RateLimit-Remaining:
-          $ref: "#/components/headers/RateLimit-Remaining"
-        RateLimit-Reset:
-          $ref: "#/components/headers/RateLimit-Reset"
       content:
         application/problem+json:
           schema:
