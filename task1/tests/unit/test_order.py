@@ -1,6 +1,17 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 
-from orders_api.domain.order import LineItem, NewOrder, Order, OrderStatus, format_timestamp
+import pytest
+
+from orders_api.domain.order import (
+    FINAL_STATUSES,
+    LineItem,
+    NewOrder,
+    Order,
+    OrderStatus,
+    StatusChangeNotAllowed,
+    format_timestamp,
+)
 from tests.builders import an_order
 
 ITEMS = (
@@ -65,3 +76,60 @@ def test_a_new_order_is_pending_at_version_1_owned_by_its_creator() -> None:
         version=1,
     )
     assert order.total_amount == 4498
+
+
+# Status changes (ADR 0004): forward only, no skipping, `DELIVERED` and `CANCELLED` are final.
+
+ALLOWED = {
+    (OrderStatus.PENDING, OrderStatus.CONFIRMED),
+    (OrderStatus.CONFIRMED, OrderStatus.SHIPPED),
+    (OrderStatus.SHIPPED, OrderStatus.DELIVERED),
+    (OrderStatus.PENDING, OrderStatus.CANCELLED),
+    (OrderStatus.CONFIRMED, OrderStatus.CANCELLED),
+}
+DISALLOWED = sorted(
+    (current, requested)
+    for current in OrderStatus
+    for requested in OrderStatus
+    if current != requested and (current, requested) not in ALLOWED
+)
+LATER = datetime(2026, 10, 18, 8, 0, 0, 250000, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(("current", "requested"), sorted(ALLOWED))
+def test_an_allowed_change_moves_to_the_next_version_updated_now(
+    current: OrderStatus, requested: OrderStatus
+) -> None:
+    order = an_order(status=current, version=4)
+
+    changed = order.with_status(requested, now=LATER)
+
+    assert changed == replace(
+        order, status=requested, updated_at="2026-10-18T08:00:00.250Z", version=5
+    )
+
+
+@pytest.mark.parametrize(("current", "requested"), DISALLOWED)
+def test_every_other_change_is_not_allowed(current: OrderStatus, requested: OrderStatus) -> None:
+    order = an_order(status=current)
+
+    with pytest.raises(StatusChangeNotAllowed) as refused:
+        order.with_status(requested, now=LATER)
+
+    assert (refused.value.current, refused.value.requested) == (current, requested)
+    assert str(refused.value) == f"An order can't change from {current} to {requested}"
+
+
+def test_fifteen_changes_are_not_allowed() -> None:
+    assert len(DISALLOWED) == 5 * 4 - len(ALLOWED) == 15
+
+
+@pytest.mark.parametrize("status", list(OrderStatus))
+def test_requesting_the_current_status_changes_nothing(status: OrderStatus) -> None:
+    order = an_order(status=status, version=3)
+
+    assert order.with_status(status, now=LATER) is order
+
+
+def test_only_delivered_and_cancelled_are_final() -> None:
+    assert {OrderStatus.DELIVERED, OrderStatus.CANCELLED} == FINAL_STATUSES

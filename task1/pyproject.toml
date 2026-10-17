@@ -22,6 +22,7 @@ dev = [
     "types-PyYAML",
     "boto3>=1.40",
     "boto3-stubs[dynamodb,cognito-idp,secretsmanager,cloudformation]>=1.40",
+    "hypothesis>=6.170.1",
 ]
 infra = [
     "aws-cdk-lib>=2.220",
