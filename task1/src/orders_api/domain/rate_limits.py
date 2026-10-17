@@ -92,9 +92,10 @@ def window_of(now: datetime) -> Window:
     return Window(start=now.astimezone(UTC).replace(second=0, microsecond=0))
 
 
-def counter_key(scope: RateLimitScope, subject: str, window: Window) -> str:
-    """`<scope>#<subject>#<windowStart>`, e.g. `ip#203.0.113.7#2026-10-17T09:31Z`."""
-    return f"{scope.value}#{subject}#{window.label}"
+def counter_key(scope: RateLimitScope, counted: str, window: Window) -> str:
+    """`<scope>#<counted>#<windowStart>`, where `counted` is who the limit counts: the client's
+    address (`ip_subject`) or the caller's `sub`. E.g. `ip#203.0.113.7#2026-10-17T09:31Z`."""
+    return f"{scope.value}#{counted}#{window.label}"
 
 
 def _address(source_ip: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
@@ -156,9 +157,9 @@ class RateLimitDecision:
     """The limit the headers describe: the one exceeded, else the more restrictive one."""
     reset_seconds: int
     """Seconds until the window ends and the counts start again."""
-    exceeded: RateLimitScope | None = None
-    """The limit the request ran into, if any: it is answered `429`."""
+    exceeded: bool = False
+    """Whether the request ran into `usage`'s limit: it is answered `429`."""
 
     @property
     def allowed(self) -> bool:
-        return self.exceeded is None
+        return not self.exceeded

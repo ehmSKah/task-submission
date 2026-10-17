@@ -17,7 +17,7 @@ class RateLimitExceeded(Exception):
     """The request ran into a limit: `429`."""
 
     def __init__(self, decision: RateLimitDecision) -> None:
-        super().__init__(f"Rate limit exceeded: {decision.exceeded}")
+        super().__init__(f"Rate limit exceeded: {decision.usage.scope}")
         self.decision = decision
 
     @property

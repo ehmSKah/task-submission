@@ -6,6 +6,7 @@ from orders_api.adapters.inbound.problems import (
     json_pointer,
     problem_body,
 )
+from orders_api.domain.rate_limits import RateLimitScope
 
 
 def test_problem_body_follows_rfc_9457_with_request_id() -> None:
@@ -34,7 +35,7 @@ def test_problem_body_omits_detail_when_not_given() -> None:
 
 
 def test_a_rate_limited_problem_names_the_scope_and_others_don_t() -> None:
-    limited = problem_body(ProblemType.RATE_LIMITED, request_id="r", scope="user")
+    limited = problem_body(ProblemType.RATE_LIMITED, request_id="r", scope=RateLimitScope.USER)
 
     assert limited["scope"] == "user"
     assert "scope" not in problem_body(ProblemType.NOT_FOUND, request_id="r")

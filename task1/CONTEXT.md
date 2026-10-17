@@ -22,10 +22,10 @@ _Avoid_: Principal (an AWS policy term), current user
 
 **Permission**:
 A single allowed action on orders, granted to a role. Access checks ask about permissions, never about roles directly.
-_Avoid_: Right, privilege, scope (scopes describe what a client application may do, not what a person may do)
+_Avoid_: Right, privilege, scope (OAuth scopes describe what a client application may do, not what a person may do; a rate limit's scope is something else)
 
 **Rate Limit**:
-How many requests a client may make per minute, counted per client IP and per caller. Over it, the API answers `429` until the minute is over.
+How many requests a client may make per minute, counted per client IP and per caller. Over it, the API answers `429` until the minute is over. Its **scope** says which one was hit: `ip` or `user`, where the user limit is the caller's, counted by their subject.
 _Avoid_: Throttling (AWS's own term for capacity limits), quota (a longer-term allowance)
 
 **Tier**:

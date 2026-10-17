@@ -73,6 +73,6 @@ class RateLimiter:
             )
             if count is None:
                 usage = LimitUsage(scope, limit=limit, remaining=0)
-                return RateLimitDecision(usage=usage, reset_seconds=reset, exceeded=scope)
+                return RateLimitDecision(usage=usage, reset_seconds=reset, exceeded=True)
             usages.append(LimitUsage(scope, limit=limit, remaining=max(0, limit - count)))
         return RateLimitDecision(usage=more_restrictive(*usages), reset_seconds=reset)

@@ -67,7 +67,7 @@ from orders_api.application.orders import (
 from orders_api.application.rate_limiting import RateLimiter
 from orders_api.domain.order import Order, StatusChangeNotAllowed
 from orders_api.domain.permissions import Caller, PermissionDenied
-from orders_api.domain.rate_limits import RateLimitDecision, logged_network
+from orders_api.domain.rate_limits import RateLimitDecision, RateLimitScope, logged_network
 
 UNEXPECTED_ERROR_DETAIL = "An unexpected error occurred"
 
@@ -98,9 +98,7 @@ def rate_limiter() -> RateLimiter:
         os.environ["RATE_LIMITS_PARAMETER"],
         max_age_seconds=int(os.environ["RATE_LIMITS_MAX_AGE_SECONDS"]),
     )
-    return RateLimiter(
-        DynamoDbRateLimitCounters(os.environ["RATE_LIMIT_TABLE"]), config, SystemClock()
-    )
+    return RateLimiter(DynamoDbRateLimitCounters(os.environ["RATE_LIMIT_TABLE"]), config, clock)
 
 
 # This request's rate-limit decision, once step 3 has made it: every response from then on, an
@@ -127,7 +125,7 @@ def admitted_caller() -> Caller:
     decision = rate_limiter().check(ip, caller.subject, caller.roles)
     _rate_limit.set(decision)
     if not decision.allowed:
-        logger.append_keys(rateLimitScope=decision.exceeded, clientNetwork=logged_network(ip))
+        logger.append_keys(rateLimitScope=decision.usage.scope, clientNetwork=logged_network(ip))
         raise RateLimitExceeded(decision)
     return caller
 
@@ -227,7 +225,7 @@ def problem_response(
     detail: str | None = None,
     errors: tuple[FieldError, ...] = (),
     *,
-    scope: str | None = None,
+    scope: RateLimitScope | None = None,
     headers: dict[str, str] | None = None,
 ) -> Response[str]:
     body = problem_body(
@@ -262,7 +260,7 @@ def rate_limit_exceeded(error: RateLimitExceeded) -> Response[str]:
     return problem_response(
         ProblemType.RATE_LIMITED,
         error.detail,
-        scope=error.scope.value,
+        scope=error.scope,
         headers={RETRY_AFTER_HEADER: str(error.decision.reset_seconds)},
     )
 

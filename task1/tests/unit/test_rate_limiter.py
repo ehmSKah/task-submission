@@ -72,7 +72,7 @@ def test_a_caller_without_a_role_is_limited_too() -> None:
     decisions = [rate_limiter.check(IP, "nobody-sub", frozenset()) for _ in range(4)]
 
     assert [d.allowed for d in decisions] == [True, True, True, False]
-    assert decisions[-1].exceeded is RateLimitScope.USER
+    assert decisions[-1].exceeded and decisions[-1].usage.scope is RateLimitScope.USER
 
 
 def test_a_request_over_the_user_limit_doesn_t_increment_the_user_counter() -> None:
@@ -91,7 +91,7 @@ def test_the_ip_is_checked_first_and_a_request_over_it_touches_no_user_counter()
     decisions = [rate_limiter.check(IP, subject, USER) for subject in subjects]
 
     assert [d.allowed for d in decisions] == [True] * 5 + [False]
-    assert decisions[-1].exceeded is RateLimitScope.IP
+    assert decisions[-1].exceeded and decisions[-1].usage.scope is RateLimitScope.IP
     assert decisions[-1].usage == LimitUsage(RateLimitScope.IP, limit=5, remaining=0)
     assert counters.counts[f"ip#{IP}#{WINDOW}"] == 5
     assert f"user#frank-sub#{WINDOW}" not in counters.counts
@@ -161,7 +161,7 @@ def test_a_limit_lowered_below_the_count_rejects_with_nothing_left() -> None:
     )
     decision = rate_limiter.check(IP, "alice-sub", USER)
 
-    assert decision.exceeded is RateLimitScope.USER
+    assert decision.exceeded and decision.usage.scope is RateLimitScope.USER
     assert decision.usage == LimitUsage(RateLimitScope.USER, limit=3, remaining=0)
 
 
