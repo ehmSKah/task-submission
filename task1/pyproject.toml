@@ -56,6 +56,7 @@ markers = [
     "adapter: outbound adapters against the emulator (needs build/endpoints.json)",
     "contract: Schemathesis against the deployed stack (needs build/endpoints.json)",
     "floci_only: needs Floci behaviour AWS can't reproduce; skipped on other targets",
+    "aws_only: needs real AWS (WAF enforcement, the edge, a public address); skipped on Floci",
 ]
 
 # Branch coverage of the shipped package, from the unit and adapter suites (ADR 0011). The

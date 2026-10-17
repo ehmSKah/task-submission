@@ -602,7 +602,8 @@ components:
         the limit in `scope` and carries `Retry-After` and the `RateLimit-*` headers for it.
         Flood protection in front of the API (the gateway's throttling, the edge firewall)
         answers `429` too, without `scope` or `RateLimit-*` and at most with a fixed
-        `Retry-After`.
+        `Retry-After`. The edge firewall's body has no `requestId` either, and comes as
+        `application/json`, the only JSON media type it can send.
       headers:
         Retry-After:
           $ref: "#/components/headers/Retry-After"

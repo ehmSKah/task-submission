@@ -12,7 +12,7 @@ from orders_api.domain.order import Order, OrderStatus, format_timestamp
 from orders_api_infra.config import load_config
 from orders_api_infra.rate_limits import preset_in_force
 from tests.builders import an_order
-from tests.deployment import store_order
+from tests.deployment import load_endpoints, store_order
 from tests.integration.contract import contract_checked_client
 from tests.integration.requests import NEW_ORDER, bearer, subject_of
 
@@ -22,11 +22,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         item.add_marker(pytest.mark.integration)
 
 
-@pytest.fixture(autouse=True)
-def _only_on_floci(request: pytest.FixtureRequest, endpoints: dict[str, Any]) -> None:
-    """`floci_only` tests need emulator behaviour, e.g. second-long tokens (ADR 0011)."""
-    if request.node.get_closest_marker("floci_only") and endpoints["target"] != "floci":
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """`floci_only` tests need emulator behaviour, e.g. second-long tokens; `aws_only` tests need
+    what only AWS has: WAF enforcing its rules, the edge-optimized endpoint in front of the API
+    and the client's public address (ADR 0011). Skipped before any fixture is set up, so a
+    skipped module switches no limits."""
+    target = load_endpoints()["target"]
+    if item.get_closest_marker("floci_only") and target != "floci":
         pytest.skip("runs against Floci only")
+    if item.get_closest_marker("aws_only") and target != "aws":
+        pytest.skip(
+            "runs against AWS only: Floci enforces no WAF rule and has no edge in front of the "
+            "API, and every local request comes from one Docker address"
+        )
 
 
 @pytest.fixture(scope="session", autouse=True)
