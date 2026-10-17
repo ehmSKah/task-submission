@@ -26,4 +26,5 @@ class OrdersApiStack(cdk.Stack):
             authorizer_environment=self.identity.authorizer_environment,
             orders_table=self.data.orders_table,
             idempotency_table=self.data.idempotency_table,
+            rate_limit_table=self.data.rate_limit_table,
         )

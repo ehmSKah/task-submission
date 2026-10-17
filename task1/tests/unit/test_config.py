@@ -100,3 +100,19 @@ def test_everyone_is_user_is_off_unless_an_environment_turns_it_on(tmp_path: Pat
     )
 
     assert load_config("selfsignup", tmp_path).everyone_is_user is True
+
+
+def test_rate_limits_are_cached_briefly_locally_and_for_a_minute_by_default(
+    tmp_path: Path,
+) -> None:
+    """Local suites switch limits at runtime and wait out the cache (ADRs 0006 and 0010)."""
+    assert load_config("local", CONFIG_DIR).rate_limit_config_cache_seconds == 2
+    (tmp_path / "prodlike.yaml").write_text(
+        (CONFIG_DIR / "local.yaml").read_text().replace("rateLimitConfigCacheSeconds: 2\n", "")
+    )
+
+    assert load_config("prodlike", tmp_path).rate_limit_config_cache_seconds == 60
+
+
+def test_each_environment_has_its_own_rate_limits_parameter() -> None:
+    assert load_config("local", CONFIG_DIR).rate_limits_parameter == "/orders-api/local/rate-limits"

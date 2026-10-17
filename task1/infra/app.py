@@ -88,6 +88,17 @@ NagSuppressions.add_resource_suppressions(
         )
     ],
 )
+NagSuppressions.add_resource_suppressions(
+    stack.data.rate_limit_table,
+    [
+        NagPackSuppression(
+            id="AwsSolutions-DDB3",
+            reason="Rate-limit counters only matter during their 60-second window and expire "
+            "by TTL; a restore would bring back nothing worth keeping, so the table has no "
+            "point-in-time recovery in any environment (ADR 0006).",
+        )
+    ],
+)
 api_suppressions = [
     NagPackSuppression(
         id="AwsSolutions-APIG2",

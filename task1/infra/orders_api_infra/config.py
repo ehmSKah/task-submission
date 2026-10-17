@@ -55,6 +55,11 @@ class EnvConfig(BaseModel):
     # ADR 0001's opt-in switch for self-signup: every authenticated person also holds USER.
     # Off by default, so a valid token without a recognised role is denied (403).
     everyone_is_user: bool = Field(default=False, alias="everyoneIsUser")
+    # How long each Lambda instance caches the runtime rate limits: short where tests switch them,
+    # a minute in production, so changes take effect within that time (ADR 0006).
+    rate_limit_config_cache_seconds: int = Field(
+        default=60, ge=1, le=300, alias="rateLimitConfigCacheSeconds"
+    )
     # Floci only: the issuer host tokens carry (FLOCI_HOSTNAME), reachable from Lambda
     # containers. On AWS the issuer comes from the user pool itself.
     floci_issuer_base_url: str | None = Field(default=None, alias="flociIssuerBaseUrl")
@@ -64,6 +69,11 @@ class EnvConfig(BaseModel):
     @property
     def stack_name(self) -> str:
         return f"OrdersApi-{self.name}"
+
+    @property
+    def rate_limits_parameter(self) -> str:
+        """The SSM parameter holding this environment's rate limits (ADR 0006)."""
+        return f"/orders-api/{self.name}/rate-limits"
 
     @property
     def retains_data(self) -> bool:

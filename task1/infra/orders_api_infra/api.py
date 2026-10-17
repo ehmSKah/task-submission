@@ -39,6 +39,7 @@ class Api(Construct):
         authorizer_environment: dict[str, str],
         orders_table: dynamodb.ITable,
         idempotency_table: dynamodb.ITable,
+        rate_limit_table: dynamodb.ITable,
     ) -> None:
         super().__init__(scope, construct_id)
         self._config = config
@@ -58,6 +59,9 @@ class Api(Construct):
             environment={
                 "ORDERS_TABLE": orders_table.table_name,
                 "IDEMPOTENCY_TABLE": idempotency_table.table_name,
+                "RATE_LIMIT_TABLE": rate_limit_table.table_name,
+                "RATE_LIMITS_PARAMETER": config.rate_limits_parameter,
+                "RATE_LIMITS_MAX_AGE_SECONDS": str(config.rate_limit_config_cache_seconds),
             },
         )
         self.api_function.add_to_role_policy(
@@ -91,6 +95,26 @@ class Api(Construct):
                     "dynamodb:DeleteItem",
                 ],
                 resources=[idempotency_table.table_arn],
+            )
+        )
+
+        # Each rate-limit check is one conditional UpdateItem; nothing else touches counters.
+        self.api_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:UpdateItem"], resources=[rate_limit_table.table_arn]
+            )
+        )
+        # Powertools Parameters reads the one parameter with the limits (ADR 0006).
+        self.api_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["ssm:GetParameter"],
+                resources=[
+                    cdk.Stack.of(self).format_arn(
+                        service="ssm",
+                        resource="parameter",
+                        resource_name=config.rate_limits_parameter.removeprefix("/"),
+                    )
+                ],
             )
         )
 

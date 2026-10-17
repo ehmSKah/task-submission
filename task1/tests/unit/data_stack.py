@@ -37,6 +37,7 @@ def synth(
         authorizer_environment={},
         orders_table=data.orders_table,
         idempotency_table=data.idempotency_table,
+        rate_limit_table=data.rate_limit_table,
     )
     return stack, data, Template.from_stack(stack)
 

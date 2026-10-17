@@ -10,6 +10,7 @@ logRetentionDays: 7
 removalPolicy: destroy
 seedUsers: true
 testFixtures: true
+rateLimitConfigCacheSeconds: 2
 fixtureTokenValiditySeconds: 1
 flociIssuerBaseUrl: http://floci:4566
 flociUserPoolId: us-east-1_ordersapilocal

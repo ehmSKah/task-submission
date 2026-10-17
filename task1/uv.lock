@@ -194,6 +194,9 @@ dynamodb = [
 secretsmanager = [
     { name = "mypy-boto3-secretsmanager" },
 ]
+ssm = [
+    { name = "mypy-boto3-ssm" },
+]
 
 [[package]]
 name = "botocore"
@@ -755,6 +758,15 @@ wheels = [
 ]
 
 [[package]]
+name = "mypy-boto3-ssm"
+version = "1.43.104"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c8/b4/007e9acec1ccc7b0f9148f3ef2f6fe27ef183c5c7ab08b6b5a7d465d13d5/mypy_boto3_ssm-1.43.104.tar.gz", hash = "sha256:1b1e18762e6b9ceaf735e8165a6dbd789b10d94f56f704ef010d0c8bbef059cc", size = 98088, upload-time = "2026-09-28T20:24:22.046Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8e/9a/c7d22d1b1450c6b790cad4fcb2e98defd383527d381b4084cd7ee6b2deaa/mypy_boto3_ssm-1.43.104-py3-none-any.whl", hash = "sha256:4434c02de5101a0bc2fbd9bdedbcc98f5836dc432fce38ebfc8c88adb63dbb90", size = 99719, upload-time = "2026-09-28T20:24:19.363Z" },
+]
+
+[[package]]
 name = "mypy-extensions"
 version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -829,7 +841,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "boto3" },
-    { name = "boto3-stubs", extra = ["cloudformation", "cognito-idp", "dynamodb", "secretsmanager"] },
+    { name = "boto3-stubs", extra = ["cloudformation", "cognito-idp", "dynamodb", "secretsmanager", "ssm"] },
     { name = "httpx" },
     { name = "hypothesis" },
     { name = "import-linter" },
@@ -859,7 +871,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "boto3", specifier = ">=1.40" },
-    { name = "boto3-stubs", extras = ["dynamodb", "cognito-idp", "secretsmanager", "cloudformation"], specifier = ">=1.40" },
+    { name = "boto3-stubs", extras = ["dynamodb", "cognito-idp", "secretsmanager", "cloudformation", "ssm"], specifier = ">=1.40" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "hypothesis", specifier = ">=6.170.1" },
     { name = "import-linter", specifier = ">=2.5" },
