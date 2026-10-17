@@ -61,12 +61,25 @@ A person with several roles gets the highest tier (roles combine, [ADR 0001](000
 - **Every rate-limited response** carries `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset` (seconds), describing the more restrictive of the two limits: the one with fewer requests left, and on a tie the smaller limit. On a `429` they describe the limit that was hit.
   - "Every rate-limited response" means everything the API function answers after counting, errors included (`400`, `403`, `404`, `409`, …). Responses produced before counting (`/health`, a missing authorizer context, a counter-store error) and by the gateway itself carry none.
 
-**When the counter store doesn't answer: fail open, with a fallback.** Built in a second step. Until then a counter-store error propagates as a `500`.
-- **Where it plugs in:** the limiter makes exactly one call per check through its counter-store port (`RateLimitCounterStore.increment`: add one below a limit, or say the limit is reached). The behaviour below is a store that wraps the DynamoDB store behind the same port, so the limiter and the handler don't change.
+**When the counter store doesn't answer: fail open, with a fallback.**
+- **Where it plugs in:** the limiter makes exactly one call per check through its counter-store port (`RateLimitCounterStore.increment`: add one below a limit, or say the limit is reached). The behaviour below is a store that wraps the DynamoDB store behind the same port (`FailOpenCounterStore`), so the limiter and the handler don't change.
 - **Time budget:** each counter call gets about **200 ms**.
 - **Throttling on a counter key** (`ProvisionedThroughputExceededException` / `ThrottlingException`) is treated as **limit exceeded → `429`**. It almost always means one client is hammering its own key, and letting it through would reward the abuse.
 - **Timeouts, network and service errors** → the request is allowed. The check falls back to an **in-memory fixed window per Lambda instance** (same limits, a bounded number of keys), and a structured `WARNING` log line with the fixed event name `rate_limiter_unavailable` is written (`rate_limiter_circuit_open` when the breaker opens). In production, a CloudWatch metric filter plus an alarm on those lines makes them alertable without code changes ([ADR 0012](0012-observability-and-security-baseline.md)).
 - **Circuit breaker:** after a few consecutive failures the store is skipped for about 30 seconds and only the fallback is used, so requests don't each pay the timeout during an outage. The store is retried automatically afterwards.
+
+Refined when it was built:
+- **Where each part lives:**
+  - the port names the two failures a store may report, `CounterStoreThrottled` and `CounterStoreUnavailable` (`application/rate_limiting.py`); any other error is a defect
+  - the policy, with its thresholds as constants, is application code without AWS imports (`application/fail_open_counters.py`)
+  - translating botocore's errors and the client's timeouts belong to the DynamoDB adapter (`adapters/outbound/dynamodb_rate_limits.py`)
+  - the log lines are written by the API function's adapter (`adapters/inbound/rate_limiting.py`), through an injected callback, as for the JWKS cache
+- **The 200 ms per call:** the counter client makes **one attempt, no retries, with 100 ms to connect and 100 ms to read**. A retry wouldn't fit the budget, and the fallback takes its place. A count normally takes a few milliseconds.
+- **The budget holds per request, too.** A request makes two checks, but after any failed call the store **rests for 1 second**, so a request whose IP check failed takes its user check from the fallback at once. A request on a failing store waits for one failed call at most, about 200 ms, and none once the circuit is open.
+- **What counts as an outage:** timeouts and connection errors, service errors (`5xx`), and `RequestLimitExceeded` (throughput refused for the whole account, not one key). **Other errors are our own defects** (a missing permission or table, a malformed request): they propagate as a `500`, so a deploy or test catches them instead of the limits quietly becoming per-instance ones.
+- **The breaker:** **3 consecutive failed calls** open the circuit for **30 seconds**. A throttled answer is an answer, so it resets the count. When the 30 seconds are over, the next call is a **probe**: an answer closes the circuit (logged once as `rate_limiter_circuit_closed`, at `INFO`), and a failure opens it again at once. Lambda runs one request at a time per instance, so the probe needs no locking.
+- **The fallback** counts with the same keys, so each window starts from zero as in the table. It keeps at most **10,000 counters** per instance, about 1.6 MB, and drops the **least recently used** first. A refused request is a use too, so a client hammering at its limit keeps its full counter; an idle one is the first to go. An old window's counters are never used again, so they are evicted first and need no expiry of their own.
+- **Log lines:** one `rate_limiter_unavailable` per failed call (`errorType`, `consecutiveFailures`), so at most about one per second per instance until the circuit opens, then one probe every 30 seconds. Requests counted by the fallback log nothing more. No line carries a counter key, since keys hold the client's full address.
 
 **Edge layer: AWS WAF.**
 - **What:** a regional web ACL on the REST API stage (also for the edge-optimized endpoint), defined in CDK.
@@ -90,6 +103,12 @@ A person with several roles gets the highest tier (roles combine, [ADR 0001](000
 - **Failure modes.**
   - *Fail closed:* a counter-table hiccup would become a full API outage.
   - *Plain fail open without a fallback:* no limits at all during an outage.
+  - *Failing open on every error*, defects included: the API would stay up through a broken deploy, but a missing permission would quietly turn the limits into per-instance ones, and no test would notice.
+  - *Retries within the budget* (e.g. two attempts of 50 ms each): too little time per attempt for a cold connection, and the fallback already answers.
+  - *A hard deadline per request* (a worker thread, or the remaining time passed down): exact, but threads and cancellation for a bound that the client timeouts and the rest after a failure already give.
+  - *Splitting the budget between the two checks* (100 ms per call): too tight for a cold connection on AWS, so cold starts would fall back needlessly.
+  - *Reopening the circuit only after another 3 failures* instead of one probe: each instance would pay three timeouts every 30 seconds while the outage lasts.
+  - *Evicting the oldest counter first* instead of the least recently used: under churn, the client that has been hammering longest would lose its full counter first.
 - **Response headers.**
   - *None:* clients can't see their budget before hitting `429`.
   - *The current IETF draft structured fields* (`RateLimit-Policy`, `RateLimit`): more precise and multi-policy, but still a draft and less familiar. This is where the headers should move once the standard settles.
@@ -102,6 +121,8 @@ A person with several roles gets the highest tier (roles combine, [ADR 0001](000
 - **Boundary burst:** a client can send up to twice its limit in a short burst across a window boundary. This is the documented trade-off of fixed windows.
 - **Cost and latency:** two DynamoDB writes per request, on the order of the REST API's own price per million requests (the exact figure is in the cost model, from current AWS pricing; [ADR 0013](0013-production-readiness-and-evolution.md)), and about 10–20 ms of added latency. **Hot keys:** a single abusive IP concentrates on one partition key (about 1,000 writes/s, and rejected writes still consume capacity). WAF absorbs that in production.
 - **Limits are approximate during a counter-store outage:** with the in-memory fallback, the effective limit is the configured limit times the number of warm Lambda instances.
+  - A single failed call moves about a second of one instance's traffic to the fallback, and an instance with more than 10,000 distinct clients in a window forgets the idlest ones' counts. Both only make the limits more lenient, briefly, never stricter.
+  - The 200 ms bound has two gaps botocore's timeouts don't cover: **resolving the endpoint's DNS name**, and a server that keeps sending a byte now and then, since the read timeout applies per read. DynamoDB's answers are a few hundred bytes, and Lambda's resolver is local, so neither is expected; the per-request bound would need a hard deadline if they ever show up.
 - **To verify on the first real AWS deploy:**
   - that WAF's `IP` key and `sourceIp` both see the client's address for the edge-optimized endpoint. This is stated in an AWS re:Post expert article, but not clearly in the official documentation.
   - how WAF aggregates IPv6 addresses. The app counts IPv6 per `/64`.
