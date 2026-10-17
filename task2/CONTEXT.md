@@ -28,6 +28,10 @@ _Avoid_: downstream API, target system
 Passing an accepted order to the fulfilment service. A handover is complete once the fulfilment service has confirmed it with its fulfilment order id.
 _Avoid_: forwarding, sync, push
 
+**Failed handover**:
+A handover the consumer has given up on, because it ran out of retries or because the fulfilment service refused the order. The order stays accepted, and the handover can still be completed later.
+_Avoid_: lost order, rejected order
+
 **Invalid event**:
 An event that can never be processed as sent: unreadable, not a well-formed event, of an unsupported type or version, breaking the schema, or breaking a business rule such as a wrong order total. Being invalid is permanent; retrying cannot change it.
 _Avoid_: bad message, poison pill (a crash-causing message, which is a different problem)
