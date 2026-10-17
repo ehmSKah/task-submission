@@ -1,8 +1,9 @@
 """How the counter adapter fails, and how fast (ADR 0006).
 
-Floci can neither throttle a key nor fail on cue, so these tests need no emulator: service errors
-come from botocore's `Stubber`, and timeouts from local sockets that never answer, which is what
-an unreachable or hanging DynamoDB looks like to the client.
+Floci can neither throttle a key nor fail on cue, so these run in the unit tier, not against the
+emulator: service errors come from botocore's `Stubber`, and timeouts from local sockets that
+never answer, which is what an unreachable or hanging DynamoDB looks like to the client. They
+are the one place a boto3 stand-in is used (ADR 0011).
 """
 
 import socket
@@ -26,6 +27,8 @@ from orders_api.application.fail_open_counters import FAILURES_TO_OPEN
 from orders_api.application.rate_limiting import CounterStoreThrottled, CounterStoreUnavailable
 from orders_api.domain.access import Role
 
+# The function's own factory, taken before the unit fixtures replace it with a fake.
+REAL_RATE_LIMITER = api_handler.rate_limiter
 EXPIRES_AT = datetime(2026, 10, 17, 9, 33, tzinfo=UTC)
 KEY = "ip#203.0.113.7#2026-10-17T09:31Z"
 
@@ -181,7 +184,7 @@ def test_the_api_function_lets_requests_through_while_the_counter_table_hangs(
     monkeypatch.setenv("RATE_LIMIT_TABLE", "rate-limits")
     monkeypatch.setenv("RATE_LIMITS_PARAMETER", "/orders-api/test/rate-limits")
     monkeypatch.setenv("RATE_LIMITS_MAX_AGE_SECONDS", "600")
-    limiter = api_handler.rate_limiter.__wrapped__()
+    limiter = REAL_RATE_LIMITER.__wrapped__()
 
     durations, decisions = [], []
     for _ in range(FAILURES_TO_OPEN):
