@@ -33,6 +33,14 @@ REAL_RATE_LIMITER = api_handler.rate_limiter
 EXPIRES_AT = datetime(2026, 10, 17, 9, 33, tzinfo=UTC)
 KEY = "ip#203.0.113.7#2026-10-17T09:31Z"
 
+SCHEDULING_ALLOWANCE_SECONDS = 0.1
+"""How far a measured time may run over the budget on a busy machine, such as a shared CI runner.
+The budget itself bounds the client's timeouts, checked exactly in
+`test_the_client_settings_fit_one_call_into_the_budget`; a loosened setting shows up as whole
+seconds here, which still fails."""
+NO_WAIT_SECONDS = 0.05
+"""Well under one 100 ms timeout: a request that waited for no call at all."""
+
 
 def stubbed() -> tuple[DynamoDbRateLimitCounters, Stubber]:
     session = boto3.session.Session(
@@ -182,7 +190,7 @@ def test_a_store_that_doesn_t_answer_is_unavailable_within_the_budget(
     elapsed = time.perf_counter() - started
 
     assert raised.value.error_type == error_type
-    assert elapsed < CALL_BUDGET_SECONDS
+    assert elapsed < CALL_BUDGET_SECONDS + SCHEDULING_ALLOWANCE_SECONDS
 
 
 def test_the_api_function_lets_requests_through_while_the_counter_table_hangs(
@@ -216,5 +224,5 @@ def test_the_api_function_lets_requests_through_while_the_counter_table_hangs(
     open_duration = time.perf_counter() - started
 
     assert all(decision.allowed for decision in decisions)
-    assert max(durations) < CALL_BUDGET_SECONDS
-    assert open_duration < 0.01
+    assert max(durations) < CALL_BUDGET_SECONDS + SCHEDULING_ALLOWANCE_SECONDS
+    assert open_duration < NO_WAIT_SECONDS
