@@ -19,7 +19,8 @@ Orders are stored in **Amazon DynamoDB**. Each kind of data gets **its own table
 | All orders, newest first | GSI **`byCreated`**: partition `listAll` (constant `"ORDER"`), sort `createdAt#id` | `Query`, `ScanIndexForward=false` |
 
 - **Index projection:** both GSIs use projection **`ALL`**, so a page needs no second read.
-- **Sort key and cursor:** the sort key `createdAt#id` gives the stable order cursors rely on (`id` breaks ties between equal timestamps). The cursor is the encoded `LastEvaluatedKey`.
+- **Sort key and cursor:** the sort key `createdAt#id` gives the stable order cursors rely on (`id` breaks ties between equal timestamps). The cursor carries the `LastEvaluatedKey`'s sort key, as `createdAt` and `id`; the partition comes from the caller's list, never from the cursor.
+- **Resuming a page:** the next `Query` adds `createdAtId < :position` to its key condition instead of passing the position back as `ExclusiveStartKey`. It reads the same items, but needs no item at the position, so deleting the order a cursor points at doesn't disturb a walk. Floci 2.3.0 restarts from the first item when an `ExclusiveStartKey`'s item no longer exists, which would repeat the list (see the [verification document](../verification.md)).
 - **Timestamps:** ISO-8601 UTC with **fixed-width milliseconds** (`2026-10-17T09:30:00.123Z`), so they sort correctly as text.
 - **Money and items:** stored as `Number` attributes in minor units. `items` is a List of Maps inside the order item, so an order is one item (at most 50 line items, far below the 400 KB item limit).
 
@@ -60,6 +61,7 @@ Orders are stored in **Amazon DynamoDB**. Each kind of data gets **its own table
   - *Scan:* returns items in no order.
   - *Write sharding (`ORDER#<0..N-1>`):* removes the write limit, but listing must query N partitions, merge them, and carry N positions in the cursor.
   - *Monthly time buckets:* only bound partition size. Every new write still lands in the current month, and paging must skip empty months.
+- **Resuming a page with `ExclusiveStartKey`** (the whole `LastEvaluatedKey` in the cursor). DynamoDB's built-in paging, and the first plan. Rejected for the key condition, which reads the same items without depending on the position's item still existing, and leaves the partition out of the cursor entirely.
 - **Provisioned capacity with auto-scaling:** cheaper only at steady, predictable load.
 - **Eventually consistent `GetItem`:** cheaper, but a caller could miss their own status change immediately after making it.
 

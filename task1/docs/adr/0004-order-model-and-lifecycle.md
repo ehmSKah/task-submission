@@ -69,10 +69,12 @@ PENDING ──► CONFIRMED ──► SHIPPED ──► DELIVERED
 - **Visibility:** callers see their own orders unless they have `order:read:any` (ADR 0001).
 - **Order:** fixed to **newest first** (`createdAt` descending).
 - **Pagination:** cursor-based. `limit` defaults to 10, maximum 100. The response is `{ "items": [...], "nextCursor": "…" | null }`.
-- **The cursor** is opaque to clients (a base64url-encoded storage position). A cursor that doesn't decode returns `400`. Because every query is restricted to what the caller may see, a tampered cursor can at most move around inside that set.
-- **No filters or sort parameters.** Any query parameter other than `limit` and `cursor` returns `400`.
+- **The cursor** is opaque to clients: unpadded base64url over the position where the page ended (the last order's `createdAt` and `id`, i.e. the storage position) and **the list it belongs to** (one owner's orders, or every order). Because every query is restricted to what the caller may see, a tampered cursor can at most move around inside that set.
+  - A cursor that doesn't decode returns `400`, like any other malformed parameter, before the permission check.
+  - A cursor from another list returns `400` as well: another owner's, or a staff list's used by someone who only sees their own orders, or the other way round. Which list a caller sees depends on their permissions, so this is checked right after the permission check, still before any data is read. Staff share one list, so a cursor passes between them.
+- **No filters or sort parameters.** Any query parameter other than `limit` and `cursor` returns `400`, and so does either of those given twice. One `400` lists every offending parameter in `errors[]`.
 - **Walking all pages:** a client gets every order it may see by following `nextCursor` until it is `null`. The last page may be empty; clients stop on `null`, not on an empty page.
-- **Stable while walking:** the cursor marks a fixed position in "newest first" order (`createdAt`, then `id` as a tie-breaker). Orders created during a walk land in front of it and are not part of that walk, so pages never repeat or skip existing orders. Deleted orders simply don't appear, and status changes don't move an order.
+- **Stable while walking:** the cursor marks a fixed position in "newest first" order (`createdAt`, then `id` as a tie-breaker). Orders created during a walk land in front of it and are not part of that walk, so pages never repeat or skip existing orders. Deleted orders simply don't appear, even the one a cursor points at (the position doesn't need the order), and status changes don't move an order.
 
 ## Considered options
 
