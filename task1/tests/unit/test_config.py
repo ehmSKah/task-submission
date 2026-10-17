@@ -86,7 +86,10 @@ def test_floci_needs_the_issuer_base_url(tmp_path: Path) -> None:
 
 def test_floci_settings_are_rejected_for_aws_targets(tmp_path: Path) -> None:
     (tmp_path / "awsish.yaml").write_text(
-        (CONFIG_DIR / "local.yaml").read_text().replace("target: floci", "target: aws")
+        (CONFIG_DIR / "local.yaml")
+        .read_text()
+        .replace("target: floci", "target: aws")
+        .replace('account: "000000000000"\n', "")
     )
 
     with pytest.raises(ValidationError, match="only applies when target is floci"):
@@ -116,6 +119,71 @@ def test_rate_limits_are_cached_briefly_locally_and_for_a_minute_by_default(
 
 def test_each_environment_has_its_own_rate_limits_parameter() -> None:
     assert load_config("local", CONFIG_DIR).rate_limits_parameter == "/orders-api/local/rate-limits"
+
+
+def test_floci_names_its_fixed_account(tmp_path: Path) -> None:
+    text = (CONFIG_DIR / "local.yaml").read_text()
+    (tmp_path / "noaccount.yaml").write_text(
+        "\n".join(line for line in text.splitlines() if not line.startswith("account:"))
+    )
+
+    with pytest.raises(ValidationError, match="account is required when target is floci"):
+        load_config("noaccount", tmp_path)
+
+
+@pytest.mark.parametrize("env", ["aws-dev", "aws-prod"])
+def test_aws_environments_take_the_account_from_the_callers_credentials(env: str) -> None:
+    """No account id in the repository: CDK deploys to the caller's account (ADR 0010)."""
+    config = load_config(env, CONFIG_DIR)
+
+    assert config.target == "aws"
+    assert config.account is None
+    assert config.region
+
+
+def test_an_aws_environment_may_not_name_an_account(tmp_path: Path) -> None:
+    (tmp_path / "pinned.yaml").write_text(
+        (CONFIG_DIR / "aws-dev.yaml").read_text() + 'account: "123456789012"\n'
+    )
+
+    with pytest.raises(ValidationError, match="account comes from the caller's credentials"):
+        load_config("pinned", tmp_path)
+
+
+@pytest.mark.parametrize("env", ["aws-dev", "aws-prod"])
+def test_aws_environments_run_on_arm64_at_info_with_access_logs(env: str) -> None:
+    config = load_config(env, CONFIG_DIR)
+
+    assert config.resolved_architecture(machine="x86_64") is Architecture.ARM_64
+    assert config.log_level == "INFO"
+    assert config.access_logs is True
+
+
+def test_aws_dev_is_disposable_and_set_up_for_the_test_suites() -> None:
+    config = load_config("aws-dev", CONFIG_DIR)
+
+    assert config.retains_data is False
+    assert config.seed_users is True
+    assert config.test_fixtures is True
+    assert config.rate_limit_config_cache_seconds == 2
+    assert config.log_retention_days == 14
+    assert config.waf_test_rule_limit is not None
+
+
+def test_aws_prod_keeps_its_data_and_has_nothing_for_tests() -> None:
+    config = load_config("aws-prod", CONFIG_DIR)
+
+    assert config.retains_data is True
+    assert config.seed_users is False
+    assert config.test_fixtures is False
+    assert config.rate_limit_config_cache_seconds == 60
+    assert config.log_retention_days == 90
+    assert config.waf_rate_limit == 3000
+    assert config.waf_test_rule_limit is None
+
+
+def test_access_logs_are_off_unless_an_environment_turns_them_on() -> None:
+    assert load_config("local", CONFIG_DIR).access_logs is False
 
 
 def test_the_waf_limit_defaults_to_adr_0006s_and_respects_wafs_minimum(tmp_path: Path) -> None:

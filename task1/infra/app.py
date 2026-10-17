@@ -111,14 +111,15 @@ api_suppressions = [
         "logs instead (ADR 0012).",
     ),
 ]
-if config.target == "floci":
-    api_suppressions += [
+if config.target == "floci" and not config.access_logs:
+    api_suppressions.append(
         NagPackSuppression(
             id="AwsSolutions-APIG1",
-            reason="Local Floci environment: API Gateway access logs are an AWS-environment "
-            "setting (ADR 0012).",
-        ),
-    ]
+            reason="Local Floci environment: Floci accepts a stage's access log setting but "
+            "neither keeps nor writes it, so access logs are an AWS-environment setting "
+            "(ADR 0012).",
+        )
+    )
 NagSuppressions.add_resource_suppressions(
     stack.api.rest_api, api_suppressions, apply_to_children=True
 )

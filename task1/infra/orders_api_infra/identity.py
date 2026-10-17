@@ -50,6 +50,8 @@ class Identity(Construct):
             account_recovery=cognito.AccountRecovery.NONE,
             password_policy=_password_policy(),
             removal_policy=config.data_removal_policy,
+            # Where data is kept, the users are too: the pool can't be deleted by accident.
+            deletion_protection=config.retains_data,
         )
         if config.floci_user_pool_id:
             # Stable ids on Floci, so the issuer and client id survive redeploys (ADR 0010).

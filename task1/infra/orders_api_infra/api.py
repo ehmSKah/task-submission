@@ -1,6 +1,8 @@
 """The Api construct: the authorizer, the API function, the REST API built from OpenAPI and the
 WAF web ACL in front of it."""
 
+import json
+
 import aws_cdk as cdk
 from aws_cdk import aws_apigateway as apigateway
 from aws_cdk import aws_dynamodb as dynamodb
@@ -28,6 +30,24 @@ RETENTION = {
     14: logs.RetentionDays.TWO_WEEKS,
     30: logs.RetentionDays.ONE_MONTH,
     90: logs.RetentionDays.THREE_MONTHS,
+}
+
+# API Gateway's access log line: one JSON object per request, every value quoted so that a missing
+# one (`-`) still parses. It names no header, so neither the `Authorization` header nor a token can
+# end up in it; the full client address is kept here only, under the log retention (ADR 0012).
+ACCESS_LOG_FIELDS = {
+    "requestId": "$context.requestId",
+    "requestTime": "$context.requestTimeEpoch",
+    "httpMethod": "$context.httpMethod",
+    "resourcePath": "$context.resourcePath",
+    "protocol": "$context.protocol",
+    "status": "$context.status",
+    "responseLatency": "$context.responseLatency",
+    "integrationLatency": "$context.integrationLatency",
+    "sourceIp": "$context.identity.sourceIp",
+    "errorType": "$context.error.responseType",
+    "authorizerError": "$context.authorizer.error",
+    "wafResponseCode": "$context.wafResponseCode",
 }
 
 
@@ -133,7 +153,9 @@ class Api(Construct):
                 )
             ),
             endpoint_types=[apigateway.EndpointType.EDGE],
-            deploy_options=apigateway.StageOptions(stage_name=config.stage_name),
+            deploy_options=self._stage_options(),
+            # The account's API Gateway logging role is a per-account, per-region setting made
+            # once outside this stack, like CDK's bootstrap (ADR 0010).
             cloud_watch_role=False,
         )
         self.web_acl = WebAcl(self, "WebAcl", config=config, stage=self.rest_api.deployment_stage)
@@ -156,6 +178,24 @@ class Api(Construct):
 
         cdk.CfnOutput(self, "ApiId", value=self.rest_api.rest_api_id, key="ApiId")
         cdk.CfnOutput(self, "StageName", value=config.stage_name, key="StageName")
+
+    def _stage_options(self) -> apigateway.StageOptions:
+        config = self._config
+        if not config.access_logs:
+            return apigateway.StageOptions(stage_name=config.stage_name)
+        self.access_log_group = logs.LogGroup(
+            self,
+            "AccessLogs",
+            retention=RETENTION[config.log_retention_days],
+            removal_policy=config.data_removal_policy,
+        )
+        return apigateway.StageOptions(
+            stage_name=config.stage_name,
+            access_log_destination=apigateway.LogGroupLogDestination(self.access_log_group),
+            access_log_format=apigateway.AccessLogFormat.custom(
+                json.dumps(ACCESS_LOG_FIELDS, separators=(",", ":"))
+            ),
+        )
 
     def _function(
         self, construct_id: str, *, handler: str, timeout_seconds: int, environment: dict[str, str]

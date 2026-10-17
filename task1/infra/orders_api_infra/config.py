@@ -33,7 +33,9 @@ class EnvConfig(BaseModel):
 
     name: str
     target: Target
-    account: str
+    # Floci's fixed account. AWS environments name none: CDK deploys to the account of the
+    # caller's credentials, so no account id is kept in the repository (ADR 0010).
+    account: str | None = None
     region: str
     stage_name: str = Field(alias="stageName")
     # `host` builds for the machine running the deploy: Floci runs Lambda containers on the
@@ -60,6 +62,9 @@ class EnvConfig(BaseModel):
     rate_limit_config_cache_seconds: int = Field(
         default=60, ge=1, le=300, alias="rateLimitConfigCacheSeconds"
     )
+    # API Gateway access logs on the stage (ADR 0012). Off locally: Floci accepts the setting but
+    # neither keeps nor writes it.
+    access_logs: bool = Field(default=False, alias="accessLogs")
     # WAF's rate-based rule: requests per client IP in any 5 minutes before the edge answers
     # `429`. AWS WAF's minimum is 10 (ADR 0006).
     waf_rate_limit: int = Field(default=3000, ge=10, le=2_000_000_000, alias="wafRateLimit")
@@ -95,6 +100,12 @@ class EnvConfig(BaseModel):
 
     @model_validator(mode="after")
     def _floci_settings_match_the_target(self) -> "EnvConfig":
+        if self.target == "floci" and not self.account:
+            raise ValueError("account is required when target is floci")
+        if self.target == "aws" and self.account:
+            raise ValueError(
+                "account comes from the caller's credentials on AWS; remove it from the config"
+            )
         floci_settings = {
             "flociIssuerBaseUrl": self.floci_issuer_base_url,
             "flociUserPoolId": self.floci_user_pool_id,

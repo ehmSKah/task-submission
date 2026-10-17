@@ -1,0 +1,20 @@
+# A disposable AWS environment for running the test suites against real AWS (ADRs 0010 and 0011).
+# The account is the one of the caller's credentials (an AWS profile, or GitHub OIDC in the
+# aws-e2e workflow); it is never written here.
+name: aws-dev
+target: aws
+region: us-east-1
+stageName: live
+lambdaArchitecture: arm64
+logLevel: INFO
+logRetentionDays: 14
+removalPolicy: destroy
+seedUsers: true
+testFixtures: true
+# Test suites switch the rate limits at runtime and wait out the cache (ADR 0006).
+rateLimitConfigCacheSeconds: 2
+accessLogs: true
+# One runner sends every suite's requests (some 3,000 within minutes) from one address, so the
+# flood rule sits well above them; the test-only rule below is the one the WAF test trips.
+wafRateLimit: 10000
+wafTestRuleLimit: 100

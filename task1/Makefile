@@ -99,12 +99,19 @@ coverage: ## Enforce the coverage thresholds (after make test); writes XML and H
 			--fail-under=$(COVERAGE_CORE_MIN) || exit 1; \
 	done
 
+# Every environment is synthesised, so cdk-nag checks the AWS ones too. Synth needs no AWS
+# credentials: AWS environments leave the account to deploy time (ADR 0010).
+SYNTH_ENVS := local aws-dev aws-prod
+
 lint: lint-openapi bundle ## Ruff, mypy, import-linter, OpenAPI lint and cdk-nag (via cdk synth)
 	uv run ruff check .
 	uv run ruff format --check .
 	uv run mypy
 	uv run lint-imports
-	$(CDK) synth -c env=$(ENV) --quiet
+	@for env in $(SYNTH_ENVS); do \
+		echo "cdk synth -c env=$$env"; \
+		($(CDK) synth -c env=$$env --quiet) || exit 1; \
+	done
 
 # The schema rules of ADR 0008 are custom Spectral rules in openapi/.spectral.yaml.
 lint-openapi: ## Validate the OpenAPI document and lint it with Spectral
