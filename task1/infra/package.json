@@ -1,8 +1,9 @@
 {
   "name": "orders-api-infra",
   "private": true,
-  "description": "Pins the AWS CDK CLI used to deploy the Orders API (ADR 0010).",
+  "description": "Pins the Node CLIs: the AWS CDK CLI that deploys the Orders API (ADR 0010) and Spectral, which lints its OpenAPI document (ADR 0008).",
   "devDependencies": {
+    "@stoplight/spectral-cli": "6.17.0",
     "aws-cdk": "2.1145.0"
   }
 }

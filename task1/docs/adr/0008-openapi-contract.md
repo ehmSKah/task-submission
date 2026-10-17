@@ -42,7 +42,9 @@ The API is described **design-first** in one OpenAPI document. That document is 
 
 **Guards.**
 - **CI lints the document** with `openapi-spec-validator` and Spectral, including custom rules for the schema rules above.
-- **A unit test compiles every request schema** with `fastjsonschema` as draft-04.
+  - **Where:** `make lint-openapi`, part of `make lint` and the `static` CI job. Spectral is pinned in `infra/package.json` next to the CDK CLI, so one `npm ci` and one cache serve both Node tools; its ruleset is `openapi/.spectral.yaml`, next to the document.
+  - **Rules:** Spectral's `oas` set (without `servers`, whose URL depends on the deployment, and `info.contact`) failing on warnings, plus custom rules: OpenAPI exactly 3.0.3; no `nullable`, `readOnly`, `writeOnly` or `format`; `additionalProperties: false` on every object; request bodies reference a `…Request` schema and responses never do; request schemas contain no `$ref`; `$ref`s in schemas point at `#/components/schemas/`; every `4xx`/`5xx` response is `application/problem+json`. Each rule was shown to fire on a scratch copy of the document broken for it.
+- **A unit test compiles every request schema** with `fastjsonschema` as draft-04, and every path and query parameter schema the function validates with.
 
 **Viewing it.** `make docs` starts a **Swagger UI container** on `localhost:8080`, showing the spec file. It is **read-only**: there is no "Try it out", because calling the API from the browser would need CORS. Requests are tried through an HTTP request collection instead. The README links to the spec file and to `make docs`.
 

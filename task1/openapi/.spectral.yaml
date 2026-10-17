@@ -1,0 +1,125 @@
+# Spectral rules for the OpenAPI document (ADR 0008). `make lint-openapi` runs them, failing on
+# warnings too. The custom rules check the schema rules that keep one schema valid as OpenAPI, as
+# an API Gateway model and as a fastjsonschema draft-04 schema.
+extends: ["spectral:oas"]
+
+rules:
+  # The URL depends on the deployment; clients and tests read it from build/endpoints.json.
+  oas3-api-servers: off
+  # No support contact for this API.
+  info-contact: off
+
+  openapi-3-0-3:
+    description: The document is OpenAPI 3.0.3, the newest version API Gateway imports.
+    severity: error
+    given: "$"
+    then:
+      field: openapi
+      function: pattern
+      functionOptions:
+        match: "^3\\.0\\.3$"
+
+  no-nullable:
+    description: "`nullable` is not draft-04; write `anyOf: [{type: …}, {enum: [null]}]`."
+    message: "{{description}}"
+    severity: error
+    resolved: false
+    given: "$..[?(@ && @.nullable !== undefined)]"
+    then:
+      field: nullable
+      function: undefined
+
+  no-read-only-or-write-only:
+    description: Validators don't honour `readOnly`/`writeOnly`; use separate request and response schemas.
+    message: "{{description}}"
+    severity: error
+    resolved: false
+    given: "$..[?(@ && (@.readOnly !== undefined || @.writeOnly !== undefined))]"
+    then:
+      - field: readOnly
+        function: undefined
+      - field: writeOnly
+        function: undefined
+
+  no-format:
+    description: Draft-04 validators don't enforce `format`; use `pattern` for anything that must hold.
+    message: "{{description}}"
+    severity: error
+    resolved: false
+    given: "$..[?(@ && @.type && @.format !== undefined)]"
+    then:
+      field: format
+      function: undefined
+
+  objects-are-closed:
+    description: "Every request and response object sets `additionalProperties: false`."
+    message: "{{description}} ({{path}})"
+    severity: error
+    resolved: false
+    given: "$..[?(@ && @.type === 'object')]"
+    then:
+      field: additionalProperties
+      function: schema
+      functionOptions:
+        schema:
+          const: false
+
+  request-bodies-use-request-schemas:
+    description: A request body references its own `…Request` schema, never a response schema.
+    message: "{{description}}"
+    severity: error
+    resolved: false
+    given: "$.paths.*.*.requestBody.content.*.schema"
+    then:
+      field: $ref
+      function: pattern
+      functionOptions:
+        match: "^#/components/schemas/[A-Za-z]+Request$"
+
+  responses-use-no-request-schemas:
+    description: A response never reuses a `…Request` schema.
+    message: "{{description}}"
+    severity: error
+    resolved: false
+    given: "$..responses..schema.$ref"
+    then:
+      function: pattern
+      functionOptions:
+        notMatch: "Request$"
+
+  request-schemas-are-self-contained:
+    description: Request schemas contain no `$ref`; Floci rejects every body whose gateway model has one.
+    message: "{{description}} ({{path}})"
+    severity: error
+    resolved: false
+    given: "$.components.schemas[?(@property.match(/Request$/))]..$ref"
+    then:
+      function: falsy
+
+  schema-refs-point-at-components-schemas:
+    description: "Inside schemas, `$ref` only points at `#/components/schemas/…`, which API Gateway and fastjsonschema resolve."
+    message: "{{description}} ({{path}})"
+    severity: error
+    resolved: false
+    given:
+      - "$..schema..$ref"
+      - "$.components.schemas..$ref"
+    then:
+      function: pattern
+      functionOptions:
+        match: "^#/components/schemas/"
+
+  errors-are-problem-details:
+    description: Every error response is an RFC 9457 Problem Details document (ADR 0007).
+    message: "{{description}} ({{path}})"
+    severity: error
+    given: "$.paths.*.*.responses[?(@property >= '400')].content"
+    then:
+      - function: schema
+        functionOptions:
+          schema:
+            type: object
+            required: ["application/problem+json"]
+            additionalProperties: false
+            properties:
+              application/problem+json: {}

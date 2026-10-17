@@ -16,7 +16,7 @@ RUN_INFRA_MODULE := cd infra && uv run python -m
 
 .DEFAULT_GOAL := help
 .PHONY: help doctor install up floci-up bootstrap bundle deploy endpoints seed token down \
-	limits test test-adapter test-integration lint docs
+	limits test test-adapter test-integration lint lint-openapi docs
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -76,12 +76,18 @@ test-adapter: ## Adapter tests against the emulator
 test-integration: ## Integration tests against the deployed stack
 	uv run pytest tests/integration -m integration
 
-lint: bundle ## Ruff, mypy, import-linter and cdk-nag (via cdk synth)
+lint: lint-openapi bundle ## Ruff, mypy, import-linter, OpenAPI lint and cdk-nag (via cdk synth)
 	uv run ruff check .
 	uv run ruff format --check .
 	uv run mypy
 	uv run lint-imports
 	$(CDK) synth -c env=$(ENV) --quiet
+
+# The schema rules of ADR 0008 are custom Spectral rules in openapi/.spectral.yaml.
+lint-openapi: ## Validate the OpenAPI document and lint it with Spectral
+	uv run openapi-spec-validator openapi/openapi.yaml
+	cd infra && npx --no-install spectral lint ../openapi/openapi.yaml \
+		--ruleset ../openapi/.spectral.yaml --fail-severity warn
 
 docs: ## Serve the OpenAPI document in a read-only Swagger UI on http://localhost:8080
 	docker compose --profile docs up -d swagger-ui

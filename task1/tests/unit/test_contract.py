@@ -8,6 +8,7 @@ from orders_api.contract import (
     load_contract,
     path_parameter_schema,
     property_schema,
+    query_parameter_schemas,
     request_body_schema,
 )
 
@@ -31,6 +32,38 @@ def test_there_is_at_least_one_request_body_to_check() -> None:
 def test_every_request_schema_compiles_as_draft_04(method: str, path: str) -> None:
     schema = request_body_schema(method, path)
 
+    assert schema["$schema"] == DRAFT_04
+    fastjsonschema.compile(schema)
+
+
+def parameter_schemas() -> list[tuple[str, dict[str, Any]]]:
+    """Every path and query parameter schema the API function compiles (ADR 0007)."""
+    found = []
+    for path, path_item in load_contract()["paths"].items():
+        for parameter in path_item.get("parameters", []):
+            if parameter["in"] == "path":
+                found.append(
+                    (f"{path} {parameter['name']}", path_parameter_schema(path, parameter["name"]))
+                )
+        for method, operation in path_item.items():
+            if isinstance(operation, dict) and "responses" in operation:
+                for name, schema in query_parameter_schemas(method, path).items():
+                    found.append((f"{method} {path} ?{name}", schema))
+    return found
+
+
+def test_there_are_path_and_query_parameters_to_check() -> None:
+    names = {where for where, _ in parameter_schemas()}
+
+    assert {"/api/v1/orders/{id} id", "get /api/v1/orders ?limit"} <= names
+
+
+@pytest.mark.parametrize(
+    ("where", "schema"),
+    parameter_schemas(),
+    ids=lambda value: value if isinstance(value, str) else "",
+)
+def test_every_parameter_schema_compiles_as_draft_04(where: str, schema: dict[str, Any]) -> None:
     assert schema["$schema"] == DRAFT_04
     fastjsonschema.compile(schema)
 
