@@ -42,6 +42,15 @@ def test_it_gets_credentials_through_oidc_for_the_role_in_a_repository_variable(
     assert "secrets." not in WORKFLOW.read_text()
 
 
+def test_it_signs_in_to_the_region_the_aws_dev_config_names(steps: list[dict[str, Any]]) -> None:
+    config = next(step for step in steps if step.get("id") == "config")
+    logins = [step for step in steps if "configure-aws-credentials" in step.get("uses", "")]
+
+    assert "infra/config/aws-dev.yaml" in config["run"]
+    for login in logins:
+        assert login["with"]["aws-region"] == "${{ steps.config.outputs.region }}"
+
+
 def test_two_runs_never_overlap(workflow: dict[Any, Any]) -> None:
     assert workflow["concurrency"]["group"]
     assert workflow["concurrency"]["cancel-in-progress"] is False

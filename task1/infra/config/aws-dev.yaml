@@ -3,7 +3,7 @@
 # aws-e2e workflow); it is never written here.
 name: aws-dev
 target: aws
-region: us-east-1
+region: eu-central-1
 stageName: live
 lambdaArchitecture: arm64
 logLevel: INFO

@@ -59,7 +59,8 @@ def test_aws_environments_deploy_to_the_callers_account_in_the_configured_region
 ) -> None:
     account = EXPECTED[env][0]
 
-    assert stack.region == "us-east-1"
+    # Floci's default region locally; Frankfurt for both AWS environments (ADR 0010).
+    assert stack.region == ("us-east-1" if env == "local" else "eu-central-1")
     if account is None:
         assert cdk.Token.is_unresolved(stack.account)  # resolved by CloudFormation at deploy
     else:

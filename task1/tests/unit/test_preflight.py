@@ -20,7 +20,11 @@ FLOCI = {
     "AWS_SECRET_ACCESS_KEY": "test",
     "AWS_REGION": "us-east-1",
 }
-AWS = {"AWS_PROFILE": "orders-dev", "AWS_REGION": "us-east-1", "AWS_DEFAULT_REGION": "us-east-1"}
+AWS = {
+    "AWS_PROFILE": "orders-dev",
+    "AWS_REGION": "eu-central-1",
+    "AWS_DEFAULT_REGION": "eu-central-1",
+}
 
 
 @pytest.fixture
@@ -65,7 +69,7 @@ def test_aws_with_the_callers_credentials_in_the_environments_region_is_fine(
         ({**AWS, "AWS_ENDPOINT_URL": "http://localhost:4566"}, "AWS_ENDPOINT_URL"),
         ({**AWS, "AWS_ENDPOINT_URL_SSM": "http://localhost:4566"}, "AWS_ENDPOINT_URL_SSM"),
         ({**AWS, "AWS_ACCESS_KEY_ID": "test"}, "AWS_ACCESS_KEY_ID"),
-        ({**AWS, "AWS_REGION": "eu-central-1"}, "AWS_REGION"),
+        ({**AWS, "AWS_REGION": "us-east-1"}, "AWS_REGION"),
         ({**AWS, "AWS_DEFAULT_REGION": "eu-west-1"}, "AWS_DEFAULT_REGION"),
         ({"AWS_PROFILE": "orders-dev"}, "AWS_REGION"),
     ],
@@ -97,7 +101,10 @@ class Clients:
     def __call__(self, service: str) -> Any:
         if service not in self._clients:
             client = boto3.client(
-                service, region_name="us-east-1", aws_access_key_id="x", aws_secret_access_key="x"
+                service,
+                region_name="eu-central-1",
+                aws_access_key_id="x",
+                aws_secret_access_key="x",
             )
             self._clients[service] = client
             self.stubs[service] = Stubber(client)
