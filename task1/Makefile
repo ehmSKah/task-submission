@@ -175,6 +175,9 @@ lint-workflows: ## Check the GitHub Actions workflows with actionlint, without r
 			< "$$workflow" || exit 1; \
 	done
 
-docs: ## Serve the OpenAPI document in a read-only Swagger UI on http://localhost:8080
+# Swagger UI serves a copy of the document naming the API in build/endpoints.json as its server, so
+# "Try it out" calls it (ADR 0014); the committed document names none. Run again after a deploy.
+docs: ## Serve the OpenAPI document in Swagger UI on http://localhost:8080, with "Try it out"
+	$(RUN_INFRA_MODULE) orders_api_infra.swagger_ui --env $(ENV)
 	docker compose --profile docs up -d swagger-ui
 	@echo "Swagger UI: http://localhost:8080"

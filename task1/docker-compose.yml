@@ -1,5 +1,5 @@
-# Local runtime: the Floci AWS emulator and its web console, plus a read-only Swagger UI (ADRs 0008
-# and 0010).
+# Local runtime: the Floci AWS emulator and its web console, plus Swagger UI (ADRs 0008, 0010 and
+# 0014).
 name: orders-api
 
 services:
@@ -36,6 +36,8 @@ services:
     networks:
       - orders-api
 
+  # The contract with "Try it out": `make docs` writes a copy of it naming the deployed API as its
+  # server, which CORS allows this origin (http://localhost:8080) to call (ADR 0014).
   swagger-ui:
     image: swaggerapi/swagger-ui:v5.29.3
     profiles: ["docs"]
@@ -43,9 +45,9 @@ services:
       - "8080:8080"
     environment:
       SWAGGER_JSON: /spec/openapi.yaml
-      SUPPORTED_SUBMIT_METHODS: "[]"
+      SUPPORTED_SUBMIT_METHODS: '["get", "post", "patch", "delete"]'
     volumes:
-      - ./openapi:/spec:ro
+      - ./build/swagger:/spec:ro
 
 networks:
   orders-api:
