@@ -18,9 +18,9 @@ it comes from is revisited (amended or superseded).
   - `pending`: not run yet.
 - **Version / date:** what the check last ran against, and when; `—` while pending.
 
-**State on 2026-10-17:** 88 assumptions: 50 `verified`, 5 `failed` (each with its
-workaround), 33 `pending`.
-- **30 of the pending rows need AWS and have not yet been run on AWS.** They stay
+**State on 2026-10-18:** 89 assumptions: 50 `verified`, 5 `failed` (each with its
+workaround), 34 `pending`.
+- **31 of the pending rows need AWS and have not yet been run on AWS.** They stay
   `pending` until the first deploy to `aws-dev` (`make up`, `make test-integration` and
   `make contract-test` with `ENV=aws-dev`, or the `aws-e2e` workflow), which fills them in.
   Most are executable `aws_only` or integration tests; a few are done by hand.
@@ -129,3 +129,4 @@ workaround), 33 `pending`.
 | The IP echo services (`checkip.amazonaws.com`, `api.ipify.org`) answer from a GitHub runner with its public IPv4 address ([ADR 0011](adr/0011-testing-strategy.md)) | AWS | The first `aws-e2e` run | pending | — |
 | `aws-prod` deploys with termination protection, retained data, PITR and deletion protection, and `make down ENV=aws-prod` is refused ([ADR 0010](adr/0010-infrastructure-and-environments.md)) | AWS | By hand, optional | pending | — |
 | A cancelled `aws-e2e` run still tears the stack down: the destroy step runs on cancellation too, and `cdk destroy` waits out a deploy still in progress instead of failing on it ([ADR 0011](adr/0011-testing-strategy.md)) | AWS | cancel a run during its deploy step once | pending | — |
+| The integration tests' log reads stay inside CloudWatch Logs' `FilterLogEvents` limit in `eu-central-1` (5 calls a second, against 25 in `us-east-1`, not raisable): `tests/integration/function_logs.py` polls once a second across at most two log groups, and botocore retries a throttled call ([ADR 0010](adr/0010-infrastructure-and-environments.md)) | AWS | `aws-dev` integration run: no `ThrottlingException` from the log assertions | pending | — |
