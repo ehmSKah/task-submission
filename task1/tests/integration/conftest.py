@@ -2,12 +2,13 @@
 
 import uuid
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 import pytest
 
-from orders_api.domain.order import Order
+from orders_api.domain.order import Order, format_timestamp
 from orders_api_infra.config import load_config
 from orders_api_infra.demo_users import access_token, demo_user
 from tests.builders import an_order
@@ -61,8 +62,12 @@ def subject_for(token_for: Callable[[str], str]) -> Callable[[str], str]:
 
 @pytest.fixture
 def stored_order(endpoints: dict[str, Any], subject_for: Callable[[str], str]) -> Order:
-    """An order of alice's, written straight to the table, bypassing the API."""
-    order = an_order(id=str(uuid.uuid4()), owner_id=subject_for("alice"))
+    """An order of alice's, written straight to the table, bypassing the API. It is created now,
+    like an order from the API, so it never sits ahead of newer orders in her list."""
+    now = format_timestamp(datetime.now(UTC))
+    order = an_order(
+        id=str(uuid.uuid4()), owner_id=subject_for("alice"), created_at=now, updated_at=now
+    )
     store_order(endpoints, order)
     return order
 
