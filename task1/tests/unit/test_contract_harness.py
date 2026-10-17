@@ -16,29 +16,11 @@ from tests.contract.harness import (
     DELETABLE_ORDER_IDS,
     KNOWN_ORDER_IDS,
     StatusesSeen,
-    bearer_token,
+    bearer_auth_provider,
     config_with_known_orders,
     known_orders,
     success_statuses,
 )
-
-CONFIG = """
-[generation]
-max-examples = 7
-
-[parameters]
-"path.id" = { dictionary = "known_orders", probability = 0.5 }
-
-[dictionaries.known_orders]
-values = []
-
-[dictionaries.deletable_orders]
-values = []
-
-[[operations]]
-include-operation-id = "deleteOrder"
-parameters = { "path.id" = { dictionary = "deletable_orders", probability = 0.5 } }
-"""
 
 
 def values(config: SchemathesisConfig, dictionary: str) -> list[object]:
@@ -46,9 +28,8 @@ def values(config: SchemathesisConfig, dictionary: str) -> list[object]:
 
 
 def test_the_order_ids_fill_their_dictionaries() -> None:
-    config = config_with_known_orders(CONFIG)
+    config = config_with_known_orders(CONTRACT_CONFIG.read_text())
 
-    assert config.projects.default.generation.max_examples == 7
     assert values(config, "known_orders") == list(KNOWN_ORDER_IDS)
     assert values(config, "deletable_orders") == list(DELETABLE_ORDER_IDS)
 
@@ -62,8 +43,24 @@ def test_the_shipped_config_draws_ids_from_the_known_orders_and_deletes_from_the
     config = config_with_known_orders(CONTRACT_CONFIG.read_text())
 
     assert config.projects.default.parameters["path.id"].dictionary == "known_orders"
-    [deletes] = config.projects.default.operations.operations
-    assert deletes.parameters["path.id"].dictionary == "deletable_orders"
+    overridden = [
+        operation.parameters["path.id"].dictionary
+        for operation in config.projects.default.operations.operations
+        if "path.id" in operation.parameters
+    ]
+    assert overridden == ["deletable_orders"]
+
+
+def test_schema_valid_requests_must_succeed_only_where_no_rule_refuses_them() -> None:
+    """`positive_data_acceptance` is off by default and on for the operations without business
+    rules that refuse schema-valid requests (schemathesis.toml)."""
+    config = config_with_known_orders(CONTRACT_CONFIG.read_text())
+
+    assert not config.projects.default.checks.positive_data_acceptance.enabled
+    assert all(
+        operation.checks.positive_data_acceptance.enabled
+        for operation in config.projects.default.operations.operations
+    )
 
 
 def test_the_known_orders_cover_every_status_for_the_owner_and_one_other_order() -> None:
@@ -91,8 +88,8 @@ def test_the_order_ids_are_valid_path_ids() -> None:
     assert all(re.fullmatch(pattern, id_) for id_ in KNOWN_ORDER_IDS + DELETABLE_ORDER_IDS)
 
 
-def test_the_bearer_token_is_fetched_and_set_as_the_authorization_header() -> None:
-    provider = bearer_token(lambda: "token-1")()
+def test_the_bearer_auth_provider_is_fetched_and_set_as_the_authorization_header() -> None:
+    provider = bearer_auth_provider(lambda: "token-1")()
     case: Any = SimpleNamespace(headers={"If-Match": '"1"'})
 
     token = provider.get(case, None)  # type: ignore[arg-type]
@@ -101,8 +98,8 @@ def test_the_bearer_token_is_fetched_and_set_as_the_authorization_header() -> No
     assert case.headers == {"If-Match": '"1"', "Authorization": "Bearer token-1"}
 
 
-def test_the_bearer_token_replaces_a_generated_authorization_header() -> None:
-    provider = bearer_token(lambda: "token-1")()
+def test_the_bearer_auth_provider_replaces_a_generated_authorization_header() -> None:
+    provider = bearer_auth_provider(lambda: "token-1")()
     case: Any = SimpleNamespace(headers=None)
 
     provider.set(case, "token-1", None)  # type: ignore[arg-type]

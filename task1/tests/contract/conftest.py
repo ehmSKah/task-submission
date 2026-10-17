@@ -13,7 +13,7 @@ from orders_api_infra.rate_limits import preset_in_force
 from tests.contract.harness import (
     CONFIG,
     StatusesSeen,
-    bearer_token,
+    bearer_auth_provider,
     config_with_known_orders,
     known_orders,
 )
@@ -74,5 +74,5 @@ def api_schema(
     schema = schemathesis.openapi.from_dict(load_spec(), config=config)
     schema.config.update(base_url=endpoints["apiUrl"])
     # The token is fetched once per session and lasts longer than the run.
-    schema.auth(refresh_interval=None)(bearer_token(lambda: token_for(caller)))
+    schema.auth(refresh_interval=None)(bearer_auth_provider(lambda: token_for(caller)))
     return schema

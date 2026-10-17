@@ -11,6 +11,7 @@ from typing import Any
 from schemathesis import AuthContext, Case
 from schemathesis.config import SchemathesisConfig
 
+from orders_api.contract import operations
 from orders_api.domain.order import Order, OrderStatus
 from tests.builders import an_order
 
@@ -22,8 +23,9 @@ DELETABLE_ORDERS = "deletable_orders"
 """The one `DELETE` draws from instead, so deletes never remove the orders the other operations
 are meant to find, whichever order Schemathesis runs the operations in."""
 
-# Fixed ids, so every run starts from the same orders: each run writes them afresh.
-KNOWN_ORDER_IDS = tuple(f"c0de0000-0000-4000-8000-00000000000{n}" for n in range(1, 7))
+# Fixed ids, so every run starts from the same orders: each run writes them afresh. One per status
+# for the owner, and one more for the other caller.
+KNOWN_ORDER_IDS = tuple(f"c0de0000-0000-4000-8000-{n:012d}" for n in range(1, len(OrderStatus) + 2))
 DELETABLE_ORDER_IDS = tuple(f"c0de0000-0000-4000-8000-0000000000d{n}" for n in range(1, 3))
 
 
@@ -31,11 +33,12 @@ def known_orders(*, owner: str, other: str) -> list[Order]:
     """Orders for the generated requests to reach. Known: one of `owner`'s in each status and one
     of `other`'s, for reads and every status change with its conflicts (or, for a `USER`, the
     `403`s and someone else's order as a `404`). Deletable: one of each owner's."""
+    *owned_ids, others_id = KNOWN_ORDER_IDS
     owned = [
         an_order(id=order_id, owner_id=owner, status=status)
-        for order_id, status in zip(KNOWN_ORDER_IDS, OrderStatus, strict=False)
+        for order_id, status in zip(owned_ids, OrderStatus, strict=True)
     ]
-    others = an_order(id=KNOWN_ORDER_IDS[len(owned)], owner_id=other)
+    others = an_order(id=others_id, owner_id=other)
     deletable = [
         an_order(id=order_id, owner_id=owner_id)
         for order_id, owner_id in zip(DELETABLE_ORDER_IDS, (owner, other), strict=True)
@@ -51,7 +54,7 @@ def config_with_known_orders(config_text: str) -> SchemathesisConfig:
     return SchemathesisConfig.from_dict(data)
 
 
-def bearer_token(token: Callable[[], str]) -> type:
+def bearer_auth_provider(token: Callable[[], str]) -> type:
     """A Schemathesis auth provider sending `token()` as the caller's bearer token. Schemathesis
     leaves it out where it tests a missing or invalid token itself."""
 
@@ -66,14 +69,12 @@ def bearer_token(token: Callable[[], str]) -> type:
 
 
 def success_statuses(spec: Mapping[str, Any]) -> dict[str, int]:
-    """Each operation's one success status, by `METHOD path`."""
+    """Each operation's one success status, by `METHOD path`, as Schemathesis labels it."""
     return {
         f"{method.upper()} {path}": next(
             int(status) for status in operation["responses"] if status.startswith("2")
         )
-        for path, path_item in spec["paths"].items()
-        for method, operation in path_item.items()
-        if isinstance(operation, dict) and "responses" in operation
+        for path, method, operation in operations(spec)
     }
 
 

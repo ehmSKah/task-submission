@@ -14,8 +14,8 @@ deterministic = true
 database = "none"
 
 [parameters]
-# Half the generated order ids are orders that exist (written by conftest.py), so reads, status changes and deletes
-# reach the function's success and conflict paths, not only 404.
+# Half the generated order ids are orders that exist (written by conftest.py), so reads, status
+# changes and deletes reach the function's success and conflict paths, not only 404.
 "path.id" = { dictionary = "known_orders", probability = 0.5 }
 
 [dictionaries.known_orders]
@@ -25,9 +25,16 @@ values = []
 values = []
 
 [[operations]]
-# Deletes draw from orders of their own, so the known ones stay for the other operations.
+# Deletes draw from orders of their own, so the known ones stay for the other operations. No
+# business rule refuses a schema-valid delete, so it must succeed, or be a 403 or 404.
 include-operation-id = "deleteOrder"
 parameters = { "path.id" = { dictionary = "deletable_orders", probability = 0.5 } }
+checks.positive_data_acceptance.enabled = true
+
+[[operations]]
+# Neither refuses a schema-valid request by design: success, or a 403 or 404.
+include-operation-id = ["getHealth", "getOrder"]
+checks.positive_data_acceptance.enabled = true
 
 [checks.unsupported_method]
 # Expects 405 with Allow; an undeclared method is a 404 by design (ADR 0007), which the
@@ -35,9 +42,9 @@ parameters = { "path.id" = { dictionary = "deletable_orders", probability = 0.5 
 enabled = false
 
 [checks.positive_data_acceptance]
-# Some schema-valid requests are refused by design, covered by the integration tests: duplicate
-# SKUs (400), a cursor that isn't from a previous page (400), a reused Idempotency-Key (422), a
-# stale If-Match (412).
+# Off where schema-valid requests are refused by design, covered by the integration tests:
+# duplicate SKUs (400), a cursor that isn't from a previous page (400), a reused Idempotency-Key
+# (422), a stale If-Match (412). On below for the operations without such rules.
 enabled = false
 
 [phases.coverage]
