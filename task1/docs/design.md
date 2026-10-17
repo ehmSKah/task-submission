@@ -83,7 +83,7 @@ sequenceDiagram
     participant F as API function
     participant D as DynamoDB
     C->>W: PATCH /api/v1/orders/{id}/status, Bearer token
-    W->>W: per-IP rate rule (3,000 per 5 min)
+    W->>W: per-IP rate rule (3,000 per 5 min in production)
     alt over the flood limit
         W-->>C: 429 Problem, Retry-After 300
     end
@@ -180,10 +180,10 @@ ever asks about permissions.
 | | API function (precise) | WAF (edge) |
 |---|---|---|
 | Key | client IP (`sourceIp`; IPv6 per `/64`), then the user (`sub`) | client IP |
-| Limit | 300 per IP, 60 per `USER`, 300 for staff, per minute (defaults) | 3,000 per IP per 5 minutes |
+| Limit | 300 per IP, 60 per `USER`, 300 for staff, per minute (defaults) | 3,000 per IP per 5 minutes (the default, and `aws-prod`); `aws-dev` runs 10,000 plus a test-only rule ([ADR 0006](adr/0006-rate-limiting.md)) |
 | Algorithm | fixed 60 s windows; one conditional `ADD` per check in DynamoDB | WAF rate-based rule |
 | Answer | `429` Problem with `scope`, `Retry-After`, `RateLimit-*` on every counted response | `429` Problem (`application/json`), `Retry-After: 300` |
-| Covers | every request that reaches the function | everything, including invalid tokens, which never reach the function |
+| Covers | every order request that reaches the function (`/health` is not counted) | everything, including invalid tokens, which never reach the function |
 
 - **Runtime configuration:** the limits are one JSON SSM parameter, validated against a schema
   and cached for 2 s locally and in `aws-dev`, 60 s in production. `make limits PRESET=…`
@@ -328,13 +328,11 @@ file for the region.
   - The two counter writes per request come on top of that (ADR 0006).
 - **Lambda:** 256 MB. The API function averages 50 ms. The authorizer averages 20 ms and runs
   on 10 % of requests: its decision is cached per token for 5 minutes.
-- **Free tiers are ignored,** except Cognito's 10,000 MAU, which doesn't expire. The others
-  are 12-month or credit-based for new accounts, or their terms aren't stated: Lambda's 1 M
-  requests and 400,000 GB-s, CloudWatch's 5 GB, DynamoDB's 25 GB of storage, and the 100 GB
-  of data transfer out.
+- **Free tiers are left out** to keep the figures conservative, except Cognito's 10,000 free
+  MAU, which the Cognito rows include.
 - **Not included:**
   - DynamoDB storage. Orders grow by about 0.6 GB per million requests (each order plus its two
-    GSI copies), free up to 25 GB, then $0.25 per GB-month.
+    GSI copies), at $0.25 per GB-month.
   - PITR backups.
   - A custom domain.
   - Support plans.

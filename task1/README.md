@@ -316,8 +316,9 @@ These are stated rather than hidden. The full list, with what would change each 
   architecture. Run `make deploy` to rebuild it.
 - **A redeploy fails with change-set errors:** deploy through `make deploy`, which uses
   `cdk deploy --method=direct`. Floci breaks CDK's default change-set deploys.
-- **`make demo` fails at step 2 with `429`:** limits from an interrupted test run are still in
-  force. Run `make limits PRESET=defaults`.
+- **`make demo` fails at step 4 with `429`:** the `tiny` or `tiny-ip` limits from an interrupted
+  run are still in force. The demo empties the counters but keeps the limits it finds, so the
+  fourth counted request is refused. Run `make limits PRESET=defaults`.
 - **`401` with a token that worked earlier:** tokens last 15 minutes. Run `make token` or
   `make http-env` again.
 - **Port 4566 or 8080 is in use:** stop whatever holds it. `make down` also removes Floci's
