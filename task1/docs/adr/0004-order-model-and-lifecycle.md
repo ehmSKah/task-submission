@@ -50,10 +50,12 @@ PENDING ──► CONFIRMED ──► SHIPPED ──► DELIVERED
 - **Losing a race:** a write whose condition fails is never retried blindly. The order is read again and the request is decided afresh against what the winner left: a change that is now disallowed gets `409`, one that is now already in effect gets `200` with no change, and one that is still allowed (cancelling an order that was just confirmed) is applied on top, again conditionally.
 - **`412` before `409`:** when both apply, `412` wins. After the order is found and visible (`404` first), `If-Match` is checked before the status rules, so a stale `If-Match` is a `412` even if the change would be disallowed or is already in effect. RFC 9110 evaluates preconditions before the method and lets failures detected earlier (such as `404`) take precedence over them. A `412` tells the client exactly what it needs to know: its copy is stale, so it should read the order again before deciding.
 - **`If-Match` values:** `*` accepts any version, and several entity tags may be listed. Comparison is strong (RFC 9110), so a weak tag (`W/"3"`) never matches. A value that isn't one of our `ETag`s matches nothing and gets `412`, not `400`. An empty header counts as no header, as with `Idempotency-Key`.
+- **A `412` is a plain problem:** it carries no `ETag`. The client re-reads the order with `GET`, which returns the current body and `ETag` together, and decides again from that.
 
 **Deletion**
 - **Hard delete in any status** (ADMIN only).
 - **Responses:** `204 No Content`, then `404` once the order is gone.
+- **Unconditional:** `DELETE` takes no `If-Match`. Deletion is an administrative act on the order whatever its state, so there is no stale copy for a precondition to protect.
 
 **Retried creates**
 - **The header:** `POST` accepts an optional `Idempotency-Key` header (IETF draft *The Idempotency-Key HTTP Header Field*).
@@ -96,6 +98,7 @@ PENDING ──► CONFIRMED ──► SHIPPED ──► DELIVERED
   - *Soft delete:* every read and list must remember to filter deleted items (a classic bug source), and real erasure needs a separate purge.
   - *Soft delete with automatic expiry:* the same, delayed.
   - *Deletion only in final statuses:* rejected; deletion is administrative, not part of the order's lifecycle.
+  - *`If-Match` on `DELETE`:* would protect an admin from deleting an order that changed since they read it, but the delete is meant to work in any status; worth adding if deletion ever needs a review step.
 - **Id format.**
   - *UUID v7 / ULID:* time-ordered, but they expose the creation time, and v7 needs Python 3.14 or an extra package. Ordering comes from `createdAt` instead.
   - *Sequential numbers:* guessable, and they need a central counter.
@@ -108,6 +111,7 @@ PENDING ──► CONFIRMED ──► SHIPPED ──► DELIVERED
   - *Required `If-Match` (`428` when missing):* the stricter option, not worth the client burden while status is the only field that changes.
   - *`409` before `412`* (check the rules first, the version only for changes that would succeed): a client with a stale copy would get an answer computed from a state it hasn't seen.
   - *`2xx` for a stale `If-Match` when the requested status is already in effect* (RFC 9110 allows it): one more special case for clients to learn; a re-read costs one `GET`.
+  - *The current `ETag` on a `412`:* saves nothing, because the client needs the current body too before it decides again, so the `GET` happens anyway.
   - *Retrying a lost write with the new values, or failing every lost race with `409`:* the first overwrites the winner's change; the second refuses changes that are still allowed and turns harmless duplicate requests into errors.
 - **Listing.**
   - *Filters (`status`, `ownerId`):* not required by the assignment, and each one needs its own DynamoDB index.
