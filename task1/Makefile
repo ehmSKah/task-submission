@@ -78,7 +78,10 @@ test-adapter: ## Adapter tests against the emulator, adding to the coverage
 	uv run pytest tests/adapter -m adapter --cov --cov-append --cov-report= $(PYTEST_ARGS)
 
 test-integration: ## Integration tests against the deployed stack
-	uv run pytest tests/integration -m integration
+	uv run pytest tests/integration -m integration $(PYTEST_ARGS)
+
+contract-test: ## Schemathesis contract tests against the deployed stack
+	uv run pytest tests/contract -m contract $(PYTEST_ARGS)
 
 # ADR 0011's gates, from the unit and adapter suites: the packages that hold the rules need more
 # than the adapters around them.

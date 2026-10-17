@@ -1,0 +1,52 @@
+# Schemathesis settings for `make contract-test` (ADRs 0008 and 0011). conftest.py adds the base
+# URL, the caller's token and the known order ids.
+
+# A cold Lambda container on Floci can take seconds to start.
+request-timeout = 30.0
+
+[generation]
+# Valid requests and ones that break the contract on purpose.
+mode = "all"
+# Per operation and caller, for the fuzzing phase; the coverage phase adds its boundary cases.
+max-examples = 100
+# The same requests on every run: no random seed, no example database carried between runs.
+deterministic = true
+database = "none"
+
+[parameters]
+# Half the generated order ids are orders that exist (written by conftest.py), so reads, status changes and deletes
+# reach the function's success and conflict paths, not only 404.
+"path.id" = { dictionary = "known_orders", probability = 0.5 }
+
+[dictionaries.known_orders]
+values = []
+
+[dictionaries.deletable_orders]
+values = []
+
+[[operations]]
+# Deletes draw from orders of their own, so the known ones stay for the other operations.
+include-operation-id = "deleteOrder"
+parameters = { "path.id" = { dictionary = "deletable_orders", probability = 0.5 } }
+
+[checks.unsupported_method]
+# Expects 405 with Allow; an undeclared method is a 404 by design (ADR 0007), which the
+# integration tests check.
+enabled = false
+
+[checks.positive_data_acceptance]
+# Some schema-valid requests are refused by design, covered by the integration tests: duplicate
+# SKUs (400), a cursor that isn't from a previous page (400), a reused Idempotency-Key (422), a
+# stale If-Match (412).
+enabled = false
+
+[phases.coverage]
+# Only `unsupported_method` judges these; see above.
+unexpected-methods = []
+
+[output.sanitization]
+# Tokens never appear in failure reports or reproduction commands.
+enabled = true
+
+[cache]
+enabled = false
