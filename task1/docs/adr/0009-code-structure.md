@@ -64,7 +64,7 @@ task1/
 | 4 | Request checks: `Content-Type`, body size, query parameters, **path `{id}` matches the UUID pattern** | `415` / `413` / `400` |
 | 5 | Body: schema validation, duplicate SKUs, then parsing into typed models | `400` |
 | 6 | Permission check ([ADR 0001](0001-role-based-access-control.md)) | `403` |
-| 7 | Idempotency wrapper (`POST` only), then the use case: load and visibility, rules, conditional write | `404` / `409` / `412` / `422` |
+| 7 | Idempotency wrapper (`POST` only), then the use case: load and visibility, `If-Match`, rules, conditional write. A lost race is decided again on the fresh state (ADR 0004) | `404` / `412` / `409` / `422` |
 | 8 | Response: serialise, set `X-Request-Id`, `RateLimit-*`, `ETag` | `200` / `201` / `204` |
 | — | Exception handlers: known errors → Problem Details; anything else → generic `500` | |
 

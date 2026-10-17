@@ -28,9 +28,9 @@ Roles (`USER`, `ORDER_MANAGER`, `ADMIN`) come from the identity provider's **gro
 **Ownership.** The owner of an order is the token's `sub`, recorded at creation from the validated token and never taken from the request body. Ownership never changes. Responses expose it as `ownerId`.
 
 **Order of checks and status codes.**
-1. The caller's roles lack the permission for the action at all → `403 Forbidden`, before any data is read. (Malformed requests fail even earlier with `400`, including a path id that isn't a UUID; see [ADR 0007](0007-validation-and-errors.md) and [ADR 0009](0009-code-structure.md).)
-2. The order doesn't exist, or the caller only has `order:read:own` and isn't the owner → `404 Not Found`. Orders a caller may not see are indistinguishable from orders that don't exist, so their existence never leaks (OWASP API1: Broken Object Level Authorization). IDs are random UUIDs as well, but the `404` doesn't rely on that.
-3. The requested status change isn't allowed from the order's current status → `409 Conflict`.
+1. The caller's roles lack the permission for the action at all → `403 Forbidden`, before any data is read. (Malformed requests fail even earlier with `400`, including a path id that isn't a UUID; see [ADR 0007](0007-validation-and-errors.md) and [ADR 0009](0009-code-structure.md).) For a status change the requested status decides: `CANCELLED` needs `order:cancel:own` or `order:status:any`, any other status `order:status:any`, so a USER asking for `CONFIRMED` gets `403` even on their own order.
+2. The order doesn't exist, or the caller only has `order:read:own` and isn't the owner → `404 Not Found`. Orders a caller may not see are indistinguishable from orders that don't exist, so their existence never leaks (OWASP API1: Broken Object Level Authorization). IDs are random UUIDs as well, but the `404` doesn't rely on that. The same holds for status changes: a caller without `order:status:any` may only cancel their own orders, so anyone else's order is a `404` to them.
+3. The requested status change isn't allowed from the order's current status → `409 Conflict`. A stale `If-Match` is checked just before this and gets `412` ([ADR 0004](0004-order-model-and-lifecycle.md)).
 
 Listing (`GET /api/v1/orders`) is filtered to the caller's own orders unless they have `order:read:any`. It never errors because other orders exist.
 

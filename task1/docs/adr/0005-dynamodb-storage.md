@@ -13,8 +13,8 @@ Orders are stored in **Amazon DynamoDB**. Each kind of data gets **its own table
 | Access pattern | Key / index | Operation |
 |---|---|---|
 | Get an order | table key `id` (UUID v4) | `GetItem`, **strongly consistent** |
-| Change status | table key `id` | `UpdateItem` with condition `status = :expected` (and `version = :v` when `If-Match` is sent), incrementing `version` |
-| Delete | table key `id` | `DeleteItem` |
+| Change status | table key `id` | `UpdateItem` with condition `status = :expected` (and `version = :v` when `If-Match` is sent), incrementing `version`; `ReturnValues=ALL_NEW` returns the stored order, and a missing order fails the condition instead of being created |
+| Delete | table key `id` | `DeleteItem` with condition `attribute_exists(id)`, so a missing order is told apart without a read |
 | One owner's orders, newest first | GSI **`byOwner`**: partition `ownerId`, sort `createdAt#id` | `Query`, `ScanIndexForward=false` |
 | All orders, newest first | GSI **`byCreated`**: partition `listAll` (constant `"ORDER"`), sort `createdAt#id` | `Query`, `ScanIndexForward=false` |
 

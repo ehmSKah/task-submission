@@ -47,6 +47,9 @@ PENDING ──► CONFIRMED ──► SHIPPED ──► DELIVERED
 - **Atomic conditional write:** every status change is one write, "set status to X only if it is still Y". The loser of a race (e.g. a manager ships while the owner cancels) gets `409`, because by then its change *is* disallowed.
 - **Version on every change:** each change increments `version`.
 - **Optional `If-Match`:** `GET` returns `ETag: "<version>"`. `PATCH` accepts an optional `If-Match`, and a mismatch returns `412 Precondition Failed`.
+- **Losing a race:** a write whose condition fails is never retried blindly. The order is read again and the request is decided afresh against what the winner left: a change that is now disallowed gets `409`, one that is now already in effect gets `200` with no change, and one that is still allowed (cancelling an order that was just confirmed) is applied on top, again conditionally.
+- **`412` before `409`:** when both apply, `412` wins. After the order is found and visible (`404` first), `If-Match` is checked before the status rules, so a stale `If-Match` is a `412` even if the change would be disallowed or is already in effect. RFC 9110 evaluates preconditions before the method and lets failures detected earlier (such as `404`) take precedence over them. A `412` tells the client exactly what it needs to know: its copy is stale, so it should read the order again before deciding.
+- **`If-Match` values:** `*` accepts any version, and several entity tags may be listed. Comparison is strong (RFC 9110), so a weak tag (`W/"3"`) never matches. A value that isn't one of our `ETag`s matches nothing and gets `412`, not `400`. An empty header counts as no header, as with `Idempotency-Key`.
 
 **Deletion**
 - **Hard delete in any status** (ADMIN only).
@@ -101,6 +104,9 @@ PENDING ──► CONFIRMED ──► SHIPPED ──► DELIVERED
 - **Concurrency.**
   - *Last write wins:* corrupts the lifecycle (a shipped order ends up cancelled).
   - *Required `If-Match` (`428` when missing):* the stricter option, not worth the client burden while status is the only field that changes.
+  - *`409` before `412`* (check the rules first, the version only for changes that would succeed): a client with a stale copy would get an answer computed from a state it hasn't seen.
+  - *`2xx` for a stale `If-Match` when the requested status is already in effect* (RFC 9110 allows it): one more special case for clients to learn; a re-read costs one `GET`.
+  - *Retrying a lost write with the new values, or failing every lost race with `409`:* the first overwrites the winner's change; the second refuses changes that are still allowed and turns harmless duplicate requests into errors.
 - **Listing.**
   - *Filters (`status`, `ownerId`):* not required by the assignment, and each one needs its own DynamoDB index.
   - *Arbitrary sorting:* doesn't fit DynamoDB.
