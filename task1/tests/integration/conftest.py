@@ -10,7 +10,6 @@ import pytest
 
 from orders_api.domain.order import Order, OrderStatus, format_timestamp
 from orders_api_infra.config import load_config
-from orders_api_infra.demo_users import access_token, demo_user
 from orders_api_infra.rate_limits import preset_in_force
 from tests.builders import an_order
 from tests.deployment import store_order
@@ -45,20 +44,6 @@ def api(endpoints: dict[str, Any]) -> Iterator[httpx.Client]:
     """Every response through this client is validated against the OpenAPI document."""
     with contract_checked_client(endpoints["apiUrl"], timeout=30) as client:
         yield client
-
-
-@pytest.fixture(scope="session")
-def token_for(endpoints: dict[str, Any]) -> Callable[[str], str]:
-    """A real access token from the environment's Cognito, per demo user, fetched once."""
-    config = load_config(endpoints["env"])
-    tokens: dict[str, str] = {}
-
-    def token(user: str) -> str:
-        if user not in tokens:
-            tokens[user] = access_token(config, demo_user(user))
-        return tokens[user]
-
-    return token
 
 
 @pytest.fixture(scope="session")
