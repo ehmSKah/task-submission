@@ -158,8 +158,9 @@ def test_the_last_page_may_be_empty_and_the_walk_ends_on_a_null_cursor(
     walk_as: Callable[..., list[list[dict[str, Any]]]],
     create_order_as: Callable[[str], dict[str, Any]],
 ) -> None:
-    """A page that ends exactly at the oldest order still has a cursor; the page after it is
-    empty. Asking for exactly as many orders as the last page held makes that happen."""
+    """A page that ends exactly at the oldest order either has no cursor, or one whose page is
+    empty: DynamoDB returned none in the AWS run, Floci always returns one (docs/verification.md).
+    Asking for exactly as many orders as the last page held makes that happen."""
     walk_showing(walk_as, "alice", created(create_order_as, "alice"))
     query: dict[str, str] = {"limit": "100"}
     page = list_as("alice", **query)
@@ -170,6 +171,8 @@ def test_the_last_page_may_be_empty_and_the_walk_ends_on_a_null_cursor(
     if page["items"]:
         full = list_as("alice", **query | {"limit": str(len(page["items"]))})
         assert ids(full["items"]) == ids(page["items"])
+        if full["nextCursor"] is None:
+            return
         page = list_as("alice", limit="100", cursor=next_cursor(full))
 
     assert page == {"items": [], "nextCursor": None}
