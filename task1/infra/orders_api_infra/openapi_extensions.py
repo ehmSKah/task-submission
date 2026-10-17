@@ -74,17 +74,6 @@ GATEWAY_ERRORS: dict[str, GatewayError] = {
     "DEFAULT_5XX": GatewayError(None),
 }
 
-# Gateway response types left to DEFAULT_4XX / DEFAULT_5XX, which keep the gateway's own status
-# code: they can answer any request, whichever operation it is for, so every operation documents
-# their statuses (ADR 0008). The types that can't occur here are left out: no API keys or usage
-# plans (INVALID_API_KEY, QUOTA_EXCEEDED), no IAM authorization (EXPIRED_TOKEN,
-# INVALID_SIGNATURE), an authorizer that never denies (ACCESS_DENIED), and WAF's own `429`.
-GATEWAY_STATUSES_FOR_ANY_REQUEST: dict[str, int] = {
-    "REQUEST_TOO_LARGE": 413,  # a body over API Gateway's 10 MB payload limit
-    "THROTTLED": 429,  # stage or account throttling, before any authorizer
-    "API_CONFIGURATION_ERROR": 500,
-}
-
 
 def _problem_template(error: GatewayError, target: Target) -> str:
     if error.problem is None:

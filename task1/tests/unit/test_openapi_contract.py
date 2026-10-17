@@ -4,11 +4,8 @@ from typing import Any
 import pytest
 
 from orders_api.adapters.inbound.problems import ProblemType
-from orders_api_infra.openapi_extensions import (
-    GATEWAY_ERRORS,
-    GATEWAY_STATUSES_FOR_ANY_REQUEST,
-    load_spec,
-)
+from orders_api.contract import operations as contract_operations
+from orders_api_infra.openapi_extensions import GATEWAY_ERRORS, load_spec
 
 FORBIDDEN_KEYWORDS = {"nullable", "readOnly", "writeOnly", "format"}
 
@@ -69,12 +66,7 @@ RATE_LIMIT_HEADERS = {"RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset
 
 
 def operations() -> list[tuple[str, str, dict[str, Any]]]:
-    return [
-        (path, method, operation)
-        for path, path_item in load_spec()["paths"].items()
-        for method, operation in path_item.items()
-        if isinstance(operation, dict) and "responses" in operation
-    ]
+    return list(contract_operations(load_spec()))
 
 
 def resolved(response: dict[str, Any]) -> dict[str, Any]:
@@ -138,6 +130,18 @@ FUNCTION_STATUSES = {
     "changeOrderStatus": {200, 400, 403, 404, 409, 412, 413, 415, 429, 500},
 }
 
+# Gateway response types left to DEFAULT_4XX / DEFAULT_5XX, which keep the gateway's own status
+# code: they can answer any request, whichever operation it is for, so every operation documents
+# their statuses (ADR 0008). The types that can't occur here are left out: no API keys or usage
+# plans (INVALID_API_KEY, QUOTA_EXCEEDED), no IAM authorization (EXPIRED_TOKEN,
+# INVALID_SIGNATURE), an authorizer that never denies (ACCESS_DENIED), and WAF's own `429`.
+GATEWAY_STATUSES_FOR_ANY_REQUEST: dict[str, int] = {
+    "REQUEST_TOO_LARGE": 413,  # a body over API Gateway's 10 MB payload limit
+    "THROTTLED": 429,  # stage or account throttling, before any authorizer
+    "API_CONFIGURATION_ERROR": 500,
+}
+# How the mapped Gateway Responses apply: only to secured operations, only to unknown routes, or
+# generically (their statuses are the ones above).
 _SECURED_ONLY = {"UNAUTHORIZED", "AUTHORIZER_FAILURE", "AUTHORIZER_CONFIGURATION_ERROR"}
 _UNKNOWN_ROUTES_ONLY = {"MISSING_AUTHENTICATION_TOKEN"}
 _GENERIC = {"DEFAULT_4XX", "DEFAULT_5XX"}

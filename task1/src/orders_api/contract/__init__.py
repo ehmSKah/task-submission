@@ -5,6 +5,7 @@ the Lambda bundle `openapi.yaml` sits next to this module; in a source checkout 
 `openapi/`.
 """
 
+from collections.abc import Iterator, Mapping
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -70,3 +71,12 @@ def query_parameter_schemas(method: str, path: str) -> dict[str, dict[str, Any]]
 def property_schema(schema: str, name: str) -> dict[str, Any]:
     """The schema of one property of a component schema; `KeyError` if it has none."""
     return _draft_04(load_contract()["components"]["schemas"][schema]["properties"][name])
+
+
+def operations(spec: Mapping[str, Any]) -> Iterator[tuple[str, str, dict[str, Any]]]:
+    """Every operation in an OpenAPI document, as `(path, method, operation)`; path-level
+    entries such as `parameters` are skipped."""
+    for path, path_item in spec["paths"].items():
+        for method, operation in path_item.items():
+            if isinstance(operation, dict) and "responses" in operation:
+                yield path, method, operation

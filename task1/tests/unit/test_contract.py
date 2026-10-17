@@ -6,6 +6,7 @@ import pytest
 from orders_api.contract import (
     DRAFT_04,
     load_contract,
+    operations,
     path_parameter_schema,
     property_schema,
     query_parameter_schemas,
@@ -45,10 +46,9 @@ def parameter_schemas() -> list[tuple[str, dict[str, Any]]]:
                 found.append(
                     (f"{path} {parameter['name']}", path_parameter_schema(path, parameter["name"]))
                 )
-        for method, operation in path_item.items():
-            if isinstance(operation, dict) and "responses" in operation:
-                for name, schema in query_parameter_schemas(method, path).items():
-                    found.append((f"{method} {path} ?{name}", schema))
+    for path, method, _ in operations(load_contract()):
+        for name, schema in query_parameter_schemas(method, path).items():
+            found.append((f"{method} {path} ?{name}", schema))
     return found
 
 
