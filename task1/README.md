@@ -43,6 +43,7 @@ Needs Docker, `make`, `uv` and Node.js ([versions](#tools)); no AWS account.
 git clone <this repository> && cd <clone>/task1
 make doctor   # checks the tools and their versions
 make up       # installs dependencies, starts Floci, deploys the stack, seeds the demo users
+make docs     # optional: the OpenAPI document in Swagger UI
 make demo     # the one-minute scenario below, against the deployed stack
 make test     # unit tests (they need no stack; `make install && make test` works on its own)
 make down     # stops Floci and removes everything
@@ -52,6 +53,17 @@ The first `make up` takes a few minutes: it pulls the Floci image, installs the 
 dependencies and deploys with CDK. It prints the local API URL, which is also in
 `build/endpoints.json`, and ends by writing the [request collection](#trying-requests)'s
 environment file.
+
+Two web UIs show what's running:
+
+| UI | URL | Started by | Shows |
+|---|---|---|---|
+| Floci UI | <http://localhost:4500> | `make up` | what the deploy created: the DynamoDB tables and their items, both Lambda functions, the REST API, the Cognito user pools, the SSM parameters, the log groups and the CloudFormation stacks |
+| Swagger UI | <http://localhost:8080> | `make docs` | the OpenAPI document, read-only (no "Try it out"; see [Trying requests](#trying-requests)) |
+
+Floci UI is Floci's own web console (`floci/floci-ui`, pinned in `docker-compose.yml`). It can
+change resources as well as show them, so anything done there is outside the tests' control:
+`make down && make up` starts afresh.
 
 `make demo` prints every request and its status, and fails on the first status that isn't the
 expected one. It never prints a token.
@@ -287,7 +299,7 @@ task1/
 ├── http/                     # the .http request collection
 ├── docs/                     # design.md, adr/, verification.md, aws.md
 ├── scripts/                  # doctor and wait-for-Floci helpers
-├── docker-compose.yml        # Floci (pinned) and Swagger UI
+├── docker-compose.yml        # Floci and its web console (pinned), and Swagger UI
 ├── Makefile                  # every setup and execution step; `make help`
 └── CONTEXT.md                # the domain glossary
 ```
@@ -334,7 +346,7 @@ These are stated rather than hidden. The full list, with what would change each 
   fourth counted request is refused. Run `make limits PRESET=defaults`.
 - **`401` with a token that worked earlier:** tokens last 15 minutes. Run `make token` or
   `make http-env` again.
-- **Port 4566 or 8080 is in use:** stop whatever holds it. `make down` also removes Floci's
+- **Port 4566, 4500 or 8080 is in use:** stop whatever holds it. `make down` also removes Floci's
   Lambda containers left from an earlier run.
 - **Starting from scratch:** run `make down && make up`. Floci keeps everything in memory, so
   each `make up` deploys and seeds afresh.

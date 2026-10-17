@@ -18,7 +18,7 @@ it comes from is revisited (amended or superseded).
   - `pending`: not run yet.
 - **Version / date:** what the check last ran against, and when; `—` while pending.
 
-**State on 2026-10-18:** 91 assumptions: 51 `verified`, 5 `failed` (each with its
+**State on 2026-10-18:** 92 assumptions: 52 `verified`, 5 `failed` (each with its
 workaround), 35 `pending`.
 - **32 of the pending rows need AWS and have not yet been run on AWS.** They stay
   `pending` until the first deploy to `aws-dev` (`make up`, `make test-integration` and
@@ -87,6 +87,7 @@ workaround), 35 `pending`.
 | `cdk synth` with cdk-nag passes for `local`, `aws-dev` and `aws-prod` without AWS credentials; the AWS stacks are synthesised for `aws://unknown-account/eu-central-1` ([ADR 0010](adr/0010-infrastructure-and-environments.md)) | Local | `make lint` (no AWS credentials on the machine); `tests/unit/test_environments_infra.py` for the template | verified | CDK CLI 2.1145.0, cdk-nag 2.38.2, 2026-10-17 |
 | The `aws_only` tests are skipped on Floci with their reason, before any fixture switches limits ([ADR 0011](adr/0011-testing-strategy.md)) | Floci | `make test-integration` (3 skipped) | verified | Floci 2.3.0, 2026-10-17 |
 | The user pool is created in Cognito's Lite tier (`UserPoolTier: LITE`, [ADR 0013](adr/0013-production-readiness-and-evolution.md)): CloudFormation accepts the property, `DescribeUserPool` returns `LITE`, and seeding, sign-in, the demo and the integration suite work unchanged | Floci | `make deploy`, then `describe-user-pool`; `make demo`; `make test-integration` (174 passed); `tests/unit/test_environments_infra.py::test_every_environment_pins_the_user_pool_to_the_lite_tier` | verified | Floci 2.3.0, 2026-10-18 |
+| Floci UI 0.7.0 reaches Floci 2.3.0 over the Compose network and lists the deployed stack: the DynamoDB tables, both Lambda functions, the REST API (edge-optimized), both user pools, the SSM parameters and the CloudFormation stacks ([ADR 0010](adr/0010-infrastructure-and-environments.md)) | Floci | `docker compose up -d floci-ui`; its API `/api/clouds/aws/status` (`runtime: reachable`) and `/api/clouds/aws/services/<service>/resources` | verified | Floci 2.3.0, Floci UI 0.7.0, 2026-10-18 |
 
 ## Not yet triggerable locally
 

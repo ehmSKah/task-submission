@@ -64,6 +64,7 @@ Rules:
 - **Docker socket** mounted, because Floci runs Lambda functions as containers.
 - **Storage:** `memory`. Every `make up` deploys and seeds from scratch. `persistent` mode is optional.
 - **Short-lived tokens:** `FLOCI_SERVICES_COGNITO_ENFORCE_TOKEN_VALIDITY_LIMITS=false`, so expiry tests can use them.
+- **Floci UI**, Floci's web console (`floci/floci-ui:0.7.0`, pinned), starts with Floci on `localhost:4500`, so a reviewer can see what `make up` deployed. It reaches Floci over the shared network with the dummy keys, and can change resources as well as show them.
 - **Swagger UI** runs under the `docs` profile on `localhost:8080`.
 
 **Workflow** (`make`; the README documents these as the setup and execution instructions):
@@ -71,7 +72,7 @@ Rules:
 | Target | Does |
 |---|---|
 | `make doctor` | checks Docker (with Compose), `make`, `uv` and Node and their versions, and names anything missing; with `ENV=aws-*` also the AWS credentials, CDK's bootstrap and API Gateway's logging role |
-| `make up` | starts Floci and waits for it; `cdk bootstrap` (idempotent); builds the bundle; `cdk deploy --method=direct -c env=local`; seeds users; writes and prints the local API URL; writes the `.http` env file (`make http-env`) |
+| `make up` | starts Floci and its web console and waits for Floci; `cdk bootstrap` (idempotent); builds the bundle; `cdk deploy --method=direct -c env=local`; seeds users; writes and prints the local API URL; writes the `.http` env file (`make http-env`) |
 | `make token ROLE=user\|manager\|admin` | prints an access token for a seeded user |
 | `make limits PRESET=defaults\|high\|tiny\|tiny-ip` | writes a rate-limit preset to the SSM parameter, in force within the cache TTL ([ADR 0006](0006-rate-limiting.md)) |
 | `make demo` | the reviewer's one-minute scenario against the deployed stack; fails on any unexpected response; needs `testFixtures` |
