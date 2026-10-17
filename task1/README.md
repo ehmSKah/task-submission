@@ -105,6 +105,21 @@ The API function counts the rate limits, checks the request and the caller's per
 writes with conditional updates. The request flow, step by step, is in
 [design §2](docs/design.md#2-request-flow).
 
+**Security and observability baseline** ([design §1](docs/design.md#1-overview),
+[ADR 0012](docs/adr/0012-observability-and-security-baseline.md)):
+- **Logs:** structured JSON lines, each with the request id (also in `X-Request-Id` and every
+  error body), plus the route, `sub` and roles once known, and one access line per request with
+  the status and latency. Client IPs are truncated (IPv4 `/24`, IPv6 `/64`); tokens, secrets
+  and bodies are never logged.
+- **Security headers** on every response from every layer: `Cache-Control: no-store`,
+  `X-Content-Type-Options`, `Content-Security-Policy`, `X-Frame-Options` and
+  `Strict-Transport-Security`.
+- **IAM:** hand-written least-privilege statements on exact ARNs; `cdk-nag` checks every
+  environment at synth.
+- **Not built:** custom metrics, tracing and alarms, which the task doesn't ask for and Floci
+  can't show. The logs carry every signal, with fixed event names for metric filters and alarms
+  in production ([below](#known-limitations-and-deliberate-omissions)).
+
 ## API
 
 | Method and path | Who | Success |
