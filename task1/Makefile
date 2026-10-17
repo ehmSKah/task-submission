@@ -16,7 +16,7 @@ RUN_INFRA_MODULE := cd infra && uv run python -m
 
 .DEFAULT_GOAL := help
 .PHONY: help doctor install up floci-up bootstrap bundle deploy endpoints seed token down \
-	limits test test-adapter test-integration lint lint-openapi docs
+	limits test test-adapter test-integration contract-test coverage lint lint-openapi docs
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -67,14 +67,34 @@ down: ## Stop Floci and remove its containers, network and volumes
 	docker ps -aq --filter label=floci=true | xargs -r docker rm -f >/dev/null
 	docker compose down -v --remove-orphans
 
-test: ## Unit tests
-	uv run pytest tests/unit
+PYTEST_ARGS ?=
 
-test-adapter: ## Adapter tests against the emulator
-	uv run pytest tests/adapter -m adapter
+# Both suites collect branch coverage into build/.coverage; the unit run starts it afresh and the
+# adapter run adds to it. `make coverage` enforces the thresholds on whatever was collected.
+test: ## Unit tests, collecting coverage
+	uv run pytest tests/unit --cov --cov-report= $(PYTEST_ARGS)
+
+test-adapter: ## Adapter tests against the emulator, adding to the coverage
+	uv run pytest tests/adapter -m adapter --cov --cov-append --cov-report= $(PYTEST_ARGS)
 
 test-integration: ## Integration tests against the deployed stack
 	uv run pytest tests/integration -m integration
+
+# ADR 0011's gates, from the unit and adapter suites: the packages that hold the rules need more
+# than the adapters around them.
+COVERAGE_MIN ?= 85
+COVERAGE_CORE_MIN ?= 95
+COVERAGE_CORE_PACKAGES := domain application auth
+
+coverage: ## Enforce the coverage thresholds (after make test); writes XML and HTML reports
+	uv run coverage xml -q
+	uv run coverage html -q
+	uv run coverage report --fail-under=$(COVERAGE_MIN)
+	@for package in $(COVERAGE_CORE_PACKAGES); do \
+		echo "orders_api.$$package (at least $(COVERAGE_CORE_MIN) %):"; \
+		uv run coverage report --include="src/orders_api/$$package/*" \
+			--fail-under=$(COVERAGE_CORE_MIN) || exit 1; \
+	done
 
 lint: lint-openapi bundle ## Ruff, mypy, import-linter, OpenAPI lint and cdk-nag (via cdk synth)
 	uv run ruff check .

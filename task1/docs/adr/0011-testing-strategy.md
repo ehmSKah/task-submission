@@ -85,6 +85,9 @@ Each of the assignment's five required categories (successful requests, invalid 
   - **≥ 95 % for `domain`, `application` and `auth`**
   - **≥ 85 % overall**
   - enforced in CI
+  - **What is measured:** the shipped package `orders_api` (`src/`). The CDK app and its scripts (`infra/`) are exercised by every `make up` and by their own unit tests, but are not part of the figure.
+  - **How:** `make test` starts the coverage data afresh, `make test-adapter` adds to it, and `make coverage` enforces the thresholds (`COVERAGE_MIN`, `COVERAGE_CORE_MIN` in the Makefile): once over everything, then once per core package. It also writes the XML and HTML reports.
+  - **In CI** the `unit` job enforces them on the unit suite's coverage alone, before Floci is started. Adapter tests only add coverage, so this is the stricter check; locally `make test test-adapter coverage` reports both suites together.
 
 **CI/CD (GitHub Actions).**
 - **`ci.yml`:** on every push and pull request; a new push cancels the previous run.

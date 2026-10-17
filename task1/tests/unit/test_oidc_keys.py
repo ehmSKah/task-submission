@@ -3,7 +3,8 @@
 import socket
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import pytest
@@ -361,3 +362,70 @@ def test_a_hanging_provider_times_out_after_two_seconds(silent_server: str) -> N
 def test_an_unreachable_provider_is_a_fetch_error() -> None:
     with pytest.raises(KeyFetchError):
         fetch_json("http://127.0.0.1:9/.well-known/openid-configuration")
+
+
+@pytest.fixture
+def provider_answering() -> Iterator[Callable[[bytes], str]]:
+    """A local HTTP server that answers every GET with the body it was given."""
+    body = b""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def answering(document: bytes) -> str:
+        nonlocal body
+        body = document
+        return f"http://127.0.0.1:{server.server_address[1]}/.well-known/jwks.json"
+
+    yield answering
+    server.shutdown()
+    thread.join()
+    server.server_close()
+
+
+def test_a_provider_document_is_read_as_a_json_object(
+    provider_answering: Callable[[bytes], str],
+) -> None:
+    assert fetch_json(provider_answering(b'{"keys": []}')) == {"keys": []}
+
+
+@pytest.mark.parametrize("document", [b"not json", b'[{"kid": "pool-key"}]', b'"keys"'])
+def test_a_document_that_is_no_json_object_is_a_fetch_error(
+    provider_answering: Callable[[bytes], str], document: bytes
+) -> None:
+    with pytest.raises(KeyFetchError):
+        fetch_json(provider_answering(document))
+
+
+@pytest.mark.parametrize("jwks", [{}, {"keys": {"pool-key": {}}}, {"keys": None}])
+def test_a_jwks_without_a_keys_list_counts_as_a_failed_fetch(
+    clock: FakeClock, events: RecordedEvents, jwks: dict[str, Any]
+) -> None:
+    provider = FakeProvider()
+    provider.documents[JWKS_URI] = jwks
+
+    cache = cache_for(provider, clock, events)
+
+    with pytest.raises(SigningKeysUnavailable):
+        cache.signing_key("pool-key")
+    assert events.names() == ["jwks_fetch_failed"]
+
+
+def test_entries_that_are_not_objects_are_ignored(clock: FakeClock, events: RecordedEvents) -> None:
+    provider = FakeProvider()
+    provider.documents[JWKS_URI] = {"keys": ["pool-key", None, jwk("pool-key")]}
+
+    cache = cache_for(provider, clock, events)
+
+    assert cache.signing_key("pool-key") is not None

@@ -54,8 +54,27 @@ addopts = "-ra --strict-markers"
 markers = [
     "integration: HTTP tests against the deployed stack (needs build/endpoints.json)",
     "adapter: outbound adapters against the emulator (needs build/endpoints.json)",
+    "contract: Schemathesis against the deployed stack (needs build/endpoints.json)",
     "floci_only: needs Floci behaviour AWS can't reproduce; skipped on other targets",
 ]
+
+# Branch coverage of the shipped package, from the unit and adapter suites (ADR 0011). The
+# thresholds are enforced by `make coverage`, which reports per package as well.
+[tool.coverage.run]
+branch = true
+source = ["orders_api"]
+data_file = "build/.coverage"
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.coverage.xml]
+output = "build/coverage.xml"
+
+[tool.coverage.html]
+directory = "build/coverage-html"
 
 [tool.ruff]
 line-length = 100
