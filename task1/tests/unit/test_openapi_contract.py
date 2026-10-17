@@ -4,7 +4,11 @@ from typing import Any
 import pytest
 
 from orders_api.adapters.inbound.problems import ProblemType
-from orders_api_infra.openapi_extensions import load_spec
+from orders_api_infra.openapi_extensions import (
+    GATEWAY_ERRORS,
+    GATEWAY_STATUSES_FOR_ANY_REQUEST,
+    load_spec,
+)
 
 FORBIDDEN_KEYWORDS = {"nullable", "readOnly", "writeOnly", "format"}
 
@@ -106,10 +110,10 @@ def test_every_rate_limited_operation_documents_its_429_and_headers(
             assert header_names(response) >= RATE_LIMIT_HEADERS, status
 
 
-def test_health_is_not_rate_limited() -> None:
+def test_health_is_not_rate_limited_by_the_api() -> None:
+    """Its `429` can only come from flood protection in front of the API (ADR 0006)."""
     responses = load_spec()["paths"]["/api/v1/health"]["get"]["responses"]
 
-    assert "429" not in responses
     assert not header_names(responses["200"]) & RATE_LIMIT_HEADERS
 
 
@@ -120,3 +124,73 @@ def test_the_rate_limit_headers_are_required_wherever_they_are_documented() -> N
         assert headers[name]["required"] is True
         assert headers[name]["schema"] == {"type": "integer", "minimum": 0}
     assert "required" not in headers["Retry-After"]
+
+
+# What the API function itself can answer, per operation (ADRs 0001, 0004, 0006, 0007, 0009):
+# its success, a malformed request (400), a missing permission (403), the rate limits (429)
+# and an unexpected error (500), plus each operation's own cases.
+FUNCTION_STATUSES = {
+    "getHealth": {200, 500},
+    "createOrder": {201, 400, 403, 409, 413, 415, 422, 429, 500},
+    "listOrders": {200, 400, 403, 429, 500},
+    "getOrder": {200, 400, 403, 404, 429, 500},
+    "deleteOrder": {204, 400, 403, 404, 429, 500},
+    "changeOrderStatus": {200, 400, 403, 404, 409, 412, 413, 415, 429, 500},
+}
+
+_SECURED_ONLY = {"UNAUTHORIZED", "AUTHORIZER_FAILURE", "AUTHORIZER_CONFIGURATION_ERROR"}
+_UNKNOWN_ROUTES_ONLY = {"MISSING_AUTHENTICATION_TOKEN"}
+_GENERIC = {"DEFAULT_4XX", "DEFAULT_5XX"}
+
+
+def gateway_statuses(operation: dict[str, Any]) -> set[int]:
+    """The statuses API Gateway can answer this operation with, before or instead of the
+    function: its mapped Gateway Responses that apply, and the ones it answers generically."""
+    secured = operation.get("security") != []
+    required_parameters = any(
+        parameter["required"] and parameter["in"] != "path"
+        for parameter in operation.get("parameters", [])
+    )
+    applies = {
+        "BAD_REQUEST_BODY": "requestBody" in operation,
+        "BAD_REQUEST_PARAMETERS": required_parameters,
+    }
+    statuses = set(GATEWAY_STATUSES_FOR_ANY_REQUEST.values())
+    for name, error in GATEWAY_ERRORS.items():
+        if name in _UNKNOWN_ROUTES_ONLY | _GENERIC or (name in _SECURED_ONLY and not secured):
+            continue
+        if applies.get(name, True):
+            assert error.problem is not None, name
+            statuses.add(error.problem.status)
+    return statuses
+
+
+def test_every_operation_has_its_function_statuses_listed_here() -> None:
+    documented = {operation["operationId"] for _, _, operation in operations()}
+
+    assert documented == FUNCTION_STATUSES.keys()
+
+
+@pytest.mark.parametrize(
+    ("path", "method", "operation"),
+    operations(),
+    ids=lambda value: value if isinstance(value, str) else "",
+)
+def test_every_operation_lists_exactly_the_status_codes_it_can_return(
+    path: str, method: str, operation: dict[str, Any]
+) -> None:
+    """ADR 0008: every status code an operation can return is documented, from the function
+    and from the gateway in front of it, and none it can't."""
+    expected = FUNCTION_STATUSES[operation["operationId"]] | gateway_statuses(operation)
+
+    assert {int(status) for status in operation["responses"]} == expected
+
+
+def test_gateway_problems_are_documented_without_rate_limit_headers() -> None:
+    """A status the gateway may answer on its own can't promise the function's `RateLimit-*`
+    headers: the gateway sends none (ADR 0006). Only function-only responses may require them."""
+    for _, _, operation in operations():
+        from_the_gateway = gateway_statuses(operation)
+        for status, response in operation["responses"].items():
+            if int(status) in from_the_gateway:
+                assert not header_names(response) & RATE_LIMIT_HEADERS, status

@@ -25,7 +25,7 @@ paths:
       tags: [health]
       operationId: getHealth
       summary: Liveness check
-      description: Shallow check that the API function runs. Needs no token and is not rate limited.
+      description: Shallow check that the API function runs. Needs no token and is not rate limited by the API; flood protection in front of it may still answer `429`.
       security: []
       responses:
         "200":
@@ -37,8 +37,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
-        "404":
-          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
         "502":
@@ -164,6 +166,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -216,6 +220,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -253,6 +259,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -733,16 +741,13 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     PayloadTooLarge:
-      description: The request body is larger than 64 KB.
+      description: >-
+        The request body is larger than 64 KB, where an operation takes a body, or larger than the
+        gateway's own 10 MB limit, on any operation. Carries the `RateLimit-*` headers when the
+        API function answers, not when the gateway does.
       headers:
         X-Request-Id:
           $ref: "#/components/headers/X-Request-Id"
-        RateLimit-Limit:
-          $ref: "#/components/headers/RateLimit-Limit"
-        RateLimit-Remaining:
-          $ref: "#/components/headers/RateLimit-Remaining"
-        RateLimit-Reset:
-          $ref: "#/components/headers/RateLimit-Reset"
       content:
         application/problem+json:
           schema:

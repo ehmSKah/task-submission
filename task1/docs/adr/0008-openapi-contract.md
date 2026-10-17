@@ -17,6 +17,11 @@ The API is described **design-first** in one OpenAPI document. That document is 
   - **Listing:** the list envelope `{ items, nextCursor }`.
   - **Security:** the bearer-token security scheme.
 - **Every operation documents every status code it can return**, including `401`, `429`, `5xx` and the edge cases from ADR 0007.
+  - **From the function:** its own outcomes per operation.
+  - **From the gateway:** the mapped Gateway Responses that apply to the operation (`401` and `503` only where a token is required, `400` from body validation only where there is a body), and the statuses the gateway answers any request with through `DEFAULT_4XX`/`DEFAULT_5XX`: `413` (its 10 MB payload limit), `429` (throttling) and `500`. So `GET /api/v1/health` documents `413` and `429` too, although the API itself never limits it.
+  - **Exactly those:** a code nothing can return is not listed (health lost an unreachable `404`). A unit test derives the gateway's part from the Gateway Response mapping and guards the whole list.
+  - **Headers:** a status the gateway may answer on its own never requires the function's `RateLimit-*` headers, which the gateway doesn't send; they are described in prose there (`400`, `413`, `429`, `5xx`).
+  - **Not listed:** limits of the transport outside the API definition (URL or header length at CloudFront or the gateway), as for any HTTP intermediary.
 
 **From document to gateway.**
 - **At `cdk synth`**, a small build step reads the clean document and adds the API Gateway extensions:
