@@ -27,6 +27,7 @@ Ordered by risk (correctness and security first, then operability, then hardenin
 | 9 | **A tested restore.** PITR is on in production, but a backup is only real once a restore has been rehearsed | — | [0005](0005-dynamodb-storage.md) |
 | 10 | **Revocation runbook:** lock a user out now (global sign-out, disable the user) and the documented window (access-token lifetime + 5-minute authorizer cache) | — | [0001](0001-role-based-access-control.md), [0003](0003-access-token-validation.md) |
 | 11 | **Erasure of everything belonging to one person** (GDPR right to erasure). Not covered today: deleting all of a `sub`'s orders and idempotency records, and handling their traces in logs within the retention period | Only per-order hard delete exists | new |
+| 12 | **Pin the user pool to Cognito's Lite tier.** Identity is the largest cost from about 10 M requests a month, and the design uses none of the Essentials features (groups already arrive in the access token; no managed login, no token customization). Lite costs 60–70 % less at 50k–500k monthly active users | The stack sets no feature plan, so CloudFormation creates the pool in Essentials | [0003](0003-access-token-validation.md), [0010](0010-infrastructure-and-environments.md) |
 
 ### 2. When load grows: each step has a measurable trigger
 
@@ -79,6 +80,13 @@ The design doc includes **one table: monthly cost in `us-east-1` at 1 M, 10 M an
 - **Prices come from the AWS pricing pages at the time of writing**, cited with the date.
 - **The table must show** which items dominate and roughly where the container crossover sits.
 - **Corrections:** where current prices contradict a figure in an earlier ADR (e.g. ADR 0006's counter cost per million requests, written from memory before a known DynamoDB price change), that ADR is corrected.
+
+Refined when the table was written ([design document, section 8](../design.md#cost-model), prices of 2026-10-17):
+- **The table is per month in `us-east-1` at list prices,** read from the AWS pricing pages and confirmed in AWS's Price List API files, with every source and its date in the design document.
+- **Corrected:** ADR 0006's counter cost. The two writes cost $1.25 per million requests, about a third of the REST API's $3.50, not "on the order of" it. ADR 0002's REST API price ($3.50 per million) is confirmed. Its HTTP API and Fargate figures were not part of the research and stay estimates.
+- **Secrets Manager costs nothing in `aws-prod`,** which has no demo users and so no secret. `aws-dev` pays $0.40 a month for its one secret, pro rata.
+- **What dominates:** the request path costs about $7.40 per million requests, plus WAF's $6 a month base. **Cognito is billed per monthly active user, and becomes the largest item from about 10 M requests a month** (at 200 requests per user). The pool is in the Essentials tier by default, which costs 2.5–3× Lite at that scale, hence go-live item 12.
+- **The container crossover:** API Gateway and Lambda together cost about $3.90 per million requests. That is what a container setup would replace with its fixed cost, so each $100 a month of containers breaks even at about 26 M requests a month.
 
 ## Considered options
 
