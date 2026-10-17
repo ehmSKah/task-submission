@@ -12,10 +12,10 @@ from typing import Any
 import boto3
 import httpx
 
-from orders_api.adapters.outbound.ssm_rate_limits import rate_limits_to_json
-from orders_api.domain.rate_limits import RateLimits
+from orders_api.adapters.outbound.dynamodb_rate_limits import COUNT_ATTRIBUTE, KEY_ATTRIBUTE
+from orders_api.domain.rate_limits import RateLimits, RateLimitScope
+from orders_api_infra import rate_limits as limit_tools
 from orders_api_infra.config import load_config
-from orders_api_infra.rate_limits import PRESETS, empty_counters, switched_limits, wait_for_window
 
 SECONDS_NEEDED = 15
 """Of the current window, for one test's requests, including a cache wait inside the test."""
@@ -23,24 +23,25 @@ SECONDS_NEEDED = 15
 
 @contextmanager
 def preset_in_force(endpoints: dict[str, Any], name: str) -> Iterator[RateLimits]:
-    with switched_limits(load_config(endpoints["env"]), rate_limits_to_json(PRESETS[name])):
-        yield PRESETS[name]
+    """Preset `name` in force for a module's tests; the session's limits come back afterwards."""
+    with limit_tools.preset_in_force(load_config(endpoints["env"]), name) as limits:
+        yield limits
 
 
 def start_from_zero(endpoints: dict[str, Any]) -> None:
     """A fresh window with enough time left, and no counter in it yet."""
-    wait_for_window(SECONDS_NEEDED)
-    empty_counters(load_config(endpoints["env"]))
+    limit_tools.wait_for_window(SECONDS_NEEDED)
+    limit_tools.empty_counters(load_config(endpoints["env"]))
 
 
-def counts(endpoints: dict[str, Any], scope: str) -> dict[str, int]:
-    """The deployed table's counters of one scope (`ip` or `user`), by key."""
+def counts(endpoints: dict[str, Any], scope: RateLimitScope) -> dict[str, int]:
+    """The deployed table's counters of one scope, by key."""
     table = boto3.resource("dynamodb").Table(endpoints["rateLimitTable"])
     items = table.scan(ConsistentRead=True)["Items"]
     return {
-        str(item["id"]): int(str(item["count"]))
+        str(item[KEY_ATTRIBUTE]): int(str(item[COUNT_ATTRIBUTE]))
         for item in items
-        if str(item["id"]).startswith(f"{scope}#")
+        if str(item[KEY_ATTRIBUTE]).startswith(f"{scope.value}#")
     }
 
 

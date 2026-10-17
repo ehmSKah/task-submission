@@ -8,11 +8,10 @@ from typing import Any
 import httpx
 import pytest
 
-from orders_api.adapters.outbound.ssm_rate_limits import rate_limits_to_json
 from orders_api.domain.order import Order, OrderStatus, format_timestamp
 from orders_api_infra.config import load_config
 from orders_api_infra.demo_users import access_token, demo_user
-from orders_api_infra.rate_limits import PRESETS, switched_limits
+from orders_api_infra.rate_limits import preset_in_force
 from tests.builders import an_order
 from tests.deployment import store_order
 from tests.integration.contract import contract_checked_client
@@ -34,10 +33,10 @@ def _only_on_floci(request: pytest.FixtureRequest, endpoints: dict[str, Any]) ->
 @pytest.fixture(scope="session", autouse=True)
 def high_rate_limits(endpoints: dict[str, Any]) -> Iterator[None]:
     """The suite runs with high limits: it sends far more than 60 requests a minute per demo
-    user, all from one address locally. Only the rate-limit tests switch in tiny ones. The
-    environment's own limits come back afterwards (ADR 0011)."""
-    config = load_config(endpoints["env"])
-    with switched_limits(config, rate_limits_to_json(PRESETS["high"])):
+    user, all from one address locally. Only the rate-limit tests switch in tiny ones.
+    Afterwards ADR 0006's defaults are in force again, rather than whatever the run found, so a
+    run that was killed halfway can't leave test limits behind for good (ADR 0011)."""
+    with preset_in_force(load_config(endpoints["env"]), "high", afterwards="defaults"):
         yield
 
 

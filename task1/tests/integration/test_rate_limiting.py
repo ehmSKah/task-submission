@@ -8,10 +8,9 @@ from typing import Any
 import httpx
 import pytest
 
-from orders_api.adapters.outbound.ssm_rate_limits import rate_limits_to_json
-from orders_api.domain.rate_limits import RateLimits
+from orders_api.domain.rate_limits import RateLimits, RateLimitScope
 from orders_api_infra.config import load_config
-from orders_api_infra.rate_limits import PRESETS, switched_limits
+from orders_api_infra.rate_limits import switched_limits
 from tests.integration.assertions import assert_problem
 from tests.integration.function_logs import FunctionLogs, api_function_name
 from tests.integration.rate_limits import (
@@ -71,11 +70,11 @@ def test_refused_requests_are_not_counted_against_the_user(
     statuses = [api.get(ORDERS, headers=alice).status_code for _ in range(6)]
 
     assert statuses == [200, 200, 200, 429, 429, 429]
-    [(user_key, user_count)] = counts(endpoints, "user").items()
+    [(user_key, user_count)] = counts(endpoints, RateLimitScope.USER).items()
     assert user_key.startswith(f"user#{subject_for('alice')}#")
     assert user_count == 3
     # Each was counted against the IP before its user's limit turned it away (ADR 0006).
-    assert list(counts(endpoints, "ip").values()) == [6]
+    assert list(counts(endpoints, RateLimitScope.IP).values()) == [6]
 
 
 def test_each_role_has_its_tier_and_a_caller_without_one_the_lowest(
@@ -92,7 +91,7 @@ def test_a_changed_parameter_takes_effect_within_the_cache_time_without_a_deploy
 ) -> None:
     before = api.get(ORDERS, headers=alice)
 
-    with switched_limits(load_config(endpoints["env"]), rate_limits_to_json(PRESETS["high"])):
+    with preset_in_force(endpoints, "high"):
         after = api.get(ORDERS, headers=alice)
 
     assert before.headers["RateLimit-Limit"] == "3"
@@ -138,5 +137,5 @@ def test_the_access_line_of_a_429_names_the_scope_and_only_the_client_s_network(
     assert line["status"] == 429
     assert line["rateLimitScope"] == "user"
     assert line["clientNetwork"].endswith(("/24", "/64"))
-    [ip_key] = counts(endpoints, "ip")
+    [ip_key] = counts(endpoints, RateLimitScope.IP)
     assert ip_key.split("#")[1] not in str(line)

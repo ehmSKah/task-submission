@@ -39,6 +39,8 @@ PRESETS: dict[str, RateLimits] = {
 
 CACHE_MARGIN_SECONDS = 1.0
 """Added to the cache time when waiting, for requests already under way."""
+WINDOW_MARGIN_SECONDS = 0.1
+"""Added when waiting for the next window, so the wait ends inside it."""
 
 
 def read_limits(config: EnvConfig) -> str:
@@ -68,18 +70,29 @@ def wait_for_cache(config: EnvConfig, sleep: Callable[[float], None] = time.slee
 
 
 @contextmanager
-def switched_limits(config: EnvConfig, value: str) -> Iterator[None]:
-    """`value` in force inside the block, and the previous value again afterwards, also when the
-    block fails. Both switches wait out the cache."""
+def switched_limits(config: EnvConfig, value: str, *, restore: str | None = None) -> Iterator[None]:
+    """`value` in force inside the block, and afterwards `restore` (by default the previous
+    value), also when the block fails. Both switches wait out the cache."""
     _require_test_fixtures(config)
-    previous = read_limits(config)
+    afterwards = read_limits(config) if restore is None else restore
     write_limits(config, value)
     wait_for_cache(config)
     try:
         yield
     finally:
-        write_limits(config, previous)
+        write_limits(config, afterwards)
         wait_for_cache(config)
+
+
+@contextmanager
+def preset_in_force(
+    config: EnvConfig, name: str, *, afterwards: str | None = None
+) -> Iterator[RateLimits]:
+    """`switched_limits` by preset name; `afterwards` names the preset to restore instead of the
+    previous value."""
+    restore = None if afterwards is None else rate_limits_to_json(PRESETS[afterwards])
+    with switched_limits(config, rate_limits_to_json(PRESETS[name]), restore=restore):
+        yield PRESETS[name]
 
 
 def empty_counters(config: EnvConfig) -> int:
@@ -113,7 +126,7 @@ def wait_for_window(
     moment = now()
     left = (window_of(moment).end - moment).total_seconds()
     if left < seconds_needed:
-        sleep(left + 0.1)
+        sleep(left + WINDOW_MARGIN_SECONDS)
 
 
 def main() -> None:

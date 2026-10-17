@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 import pytest
 
-from orders_api.domain.rate_limits import RateLimits
+from orders_api.domain.rate_limits import RateLimits, RateLimitScope
 from tests.integration.assertions import assert_contract_headers, assert_problem
 from tests.integration.rate_limits import (
     assert_rate_limit_headers,
@@ -60,7 +60,7 @@ def test_x_forwarded_for_is_never_taken_as_the_client_address(
     ]
 
     assert statuses == [200, 200, 200, 429]
-    [ip_key] = counts(endpoints, "ip")
+    [ip_key] = counts(endpoints, RateLimitScope.IP)
     assert not any(address in ip_key for address in forged)
 
 

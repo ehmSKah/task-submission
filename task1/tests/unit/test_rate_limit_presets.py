@@ -76,3 +76,12 @@ def test_switched_limits_restore_the_previous_value_even_when_the_test_fails(
         raise AssertionError("the test failed")
 
     assert parameter == ["previous", "tiny", "previous"]
+
+
+def test_switched_limits_can_restore_a_given_value_instead_of_the_previous_one(
+    parameter: list[str],
+) -> None:
+    with switched_limits(config(), "high", restore="defaults"):
+        pass
+
+    assert parameter == ["previous", "high", "defaults"]
