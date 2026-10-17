@@ -16,7 +16,18 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from orders_api.domain.access import Role
-from orders_api_infra.demo import ALG_NONE, SCENARIO, Call, Step, Target, alg_none_token, run
+from orders_api_infra.demo import (
+    ALG_NONE,
+    NO_TOKEN,
+    RATE_LIMIT_HEADERS,
+    SCENARIO,
+    Call,
+    Step,
+    Target,
+    alg_none_token,
+    run,
+    unmet,
+)
 from orders_api_infra.demo_users import DEMO_USERS
 from orders_api_infra.rate_limits import PRESETS
 
@@ -77,7 +88,7 @@ def test_every_order_a_path_names_was_created_by_an_earlier_call() -> None:
 
 
 def test_every_caller_is_a_demo_user_no_token_or_the_forged_token() -> None:
-    allowed = {user.name for user in DEMO_USERS} | {None, ALG_NONE}
+    allowed = {user.name for user in DEMO_USERS} | {NO_TOKEN, ALG_NONE}
 
     assert {call.caller for call in calls()} <= allowed
 
@@ -87,6 +98,26 @@ def test_the_gateway_step_sends_an_unknown_field() -> None:
 
     assert rejected.body is not None
     assert "totalAmount" in rejected.body  # computed by the API, never accepted (ADR 0004)
+    assert rejected.from_gateway
+
+
+def test_a_created_order_shows_its_etag_and_the_rate_limit_headers() -> None:
+    created = [call for call in calls() if call.expected == 201]
+
+    assert created
+    for call in created:
+        assert set(call.headers) == {
+            "ETag",
+            "RateLimit-Limit",
+            "RateLimit-Remaining",
+            "RateLimit-Reset",
+        }
+
+
+def test_the_refused_request_says_when_to_retry() -> None:
+    [refused] = [call for call in calls() if call.expected == 429]
+
+    assert refused.headers == ("Retry-After",)
 
 
 def test_steps_are_numbered_in_order() -> None:
@@ -124,6 +155,58 @@ def test_a_forged_token_fails_signature_verification() -> None:
         jwt.decode(alg_none_token(a_real_token()), SIGNING_KEY.public_key(), algorithms=["RS256"])
 
 
+# What a response must show besides its status.
+
+FUNCTION_HEADERS = {"RateLimit-Limit": "3", "RateLimit-Remaining": "2", "RateLimit-Reset": "41"}
+VALIDATION = {"type": "urn:problem:orders-api:validation-error", "status": 400}
+
+
+def test_a_response_with_the_expected_status_and_headers_meets_the_call() -> None:
+    call = Call("alice", "POST", "/api/v1/orders", 201, headers=("ETag", *RATE_LIMIT_HEADERS))
+    response = httpx.Response(201, headers={**FUNCTION_HEADERS, "ETag": '"1"'})
+
+    assert unmet(call, response) == []
+
+
+def test_a_wrong_status_is_reported_with_the_expected_one() -> None:
+    call = Call("bob", "GET", "/api/v1/orders/x", 404)
+
+    assert unmet(call, httpx.Response(200)) == ["expected 404"]
+
+
+def test_each_missing_header_is_reported() -> None:
+    call = Call("alice", "POST", "/api/v1/orders", 201, headers=("ETag", *RATE_LIMIT_HEADERS))
+    response = httpx.Response(201, headers={"RateLimit-Limit": "3"})
+
+    assert unmet(call, response) == [
+        "no ETag header",
+        "no RateLimit-Remaining header",
+        "no RateLimit-Reset header",
+    ]
+
+
+def test_the_gateways_own_400_meets_a_gateway_call() -> None:
+    """The validator's message in `detail`, no `errors[]`, and none of the function's headers."""
+    call = Call("alice", "POST", "/api/v1/orders", 400, from_gateway=True)
+    body = {**VALIDATION, "detail": "[object has extra properties: totalAmount]"}
+
+    assert unmet(call, httpx.Response(400, json=body)) == []
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(400, json=VALIDATION, headers=FUNCTION_HEADERS),
+        httpx.Response(400, json={**VALIDATION, "errors": [{"pointer": "/x", "detail": "no"}]}),
+    ],
+    ids=["rate-limit-headers", "errors"],
+)
+def test_a_400_from_the_function_fails_a_gateway_call(response: httpx.Response) -> None:
+    call = Call("alice", "POST", "/api/v1/orders", 400, from_gateway=True)
+
+    assert unmet(call, response) == ["answered by the function, not the gateway"]
+
+
 # The runner.
 
 
@@ -135,13 +218,20 @@ class FakeApi:
         self.statuses = statuses
         self.requests: list[httpx.Request] = []
         self.created: list[str] = []
+        self.without_header: str | None = None
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
+        response = self.answer(request)
+        if self.without_header is not None:
+            response.headers.pop(self.without_header, None)
+        return response
+
+    def answer(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         status = self.statuses.pop(0)
         if status is None:
             raise httpx.ConnectError("connection refused", request=request)
-        headers = {"RateLimit-Remaining": "7"}
+        headers = dict(FUNCTION_HEADERS)
         if status == 201:
             self.created.append(next(ORDER_IDS))
             return httpx.Response(
@@ -185,18 +275,29 @@ def target(presets: list[str]) -> Callable[[FakeApi], Target]:
 
 
 SMALL = (
-    Step("1. Public", (Call(None, "GET", "/api/v1/health", 200),)),
+    Step("1. Public", (Call(NO_TOKEN, "GET", "/api/v1/health", 200),)),
     Step(
         "2. Own orders",
         (
-            Call("alice", "POST", "/api/v1/orders", 201, body={"currency": "EUR"}, save_as="a"),
+            Call(
+                "alice",
+                "POST",
+                "/api/v1/orders",
+                201,
+                body={"currency": "EUR"},
+                save_as="a",
+                headers=("ETag", *RATE_LIMIT_HEADERS),
+            ),
             Call("bob", "GET", "/api/v1/orders/{a}", 404),
             Call(ALG_NONE, "GET", "/api/v1/orders/{a}", 401),
         ),
     ),
     Step(
         "3. Limits",
-        (Call("alice", "GET", "/api/v1/orders", 200), Call("alice", "GET", "/api/v1/orders", 429)),
+        (
+            Call("alice", "GET", "/api/v1/orders", 200),
+            Call("alice", "GET", "/api/v1/orders", 429, headers=("Retry-After",)),
+        ),
         preset="tiny",
     ),
 )
@@ -273,6 +374,18 @@ def test_an_unexpected_status_stops_the_run_and_fails_it(
     assert re.search(r"✗ 200 +GET .*expected 404", output)
     assert len(api.requests) == 3  # nothing after the failure
     assert "3. Limits" not in output
+
+
+def test_a_missing_header_stops_the_run_and_fails_it(
+    target: Callable[[FakeApi], Target],
+) -> None:
+    api = FakeApi([200, 201, 404, 401, 200, 429])
+    api.without_header = "Retry-After"
+    lines: list[str] = []
+
+    assert run(SMALL, target(api), out=lines.append) is False
+
+    assert re.search(r"✗ 429 +GET .*no Retry-After header", "\n".join(lines))
 
 
 def test_the_previous_limits_come_back_when_a_rate_limited_call_fails(

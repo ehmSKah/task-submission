@@ -1,9 +1,10 @@
 """`make demo`: a one-minute scenario against the deployed stack, for a reviewer.
 
-Each request is printed with its status. The run stops and fails at the first status that isn't
-the one the design promises. Tokens are real Cognito tokens of the demo users (ADR 0010), plus
-one forged `alg: none` token; none is ever printed. The rate-limit step switches the runtime
-limits (ADR 0006) and restores the previous ones afterwards, also when it fails.
+Each request is printed with its status. The run stops and fails at the first response that
+isn't the one the design promises: a wrong status, a missing header, or a `400` the function
+gave where the gateway should have. Tokens are real Cognito tokens of the demo users (ADR 0010),
+plus one forged `alg: none` token; none is ever printed. The rate-limit step switches the
+runtime limits (ADR 0006) and restores the previous ones afterwards, also when it fails.
 
 Usage: python -m orders_api_infra.demo --env local
 """
@@ -13,7 +14,7 @@ import json
 import sys
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from functools import cache
 from typing import Any
@@ -21,13 +22,17 @@ from typing import Any
 import httpx
 import jwt
 
+from orders_api.adapters.inbound.problems import URN_PREFIX
+from orders_api.adapters.inbound.rate_limiting import RETRY_AFTER_HEADER
 from orders_api.domain.access import Role
 from orders_api_infra import endpoints, rate_limits
 from orders_api_infra.config import EnvConfig
 from orders_api_infra.demo_users import access_token, demo_user
 from orders_api_infra.rate_limits import PRESETS
 
-ALG_NONE = "alg-none"
+NO_TOKEN = "no token"
+"""The caller who sends no `Authorization` header."""
+ALG_NONE = "alg: none"
 """The caller who sends alice's real claims unsigned, with `alg: none`."""
 
 ORDER: Mapping[str, Any] = {
@@ -37,21 +42,28 @@ ORDER: Mapping[str, Any] = {
         {"sku": "XYZ-9", "quantity": 3, "unitPrice": 250},
     ],
 }
-PROBLEM_TYPE_PREFIX = "urn:problem:orders-api:"
+RATE_LIMIT_HEADERS = ("RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset")
+"""What the function adds to every counted response (ADR 0006); the gateway's own answers lack
+them."""
 WINDOW_SECONDS_NEEDED = 10
 """Of the current rate-limit window, so the rate-limit step's requests all fall into one."""
 
 
 @dataclass(frozen=True)
 class Call:
-    """One request and the status the design promises for it."""
+    """One request and the response the design promises for it."""
 
-    caller: str | None  # a demo user, ALG_NONE, or None for no token
+    caller: str  # a demo user, NO_TOKEN or ALG_NONE
     method: str
     path: str  # `{name}` stands for the id of the order an earlier call saved as `name`
     expected: int
     body: Mapping[str, Any] | None = None
     save_as: str | None = None
+    headers: tuple[str, ...] = ()
+    """Headers the response must carry."""
+    from_gateway: bool = False
+    """The answer must be API Gateway's own: no `errors[]` and no `RateLimit-*` headers, which
+    only the function adds (the gateway's validator reports one message in `detail`)."""
 
 
 @dataclass(frozen=True)
@@ -66,15 +78,17 @@ def _status(order: str, status: str, caller: str, expected: int) -> Call:
     return Call(caller, "PATCH", f"/api/v1/orders/{{{order}}}/status", expected, {"status": status})
 
 
+CREATED = ("ETag", *RATE_LIMIT_HEADERS)
+"""A created order's version, and the caller's rate-limit budget."""
 TINY_USER_LIMIT = PRESETS["tiny"].per_role[Role.USER]
 
 SCENARIO: tuple[Step, ...] = (
-    Step("1. Health is public: no token", (Call(None, "GET", "/api/v1/health", 200),)),
+    Step("1. Health is public: no token", (Call(NO_TOKEN, "GET", "/api/v1/health", 200),)),
     Step(
         "2. alice (USER) creates two orders",
-        (
-            Call("alice", "POST", "/api/v1/orders", 201, ORDER, save_as="a"),
-            Call("alice", "POST", "/api/v1/orders", 201, ORDER, save_as="b"),
+        tuple(
+            Call("alice", "POST", "/api/v1/orders", 201, ORDER, save_as=name, headers=CREATED)
+            for name in ("a", "b")
         ),
     ),
     Step(
@@ -100,7 +114,16 @@ SCENARIO: tuple[Step, ...] = (
     ),
     Step(
         "6. The gateway rejects a body with an unknown field (totalAmount) before the function",
-        (Call("alice", "POST", "/api/v1/orders", 400, {**ORDER, "totalAmount": 1}),),
+        (
+            Call(
+                "alice",
+                "POST",
+                "/api/v1/orders",
+                400,
+                {**ORDER, "totalAmount": 1},
+                from_gateway=True,
+            ),
+        ),
     ),
     Step(
         "7. A forged token with alg: none: 401 from the authorizer",
@@ -111,7 +134,7 @@ SCENARIO: tuple[Step, ...] = (
         "requests; the previous limits come back afterwards",
         (
             *[Call("alice", "GET", "/api/v1/orders", 200) for _ in range(TINY_USER_LIMIT)],
-            Call("alice", "GET", "/api/v1/orders", 429),
+            Call("alice", "GET", "/api/v1/orders", 429, headers=(RETRY_AFTER_HEADER,)),
         ),
         preset="tiny",
     ),
@@ -142,8 +165,8 @@ class Target:
     """Empties the counters, so the demo's counts are its own."""
 
 
-def _headers(caller: str | None, target: Target) -> dict[str, str]:
-    if caller is None:
+def _headers(caller: str, target: Target) -> dict[str, str]:
+    if caller == NO_TOKEN:
         return {}
     if caller == ALG_NONE:
         token = alg_none_token(target.token_for("alice"))
@@ -159,12 +182,25 @@ def _details(response: httpx.Response) -> str:
         details.append(f"ETag {response.headers['ETag']}")
     if response.status_code >= 400 and response.content:
         problem = response.json()
-        kind = str(problem.get("type", "")).removeprefix(PROBLEM_TYPE_PREFIX)
+        kind = str(problem.get("type", "")).removeprefix(URN_PREFIX)
         details.append(kind + (f" (scope {problem['scope']})" if "scope" in problem else ""))
-    for header in ("Retry-After", "RateLimit-Remaining"):
+    for header in (RETRY_AFTER_HEADER, "RateLimit-Remaining"):
         if header in response.headers:
             details.append(f"{header} {response.headers[header]}")
     return ", ".join(details)
+
+
+def unmet(call: Call, response: httpx.Response) -> list[str]:
+    """What the response doesn't show of what the design promises for the call; empty if all."""
+    if response.status_code != call.expected:
+        return [f"expected {call.expected}"]
+    missing = [f"no {header} header" for header in call.headers if header not in response.headers]
+    if call.from_gateway and (
+        any(header in response.headers for header in RATE_LIMIT_HEADERS)
+        or "errors" in response.json()
+    ):
+        missing.append("answered by the function, not the gateway")
+    return missing
 
 
 def _send(call: Call, saved: dict[str, str], target: Target, out: Callable[[str], None]) -> bool:
@@ -176,31 +212,27 @@ def _send(call: Call, saved: dict[str, str], target: Target, out: Callable[[str]
         headers=_headers(call.caller, target),
         json=None if call.body is None else dict(call.body),
     )
-    ok = response.status_code == call.expected
-    mark, caller = "✓" if ok else "✗", call.caller or "no token"
-    line = f"   {mark} {response.status_code} {call.method:<6} {shown:<38} {caller:<8}"
-    out(f"{line} {_details(response) if ok else f'expected {call.expected}'}".rstrip())
+    problems = unmet(call, response)
+    ok = not problems
+    mark = "✓" if ok else "✗"
+    line = f"   {mark} {response.status_code} {call.method:<6} {shown:<38} {call.caller:<9}"
+    out(f"{line} {_details(response) if ok else '; '.join(problems)}".rstrip())
     if ok and call.save_as is not None:
         saved[call.save_as] = str(response.json()["id"])
     return ok
 
 
 def run(scenario: Sequence[Step], target: Target, out: Callable[[str], None] = print) -> bool:
-    """Send every step's calls in order; False at the first unexpected status."""
+    """Send every step's calls in order; False at the first unexpected response."""
     target.reset_counters()
     saved: dict[str, str] = {}
     for step in scenario:
         out(step.title)
-        with target.preset(step.preset) if step.preset else _nothing():
+        with target.preset(step.preset) if step.preset else nullcontext():
             for call in step.calls:
                 if not _send(call, saved, target, out):
                     return False
     return True
-
-
-@contextmanager
-def _nothing() -> Iterator[None]:
-    yield
 
 
 def _target(config: EnvConfig, client: httpx.Client) -> Target:
@@ -226,7 +258,7 @@ def main() -> None:
     print(f"Orders API demo against {api_url} (env {config.name})\n")
     with httpx.Client(base_url=api_url, timeout=30) as client:
         passed = run(SCENARIO, _target(config, client))
-    print("\nEvery status was the expected one." if passed else "\nThe demo failed.")
+    print("\nEvery response was the expected one." if passed else "\nThe demo failed.")
     sys.exit(0 if passed else 1)
 
 
