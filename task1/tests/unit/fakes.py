@@ -2,6 +2,7 @@
 
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from datetime import datetime
 
 from aws_lambda_powertools.utilities.idempotency import BasePersistenceLayer
@@ -27,6 +28,41 @@ class InMemoryOrderRepository:
     def add(self, order: Order) -> None:
         assert order.id not in self._orders, f"order {order.id} already exists"
         self._orders[order.id] = order
+
+    # Race simulation and write counting; immutable class defaults, set per instance once used.
+    _interleaved: Callable[[], object] | None = None
+    interleaved = False
+    """Whether the `interleave`d request has run."""
+    updates_attempted = 0
+
+    def update_status(self, current: Order, changed: Order, *, check_version: bool) -> Order | None:
+        """The DynamoDB adapter's conditional write: applied only while the stored order still has
+        `current`'s status (and version, if `check_version`); `None` otherwise."""
+        self.updates_attempted += 1
+        if self._interleaved is not None:
+            concurrent, self._interleaved = self._interleaved, None
+            concurrent()
+            self.interleaved = True
+        stored = self._orders.get(current.id)
+        if (
+            stored is None
+            or stored.status is not current.status
+            or (check_version and stored.version != current.version)
+        ):
+            return None
+        updated = replace(
+            stored, status=changed.status, updated_at=changed.updated_at, version=stored.version + 1
+        )
+        self._orders[current.id] = updated
+        return updated
+
+    def delete(self, order_id: str) -> bool:
+        return self._orders.pop(order_id, None) is not None
+
+    def interleave(self, concurrent: Callable[[], object]) -> None:
+        """Run `concurrent` once, just before the next conditional write is decided, as a request
+        that wins the race against it would."""
+        self._interleaved = concurrent
 
 
 class FixedClock:
