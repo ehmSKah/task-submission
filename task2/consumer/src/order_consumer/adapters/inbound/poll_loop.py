@@ -364,8 +364,13 @@ class PollLoop:
         labels = _partition_labels(partitions)
         self._partitions = (self._partitions or set()) - set(labels)
         paused = self._paused
-        in_hand = _position(None if paused is None else paused.message, self._topic)
-        if paused is not None and f"{in_hand['topic']}/{in_hand['partition']}" in labels:
+        if paused is None:
+            return labels
+        # The client keeps a partition paused across its revocation: one leaving paused would
+        # come back paused, for good, if it is assigned to this instance again.
+        self._consumer.resume(partitions)
+        in_hand = _position(paused.message, self._topic)
+        if f"{in_hand['topic']}/{in_hand['partition']}" in labels:
             log.warning("message.dropped", **in_hand, reason=reason)
             paused.message = None
         return labels

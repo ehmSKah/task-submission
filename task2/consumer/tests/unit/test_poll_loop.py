@@ -80,7 +80,8 @@ type Turn = FakeMessage | Callable[["FakeKafkaConsumer"], FakeMessage | None] | 
 @dataclass
 class FakeKafkaConsumer:
     """Plays its turns once, one per poll, each poll taking its full timeout; then asks the loop to
-    stop. Starts with partitions 0 to 2 of `orders` assigned."""
+    stop. Starts with partitions 0 to 2 of `orders` assigned. Like librdkafka, it keeps a
+    partition paused across its revocation, should it be assigned again."""
 
     turns: list[Turn]
     stop: threading.Event
@@ -466,6 +467,7 @@ def test_a_message_in_hand_whose_partition_is_revoked_while_paused_is_dropped_un
     assert result.timeline == [
         "processed 7 at 2",
         "pause [0, 1, 2]",
+        "resume [0]",
         "resume [1, 2]",
         "processed 9 at 34",
         "commit 9",
@@ -483,7 +485,12 @@ def test_a_message_in_hand_stays_when_another_partition_is_revoked() -> None:
             [FakeMessage(7), moved("on_revoke", 2), *[None] * 30], outcomes={7: [WRONG_TOKEN]}
         )
 
-    assert result.timeline == ["processed 7 at 1", "pause [0, 1, 2]", "processed 7 at 31"]
+    assert result.timeline == [
+        "processed 7 at 1",
+        "pause [0, 1, 2]",
+        "resume [2]",
+        "processed 7 at 31",
+    ]
     assert not [line for line in lines if line["event"] == "message.dropped"]
 
 
@@ -494,9 +501,32 @@ def test_a_message_in_hand_when_the_membership_is_lost_is_dropped_uncommitted() 
             outcomes={7: [WRONG_TOKEN]},
         )
 
-    assert result.timeline == ["processed 7 at 1", "pause [0, 1, 2]", "resume []"]
+    assert result.timeline == [
+        "processed 7 at 1",
+        "pause [0, 1, 2]",
+        "resume [0, 1, 2]",
+        "resume []",
+    ]
     [dropped] = [line for line in lines if line["event"] == "message.dropped"]
     assert (dropped["partition"], dropped["offset"], dropped["reason"]) == (0, 7, "lost")
+
+
+def test_a_partition_revoked_while_paused_is_consumed_when_it_comes_back() -> None:
+    """The client keeps a partition paused across its revocation; resuming the remaining ones
+    alone would leave it paused for good once it is assigned again."""
+    result = run(
+        [
+            assign_all,
+            FakeMessage(7),
+            moved("on_revoke", 0),
+            *[None] * 30,
+            lambda kafka: kafka.assign_now([0]),
+            FakeMessage(9, partition_=0),
+        ],
+        outcomes={7: [WRONG_TOKEN]},
+    )
+
+    assert result.timeline[-2:] == ["processed 9 at 35", "commit 9"]
 
 
 def test_a_paused_instance_that_dropped_its_message_pauses_again_on_the_next_one() -> None:
@@ -516,6 +546,7 @@ def test_a_paused_instance_that_dropped_its_message_pauses_again_on_the_next_one
     assert result.timeline == [
         "processed 7 at 2",
         "pause [0, 1, 2]",
+        "resume [0]",
         "resume [1, 2]",
         "processed 9 at 34",
         "pause [1, 2]",
