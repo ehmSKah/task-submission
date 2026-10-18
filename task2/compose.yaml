@@ -1,0 +1,131 @@
+# The task2 stack (ADR 0009): what a reviewer runs, what the tests run against, what CI runs.
+# The secrets below are fake and committed on purpose (ADR 0003).
+#
+# STACK_HOST is the name this machine reaches published ports by: `localhost` with a local Docker
+# daemon, the daemon's host name with a remote one. Kafka advertises it to host clients.
+name: task2
+
+x-consumer-database-url: &consumer-database-url postgresql://order_consumer:local-dev-consumer@postgres:5432/orders
+
+services:
+  kafka:
+    image: apache/kafka:4.3.1
+    hostname: kafka
+    ports:
+      - "9094:9094"
+    environment:
+      # Setting any KAFKA_* variable drops the image's defaults, so the full KRaft set is here.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://${STACK_HOST:-localhost}:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 10s
+      retries: 60
+
+  kafka-init:
+    image: apache/kafka:4.3.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    # orders keeps 7 days, orders.dlt 30: a dead letter must outlive its source event (ADR 0006).
+    command:
+      - |
+        set -euo pipefail
+        topics=/opt/kafka/bin/kafka-topics.sh
+        $$topics --bootstrap-server kafka:9092 --create --if-not-exists --topic orders \
+          --partitions 3 --replication-factor 1 --config retention.ms=604800000
+        $$topics --bootstrap-server kafka:9092 --create --if-not-exists --topic orders.dlt \
+          --partitions 3 --replication-factor 1 --config retention.ms=2592000000
+    restart: "no"
+
+  postgres:
+    build: db/postgres
+    image: task2-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: local-dev-postgres
+      ORDERS_OWNER_PASSWORD: local-dev-owner
+      ORDER_CONSUMER_PASSWORD: local-dev-consumer
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d orders"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  migrate:
+    build: db
+    image: task2-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://orders_owner:local-dev-owner@postgres:5432/orders?sslmode=disable
+    restart: "no"
+
+  fulfilment-stub:
+    build:
+      context: .
+      dockerfile: fulfilment-stub/Dockerfile
+    image: task2-fulfilment-stub
+    ports:
+      - "8081:8081"
+    environment:
+      FULFILMENT_TOKEN: local-dev-token
+
+  consumer:
+    build:
+      context: .
+      dockerfile: consumer/Dockerfile
+    image: task2-consumer
+    deploy:
+      replicas: 2
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+      fulfilment-stub:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: orders
+      KAFKA_GROUP_ID: order-consumer
+      DATABASE_URL: *consumer-database-url
+      FULFILMENT_BASE_URL: http://fulfilment-stub:8081
+      FULFILMENT_TOKEN: local-dev-token
+    restart: unless-stopped
+
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:v1.5.0
+    ports:
+      - "8080:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: task2
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_READONLY: "true"
+
+volumes:
+  kafka-data:
+  postgres-data:
