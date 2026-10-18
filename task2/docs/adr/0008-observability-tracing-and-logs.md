@@ -41,12 +41,13 @@ The correlation id is the **trace id of a W3C Trace Context `traceparent` header
 
 | Area | Events |
 |---|---|
-| Lifecycle | `consumer.started`, `consumer.stopping`, `consumer.stopped` (exit code), `partitions.assigned`, `partitions.revoked`, `partitions.lost`, `message.dropped`, `commit.failed` |
+| Lifecycle | `consumer.started`, `consumer.configuration_invalid` (reason), `consumer.stopping`, `consumer.stopped` (exit code), `partitions.assigned`, `partitions.revoked`, `partitions.lost`, `message.dropped`, `commit.failed`, `kafka.error` (a non-fatal client error, with its reason) |
 | Processing | `event.received`, `event.invalid` (layer, error count), `order.accepted`, `order.duplicate` (redelivery or re-emission), `order.conflict` |
 | Handover | `handover.attempt_failed`, `handover.completed`, `handover.failed` (retries exhausted or rejected) |
 | Dead letters | `dead_letter.written` (reason), `dead_letter.write_failed` |
 | Flood guard | `circuit.opened`, `circuit.probe_failed`, `circuit.closed`, `bug_guard.tripped`, `consumer.paused`, `consumer.resumed` (with the systemic reason) |
 | Errors | `processing.unexpected_error`, the only line with a stack trace |
+| Fulfilment stub | `fulfilment_order.created`, `request.invalid` (the failing fields as JSON Pointers and the rule each broke, never their values) |
 
 - **Exactly one terminal line per message:** `handover.completed`, `order.duplicate` or `dead_letter.written`. Outcomes can be counted straight from the logs, and the demo does so.
 - **The heartbeat file's state** (ADR 0007) matches the last `consumer.paused` or `consumer.resumed`.
