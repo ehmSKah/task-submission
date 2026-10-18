@@ -5,11 +5,10 @@ A dead letter is the original record, unchanged, plus `dlt.*` headers saying wha
 """
 
 import logging
-from collections.abc import Callable
 from datetime import UTC, datetime
 
 import structlog
-from confluent_kafka import KafkaError, Message, Producer
+from confluent_kafka import KafkaError, KafkaException, Message, Producer
 
 from order_consumer.application.ports import DeadLetter
 from order_consumer.config import Settings
@@ -18,6 +17,8 @@ log = structlog.get_logger()
 
 # librdkafka's default is 5 minutes; a dead letter must be confirmed well within the poll budget.
 DELIVERY_TIMEOUT_MS = 10_000
+# Waiting a little longer than the delivery timeout lets librdkafka report its own verdict.
+FLUSH_TIMEOUT_S = DELIVERY_TIMEOUT_MS / 1000 + 5
 
 
 class DeadLetterWriteFailed(Exception):
@@ -42,17 +43,10 @@ def _utc(moment: datetime) -> str:
 
 
 class KafkaDeadLetterSink:
-    def __init__(
-        self,
-        producer: Producer,
-        topic: str,
-        consumer: str,
-        now: Callable[[], datetime] = lambda: datetime.now(UTC),
-    ) -> None:
+    def __init__(self, producer: Producer, topic: str, consumer: str) -> None:
         self._producer = producer
         self._topic = topic
-        self._consumer = consumer  # consumer group and instance
-        self._now = now
+        self._consumer = consumer  # consumer group and instance, e.g. order-consumer/<host name>
 
     def write(self, dead_letter: DeadLetter) -> None:
         delivery = dead_letter.delivery
@@ -61,7 +55,7 @@ class KafkaDeadLetterSink:
             "dlt.detail": dead_letter.detail.encode(),
             "dlt.attempts": str(dead_letter.attempts),
             "dlt.source": f"{delivery.topic}/{delivery.partition}/{delivery.offset}",
-            "dlt.failed-at": _utc(self._now()),
+            "dlt.failed-at": _utc(datetime.now(UTC)),
             "dlt.consumer": self._consumer,
         }
         if delivery.timestamp is not None:
@@ -71,23 +65,30 @@ class KafkaDeadLetterSink:
         if dead_letter.order_id is not None:
             failure["dlt.order-id"] = str(dead_letter.order_id)
 
-        outcome: list[KafkaError | None] = []
+        failures: list[str] = []
+        confirmed: list[bool] = []
 
         def delivered(error: KafkaError | None, _message: Message) -> None:
-            outcome.append(error)
+            if error is None:
+                confirmed.append(True)
+            else:
+                failures.append(error.str())
 
-        self._producer.produce(
-            self._topic,
-            key=delivery.key,
-            value=delivery.value,
-            headers=[*delivery.headers, *failure.items()],
-            on_delivery=delivered,
-        )
-        self._producer.flush(DELIVERY_TIMEOUT_MS / 1000 + 5)
-        if outcome != [None]:
-            reason = "not confirmed in time" if not outcome else str(outcome[0])
+        try:
+            self._producer.produce(
+                self._topic,
+                key=delivery.key,
+                value=delivery.value,
+                headers=[*delivery.headers, *failure.items()],
+                on_delivery=delivered,
+            )
+            self._producer.flush(FLUSH_TIMEOUT_S)
+        except (BufferError, KafkaException) as error:  # e.g. a full queue, a record too large
+            failures.append(str(error))
+        if not confirmed:
+            reason = failures[0] if failures else "not confirmed in time"
             log.error("dead_letter.write_failed", reason=reason, topic=self._topic)
             raise DeadLetterWriteFailed(reason)
 
     def close(self) -> None:
-        self._producer.flush(DELIVERY_TIMEOUT_MS / 1000)
+        self._producer.flush(FLUSH_TIMEOUT_S)
