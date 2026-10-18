@@ -144,6 +144,16 @@ def stored_order(order_id: UUID) -> dict[str, Any] | None:
         ).fetchone()
 
 
+def processed_events(order_id: UUID) -> list[dict[str, Any]]:
+    """The events recorded for the order, in the order they arrived (ADR 0002)."""
+    with psycopg.connect(CONSUMER_DATABASE_URL, row_factory=dict_row) as connection:
+        return connection.execute(
+            'SELECT event_id, outcome, topic, partition, "offset" FROM processed_events '
+            "WHERE order_id = %s ORDER BY received_at, event_id",
+            (order_id,),
+        ).fetchall()
+
+
 def order_row_count(order_id: UUID) -> int:
     with psycopg.connect(CONSUMER_DATABASE_URL) as connection:
         row = connection.execute(

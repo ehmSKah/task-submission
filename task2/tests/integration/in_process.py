@@ -1,7 +1,9 @@
-"""Running the consumer inside the test process, and crashing it on purpose (ADR 0007, 0009).
+"""Running the consumer inside the test process, and crashing or pausing it on purpose (ADR 0007,
+0009).
 
 A crash point wraps a real adapter: the wrapped step completes against the real service, then the
-consumer dies before the next step, exactly where a kill can't reliably be timed.
+consumer dies before the next step, exactly where a kill can't reliably be timed. A pause holds
+the consumer at the same place instead, until the test lets it go on.
 """
 
 import threading
@@ -19,35 +21,66 @@ class SimulatedCrash(BaseException):
     """A process dying: a BaseException, so no handler for ordinary errors gets to run."""
 
 
-class CrashAfter:
-    """Delegates to the adapter, and crashes the consumer as soon as `step` has returned."""
+class After:
+    """Delegates to the adapter, and calls `then` with the step's name as soon as `step` has
+    returned."""
 
-    def __init__(self, adapter: object, step: str) -> None:
+    def __init__(self, adapter: object, step: str, then: Callable[[str], None]) -> None:
         self._adapter = adapter
         self._step = step
+        self._then = then
 
     def __getattr__(self, name: str) -> Any:
         attribute = getattr(self._adapter, name)
         if name != self._step:
             return attribute
 
-        def step_then_crash(*args: Any, **kwargs: Any) -> Any:
-            attribute(*args, **kwargs)
-            raise SimulatedCrash(f"crashed right after {name}")
+        def step_then(*args: Any, **kwargs: Any) -> Any:
+            result = attribute(*args, **kwargs)
+            self._then(name)
+            return result
 
-        return step_then_crash
+        return step_then
+
+
+def _crash(step: str) -> None:
+    raise SimulatedCrash(f"crashed right after {step}")
 
 
 def crash_after_storing(store: OrderStore) -> OrderStore:
-    return cast(OrderStore, CrashAfter(store, "store_new"))
+    return cast(OrderStore, After(store, "store_new", _crash))
 
 
 def crash_after_recording(store: OrderStore) -> OrderStore:
-    return cast(OrderStore, CrashAfter(store, "record_handover"))
+    return cast(OrderStore, After(store, "record_handover", _crash))
 
 
 def crash_after_handover(fulfilment: FulfilmentClient) -> FulfilmentClient:
-    return cast(FulfilmentClient, CrashAfter(fulfilment, "hand_over"))
+    return cast(FulfilmentClient, After(fulfilment, "hand_over", _crash))
+
+
+class Pause:
+    """Holds a consumer right after it stored an order, until released, so that another consumer
+    can act in between. A consumer never released crashes when the timeout is up."""
+
+    def __init__(self, timeout: float = 30.0) -> None:
+        self._timeout = timeout
+        self._reached = threading.Event()
+        self._released = threading.Event()
+
+    def after_storing(self, store: OrderStore) -> OrderStore:
+        return cast(OrderStore, After(store, "store_new", self._hold))
+
+    def _hold(self, step: str) -> None:
+        self._reached.set()
+        if not self._released.wait(self._timeout):
+            raise SimulatedCrash(f"held after {step} and never released")
+
+    def wait_until_reached(self) -> None:
+        assert self._reached.wait(self._timeout), "the consumer never reached the pause"
+
+    def release(self) -> None:
+        self._released.set()
 
 
 def group_of(settings: Settings) -> ConsumerGroup:
@@ -78,14 +111,17 @@ def run_until_crash(
 
 
 @contextmanager
-def running(settings: Settings) -> Iterator[None]:
+def running(
+    settings: Settings,
+    wrap_store: Callable[[OrderStore], OrderStore] = lambda store: store,
+) -> Iterator[None]:
     """A consumer instance running in a thread for the duration of the block."""
     stop = threading.Event()
     failures: list[BaseException] = []
 
     def run() -> None:
         try:
-            build(settings, stop).run()
+            build(settings, stop, wrap_store).run()
         except BaseException as error:
             failures.append(error)
             raise
