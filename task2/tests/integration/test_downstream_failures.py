@@ -11,6 +11,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from order_consumer.application.retries import RetryPolicy, SystemicFailure
 from order_consumer.config import FulfilmentTimeouts, Settings
@@ -23,6 +24,7 @@ from tests.integration.stack import (
     assert_nothing_lost,
     eventually,
     fulfilment_orders,
+    handover_requests,
     handover_statuses,
     lag,
     publish,
@@ -30,6 +32,7 @@ from tests.integration.stack import (
     stored_order,
     wait_for_dead_letters,
 )
+from tests.integration.traces import named, parent_id, span_id, trace_spans
 from tests.support.events import order_placed_event
 
 pytestmark = pytest.mark.integration
@@ -85,6 +88,37 @@ def test_two_transient_failures_then_success_end_handed_over_after_three_attempt
         assert_handed_over_without_dead_letters(settings, order_id)
 
     assert handover_statuses(order_id) == [503, 503, 201]
+
+
+def test_each_attempt_is_a_span_of_the_trace_and_sends_its_traceparent(
+    settings: Settings, spans: InMemorySpanExporter
+) -> None:
+    """Retries appear as sibling attempt spans with their status; each request carried the
+    traceparent of its own span, so the stub's span sits inside its attempt (ADR 0008)."""
+    order_id = uuid4()
+    add_fault_rule(order_id, times=2, status=503)
+    publish_order(settings, order_id)
+
+    with running(settings):
+        assert_handed_over_without_dead_letters(settings, order_id)
+
+    stored = stored_order(order_id)
+    assert stored is not None
+    found = trace_spans(spans, stored["trace_id"], settings.kafka_topic)
+    [message] = named(found, f"process {settings.kafka_topic}")
+    attempts = sorted(named(found, "handover attempt"), key=lambda span: span.start_time or 0)
+    assert [parent_id(attempt) for attempt in attempts] == [span_id(message)] * 3
+    assert [(attempt.attributes or {}).get("handover.status") for attempt in attempts] == [
+        503,
+        503,
+        None,
+    ]
+    requests = {parent_id(request): request for request in named(found, "POST")}
+    sent = [requests[span_id(attempt)] for attempt in attempts]
+    # The trace id and the parent span id; the flags of a new trace also mark its id as random.
+    assert [entry["traceparent"].split("-")[1:3] for entry in handover_requests(order_id)] == [
+        [stored["trace_id"], f"{span_id(request):016x}"] for request in sent
+    ]
 
 
 def test_a_dropped_connection_is_retried(settings: Settings) -> None:

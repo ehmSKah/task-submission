@@ -138,7 +138,7 @@ def wait_for_dead_letters(consumers: ConsumerGroup, count: int = 1) -> list[Reco
 def stored_order(order_id: UUID) -> dict[str, Any] | None:
     with psycopg.connect(CONSUMER_DATABASE_URL, row_factory=dict_row) as connection:
         return connection.execute(
-            "SELECT handover_status, fulfilment_order_id, placed_at, total, item_count "
+            "SELECT handover_status, fulfilment_order_id, placed_at, total, item_count, trace_id "
             "FROM orders WHERE order_id = %s",
             (order_id,),
         ).fetchone()
@@ -148,7 +148,7 @@ def processed_events(order_id: UUID) -> list[dict[str, Any]]:
     """The events recorded for the order, in the order they arrived (ADR 0002)."""
     with psycopg.connect(CONSUMER_DATABASE_URL, row_factory=dict_row) as connection:
         return connection.execute(
-            'SELECT event_id, outcome, topic, partition, "offset" FROM processed_events '
+            'SELECT event_id, outcome, topic, partition, "offset", trace_id FROM processed_events '
             "WHERE order_id = %s ORDER BY received_at, event_id",
             (order_id,),
         ).fetchall()
@@ -172,14 +172,20 @@ def fulfilment_orders(order_id: UUID) -> list[dict[str, str]]:
     return result
 
 
-def handover_statuses(order_id: UUID) -> list[int | None]:
-    """The status the stub answered each handover request for the order with, in arrival order;
-    `None` while a request is still in progress."""
+def handover_requests(order_id: UUID) -> list[dict[str, Any]]:
+    """The stub's journal of the order's handover requests, in arrival order (ADR 0003)."""
     response = httpx.get(
         f"{STUB_URL}/_control/requests", params={"externalReference": str(order_id)}
     )
     response.raise_for_status()
-    return [entry["status"] for entry in response.json()]
+    result: list[dict[str, Any]] = response.json()
+    return result
+
+
+def handover_statuses(order_id: UUID) -> list[int | None]:
+    """The status the stub answered each handover request for the order with, in arrival order;
+    `None` while a request is still in progress."""
+    return [entry["status"] for entry in handover_requests(order_id)]
 
 
 def wait_until_stable(

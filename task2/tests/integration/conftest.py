@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from uuid import uuid4
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from order_consumer import logs
 from order_consumer.config import Settings
@@ -20,11 +21,33 @@ from tests.integration.stack import (
     create_topic,
 )
 from tests.support.events import EVENT_SCHEMA
+from tests.support.log_lines import LogLines
+from tests.support.spans import recorded_spans
+
+LOG_LINES = LogLines()
 
 
 @pytest.fixture(scope="session", autouse=True)
-def json_logs() -> None:
-    logs.configure("order-consumer-test", "DEBUG")
+def observed() -> None:
+    """JSON logs and spans as the consumer writes them on start-up, kept for the tests to read
+    (ADR 0008): spans in memory, so no Jaeger is needed."""
+    logs.configure("order-consumer-test", "DEBUG", stream=LOG_LINES)
+    recorded_spans()
+
+
+@pytest.fixture
+def log_lines() -> Iterator[LogLines]:
+    """The lines logged during the test."""
+    LOG_LINES.clear()
+    yield LOG_LINES
+
+
+@pytest.fixture
+def spans() -> Iterator[InMemorySpanExporter]:
+    """The spans ended during the test."""
+    exporter = recorded_spans()
+    exporter.clear()
+    yield exporter
 
 
 @pytest.fixture
