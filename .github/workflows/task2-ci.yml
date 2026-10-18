@@ -1,6 +1,6 @@
 # task2: static checks, unit tests with the core coverage gate, then the integration and reliability
 # tests against the Compose stack it ships, and the demo (ADR 0009). Runs only when task2 or this
-# workflow changes.
+# workflow changes, or when started by hand.
 name: task2-ci
 
 on:
@@ -12,6 +12,7 @@ on:
     paths:
       - "task2/**"
       - ".github/workflows/task2-ci.yml"
+  workflow_dispatch:
 
 concurrency:
   group: task2-ci-${{ github.ref }}
