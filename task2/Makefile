@@ -19,8 +19,8 @@ PYTEST_ARGS ?=
 ACTIONLINT_IMAGE ?= rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
 
 .DEFAULT_GOAL := help
-.PHONY: help install up up-tracing down clean ps logs psql replay lint lint-workflows test test-unit \
-	test-integration test-reliability
+.PHONY: help install up up-tracing down clean ps logs psql publish replay demo demo-tests lint \
+	lint-workflows test test-unit test-integration test-reliability
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -66,6 +66,10 @@ logs: ## Follow the logs of every service
 
 psql: ## Open a SQL shell on the orders database (as the migration owner)
 	$(COMPOSE) exec postgres psql -U orders_owner -d orders
+
+# On the host, like the tests: each sample is a new order with its own traceparent.
+publish: ## Publish sample events with a traceparent; ARGS="--help" lists the kinds (default: one valid)
+	uv run python -m demo.publish $(ARGS)
 
 # In a one-off consumer container, so it reaches Kafka as the consumers do, with a remote daemon too.
 replay: ## Replay dead letters (ADR 0006), a dry run unless ARGS contains --execute; ARGS="--help" lists the filters
