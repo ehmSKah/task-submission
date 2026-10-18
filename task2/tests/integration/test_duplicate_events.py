@@ -206,5 +206,7 @@ def test_two_consumers_racing_on_one_order_end_with_one_order_and_one_fulfilment
         assert_all_committed(group_of(first))
 
     assert_nothing_duplicated([order_id])
-    assert handover_statuses(order_id) == [201, 201], "the first's handover gets the replay"
+    assert handover_statuses(order_id) == [201, 201], (
+        "the first's handover gets the stored response"
+    )
     assert recorded(order_id) == [(str(event_id), "accepted")]

@@ -20,7 +20,7 @@ Storing an order in PostgreSQL and handing it over to the fulfilment service are
 | Crash after … | What the redelivered event finds | Why it's safe |
 |---|---|---|
 | step 2 (stored, not handed over) | the order exists, handover unfinished | a duplicate **completes** an unfinished handover (ADR 0002): nothing is lost |
-| step 3 (handed over, not recorded) | the order exists, handover unfinished | the repeated handover gets the **`201` replay** with the same fulfilment order id (ADR 0003): no second fulfilment order |
+| step 3 (handed over, not recorded) | the order exists, handover unfinished | the repeated handover gets the **`201` stored response** with the same fulfilment order id (ADR 0003): no second fulfilment order |
 | step 4 (recorded, not committed) | the order is handed over | skipped and logged: no new effects |
 
 Each row is an integration test.
@@ -69,7 +69,7 @@ Consumption is **at-least-once** (offsets follow terminal outcomes). Effects are
 - **Kept:** all events of one order share a partition (Kafka key = order id), and a partition is processed one message at a time, in order.
 - **Not kept:** any order across partitions; a replayed dead letter is processed long after its neighbours.
 - **Nothing depends on order.** With one event type (ADR 0001), the only repeat for an order is a duplicate, which is harmless whenever it arrives. The retry strategy may therefore reorder (retry topics are allowed).
-- **A zombie consumer is covered.** A consumer that blocks past `max.poll.interval.ms`, or stalls past its session timeout, loses its partition but may still finish its message while the new owner processes the same event. Only one `orders` insert can win (ADR 0002), the second handover gets `409` in progress or the `201` replay (ADR 0003), and the zombie's commit fails because it is no longer a group member.
+- **A zombie consumer is covered.** A consumer that blocks past `max.poll.interval.ms`, or stalls past its session timeout, loses its partition but may still finish its message while the new owner processes the same event. Only one `orders` insert can win (ADR 0002), the second handover gets `409` in progress or the `201` stored response (ADR 0003), and the zombie's commit fails because it is no longer a group member.
 
 ## Considered options
 

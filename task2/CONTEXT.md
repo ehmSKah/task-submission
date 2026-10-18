@@ -36,6 +36,10 @@ _Avoid_: failed message, error event
 Feeding a dead letter back into processing, unchanged, once the cause has been fixed.
 _Avoid_: retry, resend
 
+**Stored response**:
+The fulfilment service's answer to a handover repeated with the same order id and the same order: the answer it gave the first time, with the same fulfilment order id. Nothing new is created, which is what makes repeating a handover safe.
+_Avoid_: replay (feeding a dead letter back in), cached response
+
 **Failed handover**:
 A handover the consumer has given up on, because it ran out of retries or because the fulfilment service refused the order. The order stays accepted, and the handover can still be completed later.
 _Avoid_: lost order, rejected order

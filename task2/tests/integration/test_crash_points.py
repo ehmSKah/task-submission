@@ -63,7 +63,7 @@ def test_a_crash_after_storing_is_completed_by_the_redelivery(
     assert handover_statuses(order_id) == [201]
 
 
-def test_a_crash_after_the_handover_is_completed_by_the_replay(
+def test_a_crash_after_the_handover_is_completed_by_the_stored_response(
     consumer_settings: Settings,
 ) -> None:
     order_id = published_order(consumer_settings)
@@ -76,7 +76,9 @@ def test_a_crash_after_the_handover_is_completed_by_the_replay(
     with running(consumer_settings):
         assert_nothing_lost([order_id], group_of(consumer_settings))
     assert_nothing_duplicated([order_id])
-    assert handover_statuses(order_id) == [201, 201], "the repeat is answered with the replay"
+    assert handover_statuses(order_id) == [201, 201], (
+        "the repeat is answered with the stored response"
+    )
     stored = stored_order(order_id)
     assert stored is not None
     assert stored["fulfilment_order_id"] == created["id"]

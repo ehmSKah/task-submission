@@ -19,7 +19,7 @@ The **Compose stack is the deliverable**, so it is also what the tests run again
 | Suite | Where | Runs against | Proves |
 |---|---|---|---|
 | Unit | `consumer/tests/unit` | plain Python with fakes behind every port and a fake clock | each validation layer and business rule; both mappings, with property tests (the total always equals the sum of line totals; money formats correctly for every currency exponent); duplicate versus conflict; retry policy and backoff; the flood guard's states; the outcome-to-commit table; the start-up budget check; log redaction |
-| Stub unit | `fulfilment-stub/tests` | the stub in the test process | replay, `422`, `409` in progress, fault rules, the journal |
+| Stub unit | `fulfilment-stub/tests` | the stub in the test process | the stored response, `422`, `409` in progress, fault rules, the journal |
 | Demo unit | `demo/tests` | plain Python with a fake stack | the sample events, against the consumer's own validation; outcome counting from log lines; the runner stopping at the first unmet outcome; the sections matching the four category files and `make demo-tests` |
 | Integration | `tests/integration` | the in-process consumer against the stack | the four assignment categories; crash points; dead-letter contents; replay; trace continuity (OpenTelemetry's in-memory span exporter); no token in logs or spans; one terminal log line per message |
 | Reliability | `tests/reliability` | the consumer containers | hard kill mid-handover, graceful stop mid-stream, rebalance under load, zombie consumer, pause during a rebalance (ADR 0007) |
@@ -32,7 +32,7 @@ The **Compose stack is the deliverable**, so it is also what the tests run again
 | `test_successful_processing.py` | order stored and handed over; fields and money mapped; one terminal log line; one trace across the handover |
 | `test_invalid_messages.py` | one case per validation layer: unreadable, not a CloudEvent, unsupported type or version, schema violation, business rule. Each ends as a dead letter naming the layer and errors, with nothing stored and nothing handed over |
 | `test_duplicate_events.py` | redelivery, re-emission, a conflicting event (dead letter), two consumers racing on one order; in every case exactly one fulfilment order |
-| `test_downstream_failures.py` | transient failures then success; retries exhausted → failed handover, dead letter, replay, handed over; rejected → dead letter; timeout → `409` → replay; wrong token → paused without dead letters; the circuit opening and closing |
+| `test_downstream_failures.py` | transient failures then success; retries exhausted → failed handover, dead letter, replay, handed over; rejected → dead letter; timeout → `409` → stored response; wrong token → paused without dead letters; the circuit opening and closing |
 
 Replay has a file of its own, `test_replay.py`: a `retries-exhausted` dead letter replayed once the fault is cleared ends handed over in its trace; a dry run changes nothing; a second replay creates no second fulfilment order; invalid and conflicting dead letters are skipped unless forced.
 
@@ -50,7 +50,7 @@ The README maps each assignment requirement to its tests.
 - **No `sleep` in test code.** One helper, `eventually(condition, timeout=30 s)`, polls every 100 ms for a state: an order's `handover_status`, the stub's journal of fulfilment orders, a dead letter for an order id, a heartbeat showing `paused`. On timeout it fails with the last state it observed.
 - **Order of start-up:** in-process tests publish first and then start the consumer (which reads from the earliest offset), so there is no race between assignment and publishing. Container tests wait until both heartbeats show assigned partitions.
 - **Time in unit tests is fake**, and the jitter source is injectable, so backoff and the flood guard are exact.
-- **Integration tests may pin the jitter** where a scenario depends on when attempts happen: timeout → `409` in progress → replay needs one attempt inside the stub's delay and a later one after it. Everywhere else the jitter stays random, within its bounds.
+- **Integration tests may pin the jitter** where a scenario depends on when attempts happen: timeout → `409` in progress → stored response needs one attempt inside the stub's delay and a later one after it. Everywhere else the jitter stays random, within its bounds.
 - **No automatic re-runs** of failed tests: a flaky test is a bug.
 - **Serial by default.** Container tests share the real consumers and must be serial; in-process tests could run in parallel thanks to their own topics, if that is ever needed.
 

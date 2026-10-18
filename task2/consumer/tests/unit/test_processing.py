@@ -863,7 +863,8 @@ def test_an_unavailable_database_stops_processing_before_the_handover() -> None:
 
 
 def test_a_database_lost_after_the_handover_stops_processing_until_it_is_recorded() -> None:
-    """The probe repeats the handover, and the fulfilment service replays it (ADR 0003, 0004)."""
+    """The probe repeats the handover, and the fulfilment service answers it with the stored
+    response (ADR 0003, 0004)."""
     harness = ProcessorWithFakes(store=FakeOrderStore(unavailable={"record_handover"}))
 
     assert harness.process() == Stopped(StopReason.POSTGRES_UNAVAILABLE, "connection refused")

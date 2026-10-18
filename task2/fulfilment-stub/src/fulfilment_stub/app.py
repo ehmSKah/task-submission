@@ -48,7 +48,7 @@ class FaultRule:
     The request claims its key, waits `delay_seconds`, then either answers with `status` or drops
     the connection, creating nothing, or, with neither, is processed as usual. A delay on its own
     therefore creates the order but answers late: a client that timed out meanwhile gets `409`
-    on its repeat, and the `201` replay once the delay is over.
+    on its repeat, and the `201` stored response once the delay is over.
     """
 
     external_reference: str
@@ -290,7 +290,7 @@ def create_app(
     def answer_repeat(
         known: IdempotencyRecord, body_fingerprint: str, entry: dict[str, Any]
     ) -> Response:
-        """The replay rules of the IETF Idempotency-Key draft (ADR 0003)."""
+        """The IETF Idempotency-Key draft's rules for a repeated key (ADR 0003)."""
         if known.fingerprint != body_fingerprint:
             entry["status"] = 422
             return problem(

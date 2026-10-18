@@ -30,11 +30,11 @@ traceparent: 00-…               # W3C Trace Context, the correlation id (ADR 0
 ```
 - **The body is the downstream request**, produced from our Order by mapping 2 (ADR 0001). Money becomes a decimal string using the currency's exponent.
 - **`201 Created`** returns `{ "id": "ful-8812", "externalReference": "3f1c…" }`. The fulfilment order id is stored with the order as proof that the handover is complete.
-- **Replays** follow the IETF draft *The Idempotency-Key HTTP Header Field*:
+- **A repeated key** is answered as the IETF draft *The Idempotency-Key HTTP Header Field* says; the answer to a repeat with the same body is the **stored response**:
 
 | Same `Idempotency-Key`, and … | Response |
 |---|---|
-| the same body | the original `201`, same fulfilment order id; nothing new is created |
+| the same body | the stored response: the original `201`, same fulfilment order id; nothing new is created |
 | a different body | `422`. This would be our bug: conflicting events are dead-lettered before any handover (ADR 0002). |
 | the first request is still in progress | `409` |
 
@@ -44,12 +44,12 @@ traceparent: 00-…               # W3C Trace Context, the correlation id (ADR 0
 
 | Class | Responses | Meaning |
 |---|---|---|
-| **Success** | `201`, including a replay | the handover is complete |
+| **Success** | `201`, including the stored response | the handover is complete |
 | **Transient** | connection refused or reset, connect or read timeout, `408`, `429`, `500`, `502`, `503`, `504`, `409` in progress, any other `5xx` | may succeed later; `Retry-After` is honoured, up to a cap |
 | **Rejected** | `400`, `413`, `422`, any other `4xx` not listed as systemic | this order will never be accepted as sent; it goes to the dead-letter topic without retries |
 | **Systemic** | `401`, `403`, `404`, `405`, `415`, any `3xx`, any `2xx` other than `201` | our configuration or the service is wrong for *every* order; consumption stops without committing and nothing is dead-lettered |
 
-- **`409` in progress is transient.** When our request times out but the fulfilment service is still working on it, the retry gets `409` and a later one gets the `201` replay: the handover completes exactly once. This is a named test.
+- **`409` in progress is transient.** When our request times out but the fulfilment service is still working on it, the retry gets `409` and a later one gets the `201` stored response: the handover completes exactly once. This is a named test.
 - **Systemic failures are not dead-lettered.** With a wrong URL or token every order fails the same way. Dead-lettering them would fill the dead-letter topic with healthy orders that all need replaying. Not committing leaves the backlog safely in Kafka until the configuration is fixed. How consumption stops (pausing or exiting) is decided with the retry and restart strategies.
 
 **One handover attempt**
@@ -80,10 +80,10 @@ traceparent: 00-…               # W3C Trace Context, the correlation id (ADR 0
 - **Contract side:**
   - It implements `POST /fulfilment-orders` exactly as specified.
   - It validates requests strictly against the OpenAPI file, so a `400` from the stub means our mapping produced something wrong.
-  - It remembers each `Idempotency-Key` with a fingerprint of the body and applies the replay rules above.
+  - It remembers each `Idempotency-Key` with a fingerprint of the body and answers a repeated key by the rules above.
   - State is in memory: restarting the stub forgets keys. The restart tests restart the consumer, not the stub.
 - **Control side** (`/_control/…`, not part of the contract):
-  - **Fault rules** are matched per order (`externalReference`), so tests running side by side don't interfere. Each rule applies `times: N`. It can respond with a status (`503` with or without `Retry-After`, `429`, `500`, `400`, `404`, …), respond after a delay, **create the order but answer too late** (which reproduces timeout → `409` → replay), or drop the connection. Rules are added with `POST /_control/fault-rules` (`{"externalReference": …, "times": 1, "delaySeconds": 3}`); every request for the order that passes the contract checks uses one. A delayed request has already claimed its key, so a repeat meanwhile gets `409`.
+  - **Fault rules** are matched per order (`externalReference`), so tests running side by side don't interfere. Each rule applies `times: N`. It can respond with a status (`503` with or without `Retry-After`, `429`, `500`, `400`, `404`, …), respond after a delay, **create the order but answer too late** (which reproduces timeout → `409` → stored response), or drop the connection. Rules are added with `POST /_control/fault-rules` (`{"externalReference": …, "times": 1, "delaySeconds": 3}`); every request for the order that passes the contract checks uses one. A delayed request has already claimed its key, so a repeat meanwhile gets `409`.
   - **The fields of a rule:** `delaySeconds` waits first; then `status` (with an optional `retryAfter`, sent as `Retry-After`) answers with that status, or `dropConnection: true` starts the answer and breaks it off, so the client sees the connection dropped. Both create nothing and release the key. With neither, the order is created after the delay: that is "create but answer too late". A rule that combines a status with a drop, sends `Retry-After` without a status or asks for a `201` is refused. The journal shows which rule each request used.
   - **Journal:** every request received with its headers and outcome (no status yet while it is in progress, which is what the hard-kill test waits for) and, once its body passed the contract checks, the `total` it asked for, so the demo can show the money mapping; and separately the fulfilment orders actually created. Duplicate tests assert "exactly one fulfilment order for this order", however many requests arrived.
   - **Reset** clears rules, journal and keys between tests. `DELETE /_control/fault-rules?externalReference=…` clears one order's remaining rules only, as if the service had recovered for it, leaving the journal and keys.
@@ -99,8 +99,8 @@ traceparent: 00-…               # W3C Trace Context, the correlation id (ADR 0
 - **Retries.**
   - *Retries in the HTTP client as well as in the consumer:* the bound multiplies and nobody owns it.
 - **Stub.**
-  - *WireMock:* fault injection, delays, scenarios and a request journal are built in. Idempotency per key (fingerprint, replay, `422`, `409` in progress) would need a Java extension, and it adds a JVM container.
-  - *Prism (an OpenAPI mock):* validates against the spec but keeps no state, so it can't replay or count fulfilment orders.
+  - *WireMock:* fault injection, delays, scenarios and a request journal are built in. Idempotency per key (fingerprint, stored response, `422`, `409` in progress) would need a Java extension, and it adds a JVM container.
+  - *Prism (an OpenAPI mock):* validates against the spec but keeps no state, so it can't give the stored response or count fulfilment orders.
   - *Mocks inside the tests only (`respx`):* no real HTTP hop end to end and nothing to show in the demo. Kept for unit tests of the HTTP client.
   - *Public services (httpbin, webhook.site):* non-deterministic, external, unusable in CI.
 - **Authentication.**

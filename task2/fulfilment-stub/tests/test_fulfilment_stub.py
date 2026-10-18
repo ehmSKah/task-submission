@@ -127,7 +127,7 @@ def test_a_contract_violation_names_the_fields_without_echoing_values(client: Te
     assert secret not in response.text
 
 
-def test_a_repeat_with_the_same_body_replays_the_original_response(client: TestClient) -> None:
+def test_a_repeat_with_the_same_body_gets_the_stored_response(client: TestClient) -> None:
     first = client.post("/fulfilment-orders", json=request_body(), headers=headers())
 
     repeat = client.post("/fulfilment-orders", json=request_body(), headers=headers())
@@ -153,7 +153,7 @@ def test_a_repeat_with_a_different_body_is_rejected_and_creates_nothing(
     assert len(client.get("/_control/fulfilment-orders").json()) == 1
 
 
-def test_the_same_body_with_other_key_order_is_a_replay(client: TestClient) -> None:
+def test_the_same_body_with_other_key_order_gets_the_stored_response(client: TestClient) -> None:
     body = request_body()
     first = client.post("/fulfilment-orders", json=body, headers=headers())
 

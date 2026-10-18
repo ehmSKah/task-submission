@@ -17,7 +17,7 @@ paths:
         - name: Idempotency-Key
           in: header
           required: true
-          description: The order id. A repeat with the same key and body replays the original response.
+          description: The order id. A repeat with the same key and body gets the stored response, the original 201 with the same id.
           schema:
             type: string
             minLength: 1
@@ -40,7 +40,7 @@ paths:
               total: { amount: "39.98", currency: EUR }
       responses:
         "201":
-          description: The fulfilment order was created, or this is a replay of its creation.
+          description: The fulfilment order was created, or this is the stored response to its creation.
           content:
             application/json:
               schema:

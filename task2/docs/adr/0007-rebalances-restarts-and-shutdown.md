@@ -57,8 +57,8 @@ Correctness never depends on a consumer finishing its work: anything not committ
 
 | Scenario | How the failure is injected | Additionally shows |
 |---|---|---|
-| Crash points (ADR 0004) | in-process, against real Kafka, PostgreSQL and the stub: an adapter wrapper simulates a crash right after storing, after the handover, or after recording; then a fresh consumer instance starts | the redelivered event completes, replays or is skipped as the crash table says |
-| Hard kill mid-handover | a stub rule slows order X's handover; once the journal shows its request in progress, the consumer is killed and started again | X still has one fulfilment order; its repeat was answered with `409` or the replay |
+| Crash points (ADR 0004) | in-process, against real Kafka, PostgreSQL and the stub: an adapter wrapper simulates a crash right after storing, after the handover, or after recording; then a fresh consumer instance starts | the redelivered event completes, gets the stored response or is skipped as the crash table says |
+| Hard kill mid-handover | a stub rule slows order X's handover; once the journal shows its request in progress, the consumer is killed and started again | X still has one fulfilment order; its repeat was answered with `409` or the stored response |
 | Graceful stop mid-stream | SIGTERM while 50 orders are being processed | the other instance takes over at once; the stop takes under 20 s; at most one redelivery |
 | Rebalance under load | start with one instance, scale to two halfway | partitions split 2 + 1 |
 | Zombie consumer | a stub rule slows one handover; while it is in progress the instance is frozen (`docker pause`, like a long GC or VM stall) past its session timeout, shrunk to 6 s by the test configuration, then woken up | the zombie's commit fails and is logged; no second order row or fulfilment order |
@@ -72,7 +72,7 @@ Correctness never depends on a consumer finishing its work: anything not committ
 
 - **Shutdown.**
   - *Finish the whole message, retries included* (`stop_grace_period` ≈ 90 s): no repeats, but a stop could take a minute and a half, and a paused instance would never finish.
-  - *Abandon immediately:* fastest, but cuts handovers off mid-request, making `409`s and replays more common than necessary.
+  - *Abandon immediately:* fastest, but cuts handovers off mid-request, making `409`s and stored responses more common than necessary.
 - **Rebalance protocol.**
   - *The new consumer protocol (KIP-848, `group.protocol=consumer`):* broker-side assignment and faster rebalances; generally available in the client but not its default. Its behaviour when `max.poll.interval.ms` is exceeded, which the zombie case depends on, hasn't been verified here. The evolution once it has; switching is a configuration change.
   - *Eager assignment* (`range`, `roundrobin`): every rebalance stops all partitions, not just the ones that move.

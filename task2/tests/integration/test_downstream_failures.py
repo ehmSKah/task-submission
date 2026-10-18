@@ -188,13 +188,13 @@ def test_a_rejected_handover_is_dead_lettered_without_retries(
     assert fulfilment_orders(order_id) == []
 
 
-def test_a_timeout_then_409_in_progress_then_the_replay_end_with_one_fulfilment_order(
+def test_a_timeout_then_409_in_progress_then_the_stored_response_end_with_one_fulfilment_order(
     consumer_settings: Settings,
 ) -> None:
     """The fulfilment service is still creating the order when the first attempt times out
     (ADR 0003). With the jitter pinned to its longest wait, the attempts start at about 0, 2 and
     4 s, and the stub answers the first one at 3 s: the second meets it in progress, the third
-    gets the replay. Each side has about a second of margin."""
+    gets the stored response. Each side has about a second of margin."""
     settings = dataclasses.replace(
         consumer_settings,
         fulfilment_timeouts=SHORT_TIMEOUTS,
