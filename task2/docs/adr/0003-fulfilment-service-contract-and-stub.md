@@ -85,9 +85,9 @@ traceparent: 00-…               # W3C Trace Context, the correlation id (ADR 0
 - **Control side** (`/_control/…`, not part of the contract):
   - **Fault rules** are matched per order (`externalReference`), so tests running side by side don't interfere. Each rule applies `times: N`. It can respond with a status (`503` with or without `Retry-After`, `429`, `500`, `400`, `404`, …), respond after a delay, **create the order but answer too late** (which reproduces timeout → `409` → replay), or drop the connection. Rules are added with `POST /_control/fault-rules` (`{"externalReference": …, "times": 1, "delaySeconds": 3}`); every request for the order that passes the contract checks uses one. A delayed request has already claimed its key, so a repeat meanwhile gets `409`.
   - **The fields of a rule:** `delaySeconds` waits first; then `status` (with an optional `retryAfter`, sent as `Retry-After`) answers with that status, or `dropConnection: true` starts the answer and breaks it off, so the client sees the connection dropped. Both create nothing and release the key. With neither, the order is created after the delay: that is "create but answer too late". A rule that combines a status with a drop, sends `Retry-After` without a status or asks for a `201` is refused. The journal shows which rule each request used.
-  - **Journal:** every request received with its headers and outcome (no status yet while it is in progress, which is what the hard-kill test waits for), and separately the fulfilment orders actually created. Duplicate tests assert "exactly one fulfilment order for this order", however many requests arrived.
-  - **Reset** clears rules, journal and keys between tests.
-  - `make demo` uses the same fault rules.
+  - **Journal:** every request received with its headers and outcome (no status yet while it is in progress, which is what the hard-kill test waits for) and, once its body passed the contract checks, the `total` it asked for, so the demo can show the money mapping; and separately the fulfilment orders actually created. Duplicate tests assert "exactly one fulfilment order for this order", however many requests arrived.
+  - **Reset** clears rules, journal and keys between tests. `DELETE /_control/fault-rules?externalReference=…` clears one order's remaining rules only, as if the service had recovered for it, leaving the journal and keys.
+  - `make demo` uses the same fault rules, and clears one before replaying its dead letter.
 
 ## Considered options
 

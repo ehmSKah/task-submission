@@ -70,6 +70,15 @@ def test_the_journal_records_every_request_with_its_outcome(client: TestClient) 
     assert entry["status"] == 201
 
 
+def test_the_journal_records_the_total_each_request_asked_for(client: TestClient) -> None:
+    """What the consumer's money mapping sent, for the demo to show (ADR 0003)."""
+    client.post("/fulfilment-orders", json=request_body(), headers=headers())
+
+    [entry] = client.get("/_control/requests").json()
+
+    assert entry["total"] == {"amount": "39.98", "currency": "EUR"}
+
+
 def test_a_wrong_token_is_rejected_and_creates_nothing(client: TestClient) -> None:
     response = client.post("/fulfilment-orders", json=request_body(), headers=headers("wrong"))
 
@@ -275,6 +284,27 @@ def test_reset_forgets_keys_and_fault_rules(
 
     assert response.status_code == 201
     assert delays == []
+
+
+def test_an_orders_fault_rules_can_be_cleared_leaving_other_orders_and_the_journal(
+    client: TestClient,
+) -> None:
+    body, other_headers = other_order()
+    for order_id in (ORDER_ID, OTHER_ORDER_ID):
+        client.post(
+            "/_control/fault-rules",
+            json={"externalReference": order_id, "times": 10, "status": 503},
+        )
+    client.post("/fulfilment-orders", json=request_body(), headers=headers())
+
+    cleared = client.delete("/_control/fault-rules", params={"externalReference": ORDER_ID})
+    after = client.post("/fulfilment-orders", json=request_body(), headers=headers())
+    other = client.post("/fulfilment-orders", json=body, headers=other_headers)
+
+    assert cleared.status_code == 204
+    assert (after.status_code, other.status_code) == (201, 503)
+    journal = client.get("/_control/requests", params={"externalReference": ORDER_ID}).json()
+    assert [entry["status"] for entry in journal] == [503, 201]
 
 
 def test_the_request_journal_can_be_filtered_by_order(client: TestClient) -> None:

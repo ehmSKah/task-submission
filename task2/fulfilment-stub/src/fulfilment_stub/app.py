@@ -121,6 +121,9 @@ class FaultRules:
     def reset(self) -> None:
         self.rules.clear()
 
+    def clear(self, external_reference: str) -> None:
+        self.rules = [rule for rule in self.rules if rule.external_reference != external_reference]
+
     def take(self, external_reference: str) -> FaultRule | None:
         """The first rule for the order, with one of its uses spent."""
         for rule in self.rules:
@@ -226,6 +229,7 @@ def create_app(
             "idempotencyKey": request.headers.get("idempotency-key"),
             "traceparent": request.headers.get("traceparent"),
             "externalReference": None,
+            "total": None,  # what the order's money mapping sent, once the body is valid
             "status": None,  # until the request is answered; never if its connection is dropped
             "fault": None,  # the rule applied to it
         }
@@ -242,8 +246,10 @@ def create_app(
             log.info("request.invalid", **violations)
             return problem(400, "Bad Request", **violations)
 
-        external_reference = json.loads(body)["externalReference"]
+        payload = json.loads(body)
+        external_reference = payload["externalReference"]
         entry["externalReference"] = external_reference
+        entry["total"] = payload["total"]
         rule = fault_rules.take(external_reference)
         if rule is not None:
             entry["fault"] = rule.describe()
@@ -313,6 +319,11 @@ def create_app(
             )
         )
         return rule
+
+    @app.delete("/_control/fault-rules", status_code=204)
+    def clear_fault_rules(externalReference: str) -> None:
+        """The order's remaining faults, as if the fulfilment service had recovered for it."""
+        fault_rules.clear(externalReference)
 
     @app.get("/_control/requests")
     def requests(externalReference: str | None = None) -> list[dict[str, Any]]:
