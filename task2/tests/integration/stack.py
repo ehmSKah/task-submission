@@ -52,6 +52,14 @@ class Record:
     key: bytes | None
     value: bytes | None
     headers: list[tuple[str, bytes]]
+    topic: str = ""
+    partition: int = 0
+    offset: int = 0
+
+    @property
+    def position(self) -> str:
+        """Where the record is on its topic, e.g. orders.dlt/1/42, as `replayed-from` names it."""
+        return f"{self.topic}/{self.partition}/{self.offset}"
 
     def header(self, name: str) -> str | None:
         values = [value for key, value in self.headers if key == name]
@@ -133,7 +141,16 @@ def records(topic: str) -> list[Record]:
             if message is None or message.error() is not None:
                 continue
             headers = [(name, value or b"") for name, value in message.headers() or []]
-            found.append(Record(message.key(), message.value(), headers))
+            found.append(
+                Record(
+                    message.key(),
+                    message.value(),
+                    headers,
+                    topic,
+                    message.partition() or 0,
+                    message.offset() or 0,
+                )
+            )
         return found
     finally:
         reader.close()

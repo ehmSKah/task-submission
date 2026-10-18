@@ -45,11 +45,15 @@ task2/
 │       ├── domain/        # Order, OrderLine, business rules, mappings 1 and 2
 │       ├── application/   # processing one event (the steps of ADR 0004) → an Outcome
 │       │                  # ports: OrderStore, FulfilmentClient, DeadLetterSink, Clock
+│       │                  # replay: which dead letters to republish, with which headers
 │       ├── adapters/
-│       │   ├── inbound/   # the poll loop: poll → process → commit according to the Outcome
-│       │   └── outbound/  # Postgres store, fulfilment HTTP client, Kafka dead-letter producer
+│       │   ├── inbound/   # the poll loop: poll → process → commit according to the Outcome;
+│       │   │              # the dead-letter reader of the replay command
+│       │   └── outbound/  # Postgres store, fulfilment HTTP client, Kafka dead-letter producer,
+│       │                  # the replay's republisher
 │       ├── config.py
-│       └── main.py
+│       ├── main.py        # the consumer's entry point
+│       └── replay.py      # the replay command's entry point (ADR 0006), in the same image
 ├── fulfilment-stub/                        # separate uv project → stub image
 └── compose.yaml, Makefile, README.md, docs/
 ```
