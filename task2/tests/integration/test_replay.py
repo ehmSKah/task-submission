@@ -206,10 +206,11 @@ def test_invalid_and_conflicting_dead_letters_are_skipped_unless_forced(
     assert line_for(lines, unsupported).endswith("replayed")
     assert lines[-1] == f"replayed 1 to {settings.kafka_topic}, 2 skipped"
     assert line_for(forced, conflict).endswith("replayed")
-    assert [record.key for record in replayed(records(settings.kafka_topic))] == [
-        str(unsupported).encode(),
-        str(conflict).encode(),
-    ]
+    # Sorted: the two keys may sit on different partitions, read in no particular order. Which
+    # run replayed which is shown by the lines above.
+    assert sorted(record.key for record in replayed(records(settings.kafka_topic))) == sorted(
+        [str(unsupported).encode(), str(conflict).encode()]
+    )
 
 
 def encoded(envelope: dict[str, object]) -> bytes:
