@@ -105,8 +105,9 @@ def main() -> int:
         log.error("consumer.stopped", exit_code=EXIT_PAUSED_TOO_LONG, reason=str(paused))
         return EXIT_PAUSED_TOO_LONG
     except Exception as crash:
+        # Without a stack trace: only processing.unexpected_error carries one (ADR 0008).
         log.error(
-            "consumer.stopped", exit_code=EXIT_CRASH, reason=type(crash).__name__, exc_info=True
+            "consumer.stopped", exit_code=EXIT_CRASH, reason=f"{type(crash).__name__}: {crash}"
         )
         return EXIT_CRASH
     log.info("consumer.stopped", exit_code=EXIT_CLEAN)

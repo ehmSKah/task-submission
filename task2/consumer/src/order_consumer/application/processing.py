@@ -56,12 +56,20 @@ class Outcome(Enum):
     DEAD_LETTERED = "dead_lettered"
 
 
+class StopReason(Enum):
+    """Why consumption stops: what a paused instance shows (ADR 0006, 0007)."""
+
+    FULFILMENT = "systemic: fulfilment"  # a systemic answer, e.g. to a wrong token
+    POSTGRES_UNAVAILABLE = "systemic: postgres-unavailable"
+    DEAD_LETTER_TOPIC_UNWRITABLE = "systemic: dead-letter-topic-unwritable"
+
+
 @dataclass(frozen=True, slots=True)
 class Stopped:
     """Not terminal: the failure is not about this message, so consumption stops with nothing
     committed and nothing dead-lettered, and the message is tried again later (ADR 0006)."""
 
-    reason: str  # what the instance shows while paused, e.g. "systemic: postgres-unavailable"
+    reason: StopReason
     error: str  # what happened, e.g. "401 Unauthorized"
 
 
@@ -111,7 +119,7 @@ class OrderProcessor:
             try:
                 return self._process(delivery, progress)
             except StoreUnavailable as unavailable:
-                return Stopped("systemic: postgres-unavailable", str(unavailable))
+                return Stopped(StopReason.POSTGRES_UNAVAILABLE, str(unavailable))
             except Exception as error:
                 return self._set_aside_unexpected(delivery, progress, error)
 
@@ -170,7 +178,7 @@ class OrderProcessor:
 
             handover = self._handover.hand_over(to_downstream_request(order))
             if isinstance(handover, SystemicAnswer):
-                return Stopped("systemic: fulfilment", handover.failure.error)
+                return Stopped(StopReason.FULFILMENT, handover.failure.error)
             if isinstance(handover, GaveUp):
                 return self._give_up(delivery, event.event_id, order.order_id, handover)
             fulfilment_order_id = handover.result.fulfilment_order_id
@@ -259,7 +267,7 @@ class OrderProcessor:
         try:
             self._dead_letters.write(dead_letter)
         except DeadLetterUnwritable as unwritable:
-            return Stopped("systemic: dead-letter-topic-unwritable", str(unwritable))
+            return Stopped(StopReason.DEAD_LETTER_TOPIC_UNWRITABLE, str(unwritable))
         log.warning("dead_letter.written", reason=dead_letter.reason.value)
         return Outcome.DEAD_LETTERED
 
@@ -289,28 +297,23 @@ def _handover_detail(gave_up: GaveUp) -> str:
     detail: dict[str, object] = {"status": failure.status, "error": failure.error}
     if gave_up.retry_after is not None:
         detail["retryAfterSeconds"] = gave_up.retry_after
-    problem = failure.problem
-    while True:
-        if problem is not None:
-            detail["problem"] = problem
-        encoded = json.dumps(detail, ensure_ascii=False, separators=(",", ":"))
-        if len(encoded.encode()) <= MAX_DETAIL_BYTES or not problem:
-            return encoded
-        problem = problem[: len(problem) * 3 // 4]
+    return _fitted(detail, "problem", failure.problem)
 
 
 def _unexpected_detail(error: Exception) -> str:
     """The exception's type and message, the message cut until the detail fits in 4 KB."""
-    message = str(error)
+    return _fitted({"type": type(error).__name__}, "message", str(error))
+
+
+def _fitted(detail: dict[str, object], name: str, text: str | None) -> str:
+    """The detail as JSON with `text` added as `name`, the text cut until it fits in 4 KB."""
     while True:
-        detail = json.dumps(
-            {"type": type(error).__name__, "message": message},
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        if len(detail.encode()) <= MAX_DETAIL_BYTES or not message:
-            return detail
-        message = message[: len(message) * 3 // 4]
+        if text is not None:
+            detail[name] = text
+        encoded = json.dumps(detail, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded.encode()) <= MAX_DETAIL_BYTES or not text:
+            return encoded
+        text = text[: len(text) * 3 // 4]
 
 
 def _invalid_detail(invalid: InvalidEvent) -> str:

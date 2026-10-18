@@ -7,14 +7,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-from confluent_kafka import KafkaError, TopicPartition
+from confluent_kafka import KafkaError, KafkaException, TopicPartition
 
 from order_consumer.adapters.inbound.poll_loop import PausedTooLong, PollLoop
 from order_consumer.application.ports import Delivery
-from order_consumer.application.processing import Outcome, Stopped
+from order_consumer.application.processing import Outcome, Stopped, StopReason
 from order_consumer.health import Beat
 
-WRONG_TOKEN = Stopped("systemic: fulfilment", "401 Unauthorized")
+WRONG_TOKEN = Stopped(StopReason.FULFILMENT, "401 Unauthorized")
 
 
 @dataclass
@@ -76,6 +76,7 @@ class FakeKafkaConsumer:
     assigned: list[int] = field(default_factory=lambda: [0, 1, 2])
     paused: set[int] = field(default_factory=set)
     callbacks: dict[str, Any] = field(default_factory=dict)
+    strays_allowed: bool = False  # a record may arrive from a paused partition
 
     def subscribe(self, topics: list[str], **callbacks: Any) -> None:
         self.callbacks = callbacks
@@ -94,7 +95,7 @@ class FakeKafkaConsumer:
         if callable(turn):
             turn(self)
             return None
-        if turn is not None:
+        if turn is not None and turn.error() is None and not self.strays_allowed:
             assert turn.partition() not in self.paused, "a paused partition returned a message"
         return turn
 
@@ -112,6 +113,9 @@ class FakeKafkaConsumer:
         numbers = sorted(tp.partition for tp in partitions)
         self.paused |= set(numbers)
         self.timeline.append(f"pause {numbers}")
+
+    def seek(self, partition: TopicPartition) -> None:
+        self.timeline.append(f"seek {partition.partition}/{partition.offset}")
 
     def resume(self, partitions: list[TopicPartition]) -> None:
         numbers = sorted(tp.partition for tp in partitions)
@@ -360,3 +364,23 @@ def test_the_heartbeat_is_written_on_every_turn_and_allows_for_processing() -> N
     result = run([None, FakeMessage(7), None], processing_budget=110.0)
 
     assert [beat.due_within for beat in result.beats] == [30.0, 30.0, 30.0, 140.0, 30.0, 30.0]
+
+
+def test_a_fatal_client_error_while_paused_is_raised() -> None:
+    fatal = KafkaError(KafkaError._FATAL, fatal=True)
+
+    with pytest.raises(KafkaException):
+        run([FakeMessage(7), FakeMessage(0, error_=fatal)], outcomes={7: [WRONG_TOKEN]})
+
+
+def test_a_record_reaching_a_paused_instance_is_put_back_unprocessed() -> None:
+    """None should arrive; if one does, skipping it would let a later commit pass over it."""
+
+    def allow_strays(kafka: FakeKafkaConsumer) -> None:
+        kafka.strays_allowed = True
+
+    result = run(
+        [FakeMessage(7), allow_strays, FakeMessage(9, partition_=1)], outcomes={7: [WRONG_TOKEN]}
+    )
+
+    assert result.timeline == ["processed 7 at 1", "pause [0, 1, 2]", "seek 1/9", "pause [1]"]

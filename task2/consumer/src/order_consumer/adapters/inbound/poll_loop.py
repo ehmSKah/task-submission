@@ -80,10 +80,6 @@ def _headers(message: Message) -> tuple[tuple[str, bytes | None], ...]:
     )
 
 
-def _keys(partitions: Iterable[TopicPartition]) -> set[tuple[str, int]]:
-    return {(partition.topic, partition.partition) for partition in partitions}
-
-
 def _partition_labels(partitions: Iterable[TopicPartition]) -> list[str]:
     return [f"{partition.topic}/{partition.partition}" for partition in partitions]
 
@@ -130,7 +126,7 @@ class PollLoop:
         self._processing_budget = processing_budget
         self._on_close = list(on_close)
         self._paused: _Paused | None = None
-        self._partitions: set[tuple[str, int]] | None = None  # None until the first assignment
+        self._partitions: set[str] | None = None  # e.g. "orders/0"; None until the first assignment
         self._assigned_at = 0.0  # monotonic, the latest assignment
         self._started = False  # has held partitions, or been knowingly idle
 
@@ -147,7 +143,12 @@ class PollLoop:
             while not self._stop.is_set():
                 self._beat()
                 message = self._consumer.poll(1.0)
-                if self._paused is not None:
+                error = None if message is None else message.error()
+                if error is not None:
+                    self._client_error(error)
+                elif self._paused is not None:
+                    if message is not None:
+                        self._hold_back(message)
                     self._probe_if_due(self._paused)
                 elif message is not None:
                     self._handle(message)
@@ -156,56 +157,70 @@ class PollLoop:
             for close in self._on_close:
                 close()
 
-    def _handle(self, message: Message) -> None:
-        error = message.error()
-        if error is not None:
-            if error.fatal():
-                raise KafkaException(error)
-            if error.code() != KafkaError._PARTITION_EOF:
-                log.warning("kafka.error", reason=error.str())
-            return
+    @staticmethod
+    def _client_error(error: KafkaError) -> None:
+        if error.fatal():
+            raise KafkaException(error)
+        if error.code() != KafkaError._PARTITION_EOF:
+            log.warning("kafka.error", reason=error.str())
 
+    def _handle(self, message: Message) -> None:
         delivery = _delivery(message, self._topic)
+        stopped = self._process(message, delivery)
+        if stopped is not None:
+            now = self._clock.monotonic()
+            self._consumer.pause(self._consumer.assignment())
+            self._paused = _Paused(message, delivery, stopped, now, now + self._probe_interval)
+            self._log_paused(stopped)
+
+    def _process(self, message: Message, delivery: Delivery) -> Stopped | None:
+        """Commits once the message reached a terminal outcome; otherwise says why it stopped."""
         self._beat(busy=True)
         match self._processor.process(delivery):
             case Outcome():
                 self._consumer.commit(message=message, asynchronous=False)
+                return None
             case Stopped() as stopped:
-                self._pause(message, delivery, stopped)
+                return stopped
 
-    def _pause(self, message: Message, delivery: Delivery, stopped: Stopped) -> None:
-        now = self._clock.monotonic()
-        self._consumer.pause(self._consumer.assignment())
-        self._paused = _Paused(message, delivery, stopped, now, now + self._probe_interval)
-        log.warning("consumer.paused", reason=stopped.reason, error=stopped.error)
+    @staticmethod
+    def _log_paused(stopped: Stopped) -> None:
+        log.warning("consumer.paused", reason=stopped.reason.value, error=stopped.error)
+
+    def _hold_back(self, message: Message) -> None:
+        """A record reaching a paused instance (none should) is put back and its partition paused:
+        skipping it would let a later commit pass over it."""
+        partition = TopicPartition(message.topic() or self._topic, message.partition() or 0)
+        self._consumer.seek(
+            TopicPartition(partition.topic, partition.partition, message.offset() or 0)
+        )
+        self._consumer.pause([partition])
 
     def _probe_if_due(self, paused: _Paused) -> None:
         """The message in hand is tried again, fully: processing is idempotent (ADR 0004)."""
         now = self._clock.monotonic()
         if self._exit_after is not None and now - paused.since >= self._exit_after:
             raise PausedTooLong(
-                f"paused for {now - paused.since:.0f} s ({paused.stopped.reason}): "
+                f"paused for {now - paused.since:.0f} s ({paused.stopped.reason.value}): "
                 f"{paused.stopped.error}"
             )
         if now < paused.next_probe:
             return
-        self._beat(busy=True)
-        match self._processor.process(paused.delivery):
-            case Outcome():
-                self._consumer.commit(message=paused.message, asynchronous=False)
-                self._consumer.resume(self._consumer.assignment())
-                self._paused = None
-                log.info("consumer.resumed", reason=paused.stopped.reason)
-            case Stopped() as stopped:
-                if stopped.reason != paused.stopped.reason:
-                    log.warning("consumer.paused", reason=stopped.reason, error=stopped.error)
-                paused.stopped = stopped
-                paused.next_probe = self._clock.monotonic() + self._probe_interval
+        stopped = self._process(paused.message, paused.delivery)
+        if stopped is None:
+            self._consumer.resume(self._consumer.assignment())
+            self._paused = None
+            log.info("consumer.resumed", reason=paused.stopped.reason.value)
+            return
+        if stopped.reason is not paused.stopped.reason:
+            self._log_paused(stopped)
+        paused.stopped = stopped
+        paused.next_probe = self._clock.monotonic() + self._probe_interval
 
     def _beat(self, busy: bool = False) -> None:
         """A busy loop doesn't poll until the message is processed: the beat says how long that
         may take, so it isn't mistaken for a stuck one (ADR 0007)."""
-        partitions = tuple(f"{topic}/{number}" for topic, number in sorted(self._partitions or ()))
+        partitions = tuple(sorted(self._partitions or ()))
         due_within = TURN_GRACE_SECONDS + (self._processing_budget if busy else 0.0)
         self._started = self._started or (
             self._partitions is not None
@@ -218,14 +233,15 @@ class PollLoop:
             beat = Beat("starting", partitions, due_within)
         elif self._paused is not None:
             stopped = self._paused.stopped
-            beat = Beat("paused", partitions, due_within, stopped.reason, stopped.error)
+            beat = Beat("paused", partitions, due_within, stopped.reason.value, stopped.error)
         else:
             beat = Beat("running", partitions, due_within)
         self._heartbeat(beat)
 
     def _assigned(self, _consumer: Any, partitions: list[TopicPartition]) -> None:
-        log.info("partitions.assigned", partitions=_partition_labels(partitions))
-        self._partitions = (self._partitions or set()) | _keys(partitions)
+        labels = _partition_labels(partitions)
+        log.info("partitions.assigned", partitions=labels)
+        self._partitions = (self._partitions or set()) | set(labels)
         self._assigned_at = self._clock.monotonic()
         if self._paused is not None and partitions:
             # Assigned here rather than after the callback, so they can be paused before the
@@ -234,9 +250,12 @@ class PollLoop:
             self._consumer.pause(partitions)
 
     def _revoked(self, _consumer: Any, partitions: list[TopicPartition]) -> None:
-        log.info("partitions.revoked", partitions=_partition_labels(partitions))
-        self._partitions = (self._partitions or set()) - _keys(partitions)
+        log.info("partitions.revoked", partitions=self._forget(partitions))
 
     def _lost(self, _consumer: Any, partitions: list[TopicPartition]) -> None:
-        log.warning("partitions.lost", partitions=_partition_labels(partitions))
-        self._partitions = (self._partitions or set()) - _keys(partitions)
+        log.warning("partitions.lost", partitions=self._forget(partitions))
+
+    def _forget(self, partitions: list[TopicPartition]) -> list[str]:
+        labels = _partition_labels(partitions)
+        self._partitions = (self._partitions or set()) - set(labels)
+        return labels

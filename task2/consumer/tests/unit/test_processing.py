@@ -26,7 +26,7 @@ from order_consumer.application.ports import (
     Stored,
     StoreUnavailable,
 )
-from order_consumer.application.processing import OrderProcessor, Outcome, Stopped
+from order_consumer.application.processing import OrderProcessor, Outcome, Stopped, StopReason
 from order_consumer.application.retries import Jitter, RetryPolicy
 from order_consumer.domain.downstream import DownstreamRequest
 from order_consumer.domain.event import OrderPlacedReader
@@ -427,7 +427,7 @@ def test_an_unwritable_dead_letter_stops_processing() -> None:
 
     outcome = harness.process(order_placed_event(ORDER_ID, EVENT_ID, total=1))
 
-    assert outcome == Stopped("systemic: dead-letter-topic-unwritable", "not confirmed in time")
+    assert outcome == Stopped(StopReason.DEAD_LETTER_TOPIC_UNWRITABLE, "not confirmed in time")
 
 
 def test_a_failed_handover_with_an_unwritable_dead_letter_stops_after_marking_it_failed() -> None:
@@ -560,7 +560,7 @@ def test_a_systemic_answer_stops_processing_with_nothing_written(status: int) ->
 
     outcome = harness.process()
 
-    assert outcome == Stopped("systemic: fulfilment", f"{status} Wrong")
+    assert outcome == Stopped(StopReason.FULFILMENT, f"{status} Wrong")
     assert len(harness.fulfilment.requests) == 2, "no attempt after the systemic answer"
     assert harness.store.orders[ORDER_ID].handover_status == "awaiting_handover"
     assert harness.dead_letters.written == []
@@ -582,7 +582,7 @@ def test_an_unavailable_database_stops_processing_before_the_handover() -> None:
 
     outcome = harness.process()
 
-    assert outcome == Stopped("systemic: postgres-unavailable", "connection refused")
+    assert outcome == Stopped(StopReason.POSTGRES_UNAVAILABLE, "connection refused")
     assert harness.fulfilment.requests == []
     assert harness.dead_letters.written == []
 
@@ -591,7 +591,7 @@ def test_a_database_lost_after_the_handover_stops_processing_until_it_is_recorde
     """The probe repeats the handover, and the fulfilment service replays it (ADR 0003, 0004)."""
     harness = ProcessorWithFakes(store=FakeOrderStore(unavailable={"record_handover"}))
 
-    assert harness.process() == Stopped("systemic: postgres-unavailable", "connection refused")
+    assert harness.process() == Stopped(StopReason.POSTGRES_UNAVAILABLE, "connection refused")
     assert harness.store.orders[ORDER_ID].handover_status == "awaiting_handover"
 
     harness.store.unavailable.clear()
