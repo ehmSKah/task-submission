@@ -1,0 +1,88 @@
+# task2: static checks, unit tests with the core coverage gate, then the integration tests against
+# the Compose stack it ships (ADR 0009). Runs only when task2 or this workflow changes.
+name: task2-ci
+
+on:
+  push:
+    paths:
+      - "task2/**"
+      - ".github/workflows/task2-ci.yml"
+  pull_request:
+    paths:
+      - "task2/**"
+      - ".github/workflows/task2-ci.yml"
+
+concurrency:
+  group: task2-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: task2
+
+# Reports and logs are uploaded only once none of the stack's fake secrets appears in them, which
+# proves the logging rules also hold for what leaves the runner (ADR 0008, 0009).
+env:
+  SECRET_PATTERN: "local-dev-(token|owner|consumer|postgres)"
+
+jobs:
+  static:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: task2/uv.lock
+      - run: uv sync --frozen
+      - run: make lint
+
+  unit:
+    needs: [static]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: task2/uv.lock
+      - run: uv sync --frozen
+      - run: make test-unit PYTEST_ARGS=--junitxml=build/junit-unit.xml
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: task2-unit-reports
+          path: task2/build/junit-unit.xml
+
+  integration:
+    needs: [unit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: task2/uv.lock
+      - run: uv sync --frozen
+      - run: make up
+      - run: make test-integration PYTEST_ARGS=--junitxml=build/junit-integration.xml
+      - if: failure()
+        run: |
+          mkdir -p build
+          docker compose logs --no-color > build/compose.log 2>&1 || true
+          docker compose ps --all > build/compose-ps.txt 2>&1 || true
+      - id: no-secrets
+        if: always()
+        run: '! grep -rlE "$SECRET_PATTERN" build/'
+      - if: always() && steps.no-secrets.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: task2-integration-run
+          path: |
+            task2/build/junit-integration.xml
+            task2/build/compose.log
+            task2/build/compose-ps.txt
+          if-no-files-found: ignore
+      - if: always()
+        run: make clean
