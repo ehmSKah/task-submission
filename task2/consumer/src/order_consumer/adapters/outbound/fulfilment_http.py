@@ -72,7 +72,7 @@ class HttpFulfilmentClient:
         status = response.status_code
         match response_class(status):
             case ResponseClass.SUCCESS:
-                return HandoverResult(fulfilment_order_id=response.json()["id"])
+                return HandoverResult(fulfilment_order_id=_fulfilment_order_id(response))
             case ResponseClass.TRANSIENT as transient:
                 raise HandoverFailed(
                     transient,
@@ -126,6 +126,22 @@ class HttpFulfilmentClient:
 
     def close(self) -> None:
         self._client.close()
+
+
+def _fulfilment_order_id(response: httpx.Response) -> str:
+    """Without it there is no proof of the handover; a service answering like this is broken for
+    every order, so the answer is systemic."""
+    try:
+        fulfilment_order_id = response.json()["id"]
+    except (ValueError, TypeError, KeyError):
+        fulfilment_order_id = None
+    if not isinstance(fulfilment_order_id, str) or not fulfilment_order_id:
+        raise HandoverFailed(
+            ResponseClass.SYSTEMIC,
+            f"{_status_line(response)} without a fulfilment order id",
+            status=response.status_code,
+        )
+    return fulfilment_order_id
 
 
 def _status_line(response: httpx.Response) -> str:

@@ -96,6 +96,23 @@ def test_every_other_answer_fails_the_attempt_with_its_response_class(
     assert failure.error == f"{status} {httpx.codes.get_reason_phrase(status)}"
 
 
+@pytest.mark.parametrize(
+    "body",
+    [pytest.param(b"created", id="not JSON"), pytest.param(b'{"ref": "x"}', id="without an id")],
+)
+def test_a_201_without_a_fulfilment_order_id_is_systemic(
+    stub: respx.MockRouter, client: HttpFulfilmentClient, body: bytes
+) -> None:
+    """Without the id there is no proof of the handover, and the service answers every order
+    this way: it is broken, not the order."""
+    stub.post("/fulfilment-orders").respond(201, content=body)
+
+    failure = failure_of(client)
+
+    assert failure.response_class is ResponseClass.SYSTEMIC
+    assert failure.status == 201
+
+
 def test_a_redirect_is_not_followed(stub: respx.MockRouter, client: HttpFulfilmentClient) -> None:
     route = stub.post("/fulfilment-orders").respond(307, headers={"Location": "/elsewhere"})
     elsewhere = stub.post("/elsewhere").respond(201, json={"id": "ful-1"})

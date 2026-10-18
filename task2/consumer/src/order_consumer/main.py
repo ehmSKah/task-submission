@@ -84,8 +84,9 @@ def main() -> int:
     try:
         build(settings, stop).run()
     except SystemicFailure as failure:
-        # Nothing was committed: the event waits in Kafka and is processed again after the
-        # restart. Pausing in place instead belongs to the flood guard (ADR 0006).
+        # A stopgap: nothing was committed, so the event waits in Kafka and is processed again
+        # after the restart. ADR 0006 decides to pause in place and probe instead (*Stopping*);
+        # exiting like this flaps during a long outage, as that ADR explains.
         log.error("consumer.stopped", exit_code=EXIT_CRASH, reason=str(failure))
         return EXIT_CRASH
     log.info("consumer.stopped", exit_code=EXIT_CLEAN)

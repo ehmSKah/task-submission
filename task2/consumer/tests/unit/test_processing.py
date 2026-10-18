@@ -352,6 +352,20 @@ def test_a_retry_after_up_to_15_seconds_is_waited_for_instead_of_the_backoff() -
     assert harness.clock.sleeps == [12.0, 0.0]
 
 
+def test_a_retry_after_of_exactly_15_seconds_is_still_waited_for() -> None:
+    harness = ProcessorWithFakes(failures=[unavailable(retry_after=15.0)])
+
+    assert harness.process() is Outcome.HANDED_OVER
+    assert harness.clock.sleeps == [15.0]
+
+
+def test_a_retry_after_just_over_15_seconds_ends_the_retries() -> None:
+    harness = ProcessorWithFakes(failures=[unavailable(retry_after=16.0)])
+
+    assert harness.process() is Outcome.DEAD_LETTERED
+    assert harness.clock.sleeps == []
+
+
 def test_a_retry_after_longer_than_15_seconds_ends_the_retries_at_once() -> None:
     harness = ProcessorWithFakes(failures=[unavailable(retry_after=120.0)])
 

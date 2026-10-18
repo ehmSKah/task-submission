@@ -35,7 +35,7 @@ The correlation id is the **trace id of a W3C Trace Context `traceparent` header
 
 | Always | Per message, once known | Per handover attempt |
 |---|---|---|
-| `timestamp` (UTC), `level`, `event`, `service` (`order-consumer`, `fulfilment-stub`), `instance` | `trace_id`, `span_id`, `trace_source`, `topic`, `partition`, `offset`, `event_id`, `order_id` | `attempt`, `max_attempts`, `response_class` (`success`, `transient`, `rejected`, `systemic`), `status`, `error` (the status line or the exception type, never a body), `duration_ms` |
+| `timestamp` (UTC), `level`, `event`, `service` (`order-consumer`, `fulfilment-stub`), `instance` | `trace_id`, `span_id`, `trace_source`, `topic`, `partition`, `offset`, `event_id`, `order_id` | `attempt`, `max_attempts`, `response_class` (`success`, `transient`, `rejected`, `systemic`), `status`, `error` (the status line, the exception type and message, or the passed deadline; never a body), `duration_ms` |
 
 **Events** (fixed names, part of the contract)
 

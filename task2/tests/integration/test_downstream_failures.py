@@ -1,8 +1,8 @@
 """The assignment's fourth test category: downstream failures (ADR 0003, 0006, 0009).
 
 The stub's fault rules make the fulfilment service fail for one order at a time. Transient failures
-are retried until the handover completes or the retries run out; a rejected order is dead-lettered
-at once; a systemic answer stops the consumer with nothing committed.
+are retried until the handover completes or the retries run out; a refused handover is
+dead-lettered at once; a systemic answer stops the consumer with nothing committed.
 """
 
 import dataclasses
@@ -159,7 +159,7 @@ def test_a_timeout_then_409_in_progress_then_the_replay_end_with_one_fulfilment_
     gets the replay. Each side has about a second of margin."""
     settings = dataclasses.replace(
         consumer_settings,
-        fulfilment_timeouts=FulfilmentTimeouts(connect=1.0, read=1.0, attempt_deadline=2.0),
+        fulfilment_timeouts=SHORT_TIMEOUTS,
         retry_policy=RetryPolicy(backoff_base=1.0),
     )
     order_id = uuid4()

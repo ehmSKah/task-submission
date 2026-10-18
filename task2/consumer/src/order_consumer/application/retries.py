@@ -1,8 +1,8 @@
 """One handover with bounded retries (ADR 0003, 0006).
 
 The message stays in hand while it is retried: transient failures are retried with exponential
-backoff and full jitter, a rejected order is given up at once, and a systemic failure stops
-everything.
+backoff and full jitter, a handover the fulfilment service refuses is given up at once, and a
+systemic failure stops everything.
 """
 
 import random

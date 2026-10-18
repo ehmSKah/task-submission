@@ -287,7 +287,7 @@ def test_the_request_journal_can_be_filtered_by_order(client: TestClient) -> Non
     assert [entry["externalReference"] for entry in journal.json()] == [OTHER_ORDER_ID]
 
 
-@pytest.mark.parametrize("status", [503, 429, 500, 400, 404, 302, 200])
+@pytest.mark.parametrize("status", [503, 429, 500, 400, 404, 302, 200, 204, 599])
 def test_a_status_rule_answers_with_that_status_and_creates_nothing(
     client: TestClient, status: int
 ) -> None:

@@ -156,13 +156,18 @@ def problem(
     )
 
 
-def injected(rule: FaultRule) -> Response:
-    """The answer a status rule asks for. Some statuses must not carry a body."""
+def injected_answer(rule: FaultRule) -> Response:
+    """The answer a status rule asks for, for any code, known or not. Some statuses must not
+    carry a body."""
     assert rule.status is not None
     headers = {"Retry-After": rule.retry_after} if rule.retry_after is not None else None
     if rule.status in (HTTPStatus.NO_CONTENT, HTTPStatus.NOT_MODIFIED):
         return Response(status_code=rule.status, headers=headers)
-    return problem(rule.status, HTTPStatus(rule.status).phrase, headers, detail="Injected fault.")
+    try:
+        title = HTTPStatus(rule.status).phrase
+    except ValueError:
+        title = "Injected Fault"
+    return problem(rule.status, title, headers, detail="Injected fault.")
 
 
 def contract_violations(error: OpenAPIError) -> dict[str, Any]:
@@ -248,7 +253,7 @@ def create_app(
             if rule.drop_connection:
                 return DroppedConnection()
             entry["status"] = rule.status
-            return injected(rule)
+            return injected_answer(rule)
         if not claimed:
             return answer_repeat(record, body_fingerprint, entry)
 
