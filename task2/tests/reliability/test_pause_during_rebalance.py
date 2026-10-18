@@ -32,6 +32,7 @@ from tests.reliability.containers import (
     log_lines,
     partitions_of,
     scale,
+    start_postgres,
     stop,
 )
 from tests.support.events import order_placed_event
@@ -49,7 +50,7 @@ def postgres_down() -> Iterator[None]:
     try:
         yield
     finally:
-        compose("up", "--detach", "--wait", "--no-deps", "--no-recreate", "postgres")
+        start_postgres()
 
 
 def wait_until_paused(container: str) -> None:
@@ -86,7 +87,7 @@ def test_a_message_held_by_a_paused_instance_that_stops_is_processed_by_the_othe
         assert exit_code(stopped) == 0
         [stopping] = log_lines(stopped, "consumer.stopping")[-1:]
         assert stopping["paused"] == PAUSED_FOR_POSTGRES
-        held = order_ids[int(stopping["uncommitted"].split("/")[1].split("@")[0])]
+        held = order_ids[stopping["partition"]]
         wait_until_stable(STACK_CONSUMERS, members=1)
         assert heartbeat(survivor)["state"] == "paused", "the pause outlives the rebalance"
 

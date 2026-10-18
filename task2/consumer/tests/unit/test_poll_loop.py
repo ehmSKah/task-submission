@@ -65,6 +65,13 @@ class FakeClock:
         return self.now
 
 
+@dataclass(frozen=True)
+class Committed:
+    """A partition a commit returned, of which the loop reads only the error."""
+
+    error: KafkaError | None
+
+
 # What one poll brings: a message, nothing, or something happening meanwhile, such as a rebalance
 # (a callback, run inside poll) or a signal, followed by the message it returns, if any.
 type Turn = FakeMessage | Callable[["FakeKafkaConsumer"], FakeMessage | None] | None
@@ -84,7 +91,9 @@ class FakeKafkaConsumer:
     paused: set[int] = field(default_factory=set)
     callbacks: dict[str, Any] = field(default_factory=dict)
     strays_allowed: bool = False  # a record may arrive from a paused partition
-    commit_errors: dict[int, KafkaError] = field(default_factory=dict)  # by offset
+    commit_errors: dict[int, KafkaError] = field(default_factory=dict)  # by offset, raised
+    # By offset: the commit itself succeeds, but reports this error for the message's partition.
+    partition_errors: dict[int, KafkaError] = field(default_factory=dict)
 
     def subscribe(self, topics: list[str], **callbacks: Any) -> None:
         self.callbacks = callbacks
@@ -106,12 +115,16 @@ class FakeKafkaConsumer:
             assert turn.partition() not in self.paused, "a paused partition returned a message"
         return turn
 
-    def commit(self, message: FakeMessage, asynchronous: bool) -> None:
+    def commit(self, message: FakeMessage, asynchronous: bool) -> list[Committed]:
+        """Like the client: raises when the commit fails, and otherwise returns each partition
+        committed, with any error the broker reported for it."""
         assert asynchronous is False, "commits must be synchronous"
         if message.offset() in self.commit_errors:
             self.timeline.append(f"commit {message.offset()} failed")
             raise KafkaException(self.commit_errors[message.offset()])
-        self.timeline.append(f"commit {message.offset()}")
+        error = self.partition_errors.get(message.offset())
+        self.timeline.append(f"commit {message.offset()}" + (" failed" if error else ""))
+        return [Committed(error)]
 
     def assignment(self) -> list[TopicPartition]:
         return [TopicPartition("orders", partition) for partition in self.assigned]
@@ -269,6 +282,20 @@ def test_a_refused_commit_is_logged_and_the_loop_goes_on() -> None:
     assert "UNKNOWN_MEMBER_ID" in failed["reason"]
 
 
+def test_a_commit_refused_for_the_messages_partition_is_logged_and_the_loop_goes_on() -> None:
+    def refused_for_partition(kafka: FakeKafkaConsumer) -> FakeMessage:
+        kafka.partition_errors[7] = KafkaError(KafkaError.ILLEGAL_GENERATION)
+        return FakeMessage(7)
+
+    with capture_logs() as lines:
+        result = run([refused_for_partition, FakeMessage(8)])
+
+    assert result.timeline[-2:] == ["processed 8 at 2", "commit 8"]
+    [failed] = [line for line in lines if line["event"] == "commit.failed"]
+    assert (failed["partition"], failed["offset"]) == (0, 7)
+    assert "ILLEGAL_GENERATION" in failed["reason"]
+
+
 def test_a_fatal_commit_error_is_raised() -> None:
     def fatal(kafka: FakeKafkaConsumer) -> FakeMessage:
         kafka.commit_errors[7] = KafkaError(KafkaError._FATAL, fatal=True)
@@ -304,20 +331,22 @@ def test_a_stop_during_a_message_lets_it_finish_commits_it_and_closes() -> None:
     assert result.timeline == ["processed 7 at 1", "commit 7"]
     assert result.kafka.turns == [FakeMessage(8)], "no further message is started"
     [stopping] = [line for line in lines if line["event"] == "consumer.stopping"]
-    assert stopping["uncommitted"] is None
+    assert (stopping["topic"], stopping["partition"], stopping["offset"]) == (None, None, None)
 
 
 def test_a_message_whose_retries_the_stop_cut_short_stays_uncommitted() -> None:
     with capture_logs() as lines:
         result = run(
             [FakeMessage(7), FakeMessage(8)],
-            outcomes={7: [Interrupted(attempts=1)]},
+            outcomes={7: [Interrupted()]},
             stop_at=(7, 1),
         )
 
     assert result.timeline == ["processed 7 at 1"]
     [stopping] = [line for line in lines if line["event"] == "consumer.stopping"]
-    assert stopping["uncommitted"] == "orders/0@7", "redelivered to the next owner"
+    assert (stopping["topic"], stopping["partition"], stopping["offset"]) == ("orders", 0, 7), (
+        "redelivered to the next owner"
+    )
 
 
 def test_a_message_fetched_by_the_poll_the_stop_arrived_in_is_not_started() -> None:
@@ -336,7 +365,7 @@ def test_a_paused_instance_stops_at_its_next_turn_without_probing() -> None:
     assert result.timeline == ["processed 7 at 1", "pause [0, 1, 2]"]
     assert len(result.kafka.turns) == 30
     [stopping] = [line for line in lines if line["event"] == "consumer.stopping"]
-    assert stopping["uncommitted"] == "orders/0@7"
+    assert (stopping["topic"], stopping["partition"], stopping["offset"]) == ("orders", 0, 7)
     assert stopping["paused"] == "systemic: fulfilment"
     assert not [line for line in lines if line["event"] == "message.dropped"], (
         "closing leaves the group: what was in hand is not dropped, only left uncommitted"
@@ -347,13 +376,13 @@ def test_a_probe_the_stop_cut_short_leaves_the_message_uncommitted() -> None:
     with capture_logs() as lines:
         result = run(
             [FakeMessage(7), *[None] * 40],
-            outcomes={7: [WRONG_TOKEN, Interrupted(attempts=1)]},
+            outcomes={7: [WRONG_TOKEN, Interrupted()]},
             stop_at=(7, 2),
         )
 
     assert result.timeline == ["processed 7 at 1", "pause [0, 1, 2]", "processed 7 at 31"]
     [stopping] = [line for line in lines if line["event"] == "consumer.stopping"]
-    assert stopping["uncommitted"] == "orders/0@7"
+    assert (stopping["topic"], stopping["partition"], stopping["offset"]) == ("orders", 0, 7)
 
 
 def test_a_stopped_outcome_pauses_every_partition_without_committing_and_keeps_polling() -> None:

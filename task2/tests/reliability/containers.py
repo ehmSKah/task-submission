@@ -57,6 +57,10 @@ def scale(instances: int, wait: bool = True) -> None:
     compose(*args, *(["--wait"] if wait else []), "consumer")
 
 
+def start_postgres() -> None:
+    compose("up", "--detach", "--wait", "--no-deps", "--no-recreate", "postgres")
+
+
 def consumers(status: str = "running") -> list[str]:
     """The consumer containers' names in this state, oldest first."""
     names = compose("ps", "--status", status, "--format", "{{.Name}}", "consumer").split()

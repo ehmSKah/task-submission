@@ -11,6 +11,8 @@ from tests.reliability.containers import (
     compose,
     consumers,
     docker,
+    scale,
+    start_postgres,
     wait_until_healthy,
 )
 
@@ -19,33 +21,17 @@ from tests.reliability.containers import (
 def suite_timings() -> Iterator[None]:
     """Recreates the consumers with the override, and with the stack's own settings again once
     the suite has run, so a reviewer's stack is left as `make up` made it."""
-    compose(
-        "up",
-        "--detach",
-        "--wait",
-        "--no-deps",
-        "--scale",
-        f"consumer={STACK_INSTANCES}",
-        "consumer",
-    )
+    compose("up", "--detach", "--wait", "--no-deps", "consumer")
     yield
     compose("up", "--detach", "--wait", "--no-deps", "consumer", files=STACK_FILES)
 
 
 @pytest.fixture(autouse=True)
 def stack_restored() -> Iterator[None]:
-    """Whatever a test stopped, paused or scaled down runs again, healthy, before the next."""
+    """Whatever a test stopped, froze or scaled down runs again, healthy, before the next."""
     yield
     for frozen in consumers(status="paused"):
         docker("unpause", frozen)
-    compose("up", "--detach", "--wait", "--no-deps", "--no-recreate", "postgres")
-    compose(
-        "up",
-        "--detach",
-        "--no-deps",
-        "--no-recreate",
-        "--scale",
-        f"consumer={STACK_INSTANCES}",
-        "consumer",
-    )
+    start_postgres()
+    scale(STACK_INSTANCES, wait=False)
     wait_until_healthy()

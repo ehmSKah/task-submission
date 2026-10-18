@@ -81,8 +81,6 @@ class Interrupted:
     after the attempt in progress. Nothing is committed or dead-lettered; the order stays awaiting
     its handover, and the redelivered message completes it (ADR 0004, 0007)."""
 
-    attempts: int
-
 
 @dataclass
 class _Progress:
@@ -201,7 +199,7 @@ class OrderProcessor:
             if isinstance(handover, GaveUp):
                 return self._give_up(delivery, event.event_id, order.order_id, handover)
             if isinstance(handover, Abandoned):
-                return Interrupted(handover.attempts)
+                return Interrupted()
             fulfilment_order_id = handover.result.fulfilment_order_id
             self._store.record_handover(order.order_id, fulfilment_order_id)
             log.info(

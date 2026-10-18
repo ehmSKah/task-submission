@@ -85,7 +85,9 @@ def test_a_session_timeout_above_the_poll_interval_is_refused() -> None:
     """The client refuses it too, but only once the consumer is created: as a crash."""
     env = REQUIRED | {"KAFKA_SESSION_TIMEOUT_MS": "300001"}
 
-    with pytest.raises(ConfigurationError, match=r"KAFKA_SESSION_TIMEOUT_MS .* max\.poll"):
+    with pytest.raises(
+        ConfigurationError, match=r"KAFKA_SESSION_TIMEOUT_MS .* KAFKA_MAX_POLL_INTERVAL_MS"
+    ):
         Settings.from_env(env)
 
 

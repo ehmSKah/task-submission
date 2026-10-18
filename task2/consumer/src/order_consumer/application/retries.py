@@ -103,8 +103,6 @@ class SystemicAnswer:
 class Abandoned:
     """A stop was requested before the next attempt: the handover is neither done nor given up."""
 
-    attempts: int
-
 
 class HandoverRetries:
     def __init__(
@@ -148,8 +146,8 @@ class HandoverRetries:
                 return GaveUp(DeadLetterReason.RETRIES_EXHAUSTED, attempt, failure)
             if retry_after is None:
                 retry_after = policy.backoff(attempt, self._jitter)
-            if self._stop.is_set() or self._stop.wait(retry_after):
-                return Abandoned(attempt)
+            if self._stop.wait(retry_after):
+                return Abandoned()
 
     def _attempt(self, request: DownstreamRequest, attempt: int) -> HandedOver | HandoverFailed:
         """One attempt in a span of its own, carrying what its log line says (ADR 0008); the

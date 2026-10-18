@@ -1,5 +1,5 @@
-"""A second instance joining while one is working through a backlog (ADR 0007): the cooperative
-protocol moves only the partitions the newcomer takes, and nothing is lost or duplicated.
+"""A second instance joining while one is working through a backlog (ADR 0007): the partitions
+split 2 + 1, and nothing is lost or duplicated.
 
 Scales the stack's consumer containers, so it runs on its own, after the integration tests.
 """
@@ -25,8 +25,8 @@ from tests.support.events import order_placed_event
 pytestmark = pytest.mark.reliability
 
 ORDERS = 50
-# One instance takes about 15 s for the backlog, so the second joins halfway.
-HANDOVER_DELAY_SECONDS = 0.3
+# One instance takes about 25 s for the backlog, so the second joins well before the end.
+HANDOVER_DELAY_SECONDS = 0.5
 
 
 def test_scaling_from_one_to_two_instances_under_load_splits_the_partitions_two_and_one() -> None:
@@ -44,9 +44,9 @@ def test_scaling_from_one_to_two_instances_under_load_splits_the_partitions_two_
         what="a quarter of the backlog to be handed over",
     )
 
-    scale(2)
+    scale(2, wait=False)
 
-    assert handed_over_count(order_ids) < ORDERS, "the second instance must join under load"
+    assert handed_over_count(order_ids) < ORDERS // 2, "the second instance must join under load"
     wait_until_stable(STACK_CONSUMERS, members=2)
     split = sorted(
         len(member.assignment.topic_partitions)

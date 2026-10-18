@@ -20,7 +20,7 @@ from tests.integration.stack import (
     records,
     wait_until_stable,
 )
-from tests.reliability.containers import STACK_INSTANCES, TASK2, compose
+from tests.reliability.containers import STACK_INSTANCES, TASK2, compose, start_postgres
 from tests.support.events import order_placed_event
 
 pytestmark = pytest.mark.reliability
@@ -86,7 +86,7 @@ def test_a_consumer_pauses_while_postgres_is_down_and_resumes_when_it_is_back() 
         assert sum(lag(STACK_CONSUMERS).values()) >= 1, "nothing committed"
         assert dead_letters_for(order_id) == [], "nothing dead-lettered"
     finally:
-        compose("up", "--detach", "--wait", "--no-deps", "--no-recreate", "postgres")
+        start_postgres()
 
     assert_nothing_lost([order_id], STACK_CONSUMERS, timeout=RECOVERY_TIMEOUT)
     assert_nothing_duplicated([order_id])

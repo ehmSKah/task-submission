@@ -124,7 +124,7 @@ class Settings:
         if settings.kafka_session_timeout_ms > settings.kafka_max_poll_interval_ms:
             raise ConfigurationError(
                 f"KAFKA_SESSION_TIMEOUT_MS ({settings.kafka_session_timeout_ms}) exceeds "
-                f"max.poll.interval.ms ({settings.kafka_max_poll_interval_ms})"
+                f"KAFKA_MAX_POLL_INTERVAL_MS ({settings.kafka_max_poll_interval_ms})"
             )
         if not settings.event_schema.is_file():
             raise ConfigurationError(f"ORDER_EVENT_SCHEMA {settings.event_schema} is not a file")

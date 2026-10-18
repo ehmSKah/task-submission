@@ -100,13 +100,16 @@ def _partition_labels(partitions: Iterable[TopicPartition]) -> list[str]:
     return [f"{partition.topic}/{partition.partition}" for partition in partitions]
 
 
-def _partition_of(message: Message, topic: str) -> TopicPartition:
-    return TopicPartition(message.topic() or topic, message.partition() or 0)
-
-
-def _message_label(message: Message, topic: str) -> str:
-    """Where a message was read, e.g. "orders/0@7"."""
-    return f"{message.topic() or topic}/{message.partition() or 0}@{message.offset() or 0}"
+def _position(message: Message | None, topic: str) -> dict[str, Any]:
+    """Where a message was read, as the per-message log fields of ADR 0008; all None without
+    one."""
+    if message is None:
+        return {"topic": None, "partition": None, "offset": None}
+    return {
+        "topic": message.topic() or topic,
+        "partition": message.partition() or 0,
+        "offset": message.offset() or 0,
+    }
 
 
 class PausedTooLong(Exception):
@@ -194,11 +197,11 @@ class PollLoop:
         """The step in progress is finished; anything not terminal stays uncommitted and is
         redelivered to the instance that takes over (ADR 0007)."""
         paused = self._paused
-        in_hand = paused.message if paused is not None else self._interrupted
+        uncommitted = paused.message if paused is not None else self._interrupted
         log.info(
             "consumer.stopping",
             paused=None if paused is None else paused.stopped.reason.value,
-            uncommitted=None if in_hand is None else _message_label(in_hand, self._topic),
+            **_position(uncommitted, self._topic),
         )
 
     @staticmethod
@@ -258,16 +261,17 @@ class PollLoop:
         instance while it was busy) is logged and skipped: the new owner processes the message
         from the committed offset, which is harmless (ADR 0004, 0007)."""
         try:
-            self._consumer.commit(message=message, asynchronous=False)
+            committed = self._consumer.commit(message=message, asynchronous=False) or []
         except KafkaException as failure:
-            error: KafkaError = failure.args[0]
+            errors: list[KafkaError] = [failure.args[0]]
+        else:
+            errors = [partition.error for partition in committed if partition.error is not None]
+        for error in errors:
             if error.fatal():
-                raise
+                raise KafkaException(error)
             log.error(
                 "commit.failed",
-                topic=message.topic() or self._topic,
-                partition=message.partition() or 0,
-                offset=message.offset() or 0,
+                **_position(message, self._topic),
                 reason=f"{error.name()}: {error.str()}",
             )
 
@@ -297,15 +301,11 @@ class PollLoop:
         if paused.message is None:
             # Nothing left to probe with: the next message from the remaining partitions is the
             # probe, and pauses the instance again if the cause is still there.
-            self._consumer.resume(self._consumer.assignment())
-            self._paused = None
-            log.info("consumer.resumed", reason=paused.stopped.reason.value)
+            self._resume(paused)
             return
         stopped = self._process(paused.message)
         if stopped is None:
-            self._consumer.resume(self._consumer.assignment())
-            self._paused = None
-            log.info("consumer.resumed", reason=paused.stopped.reason.value)
+            self._resume(paused)
             return
         if isinstance(stopped, Interrupted):
             return  # still paused, with the message in hand: the loop is stopping
@@ -313,6 +313,11 @@ class PollLoop:
             self._log_paused(stopped)
         paused.stopped = stopped
         paused.next_probe = self._clock.monotonic() + self._probe_interval
+
+    def _resume(self, paused: _Paused) -> None:
+        self._consumer.resume(self._consumer.assignment())
+        self._paused = None
+        log.info("consumer.resumed", reason=paused.stopped.reason.value)
 
     def _beat(self, busy: bool = False) -> None:
         """A busy loop doesn't poll until the message is processed: the beat says how long that
@@ -347,28 +352,20 @@ class PollLoop:
             self._consumer.pause(partitions)
 
     def _revoked(self, _consumer: Any, partitions: list[TopicPartition]) -> None:
-        log.info("partitions.revoked", partitions=self._forget(partitions, "revoked"))
+        log.info("partitions.revoked", partitions=self._forget(partitions, reason="revoked"))
 
     def _lost(self, _consumer: Any, partitions: list[TopicPartition]) -> None:
-        log.warning("partitions.lost", partitions=self._forget(partitions, "lost"))
+        log.warning("partitions.lost", partitions=self._forget(partitions, reason="lost"))
 
-    def _forget(self, partitions: list[TopicPartition], why: str) -> list[str]:
+    def _forget(self, partitions: list[TopicPartition], *, reason: str) -> list[str]:
         """Never commits: every finished message is committed already, and only a paused instance
         holds one that isn't. If its partition moved, it is dropped; the new owner processes it
         from the committed offset (ADR 0007)."""
         labels = _partition_labels(partitions)
         self._partitions = (self._partitions or set()) - set(labels)
         paused = self._paused
-        if paused is not None and paused.message is not None:
-            in_hand = paused.message
-            [in_hand_partition] = _partition_labels([_partition_of(in_hand, self._topic)])
-            if in_hand_partition in labels:
-                log.warning(
-                    "message.dropped",
-                    topic=in_hand.topic() or self._topic,
-                    partition=in_hand.partition() or 0,
-                    offset=in_hand.offset() or 0,
-                    reason=why,
-                )
-                paused.message = None
+        in_hand = _position(None if paused is None else paused.message, self._topic)
+        if paused is not None and f"{in_hand['topic']}/{in_hand['partition']}" in labels:
+            log.warning("message.dropped", **in_hand, reason=reason)
+            paused.message = None
         return labels

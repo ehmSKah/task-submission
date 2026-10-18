@@ -182,6 +182,8 @@ class FakeStop:
         return self.requested_at is not None and self.clock.now >= self.requested_at
 
     def wait(self, timeout: float) -> bool:
+        if self.is_set():
+            return True
         if self.requested_at is not None and self.requested_at < self.clock.now + timeout:
             self.clock.sleep(max(0.0, self.requested_at - self.clock.now))
             return True
