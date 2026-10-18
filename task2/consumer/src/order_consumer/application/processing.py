@@ -1,7 +1,7 @@
 """Processing one delivery: read it, then store, hand over and record (ADR 0004), skip a duplicate
 (ADR 0002), set an invalid or conflicting event, a failed handover or an unexpected exception aside
 as a dead letter, or ask for consumption to stop when the failure is not about this message
-(ADR 0006).
+(ADR 0006), or end a handover's retries early when shutdown is requested (ADR 0007).
 
 Returns an Outcome and never commits: only the poll loop commits, according to the outcome
 (ADR 0005).
@@ -28,10 +28,12 @@ from order_consumer.application.ports import (
     HandoverStatus,
     OrderStore,
     ReceivedEvent,
+    StopSignal,
     Stored,
     StoreUnavailable,
 )
 from order_consumer.application.retries import (
+    Abandoned,
     GaveUp,
     HandoverRetries,
     Jitter,
@@ -73,6 +75,15 @@ class Stopped:
     error: str  # what happened, e.g. "401 Unauthorized"
 
 
+@dataclass(frozen=True, slots=True)
+class Interrupted:
+    """Not terminal: shutdown was requested while the handover was being retried, so it ended
+    after the attempt in progress. Nothing is committed or dead-lettered; the order stays awaiting
+    its handover, and the redelivered message completes it (ADR 0004, 0007)."""
+
+    attempts: int
+
+
 @dataclass
 class _Progress:
     """What is known about the delivery in hand, for its dead letter should an unexpected exception
@@ -104,14 +115,15 @@ class OrderProcessor:
         policy: RetryPolicy,
         clock: Clock,
         jitter: Jitter,
+        stop: StopSignal,
     ) -> None:
         self._store = store
         self._fulfilment = _CountingAttempts(fulfilment)
-        self._handover = HandoverRetries(self._fulfilment, policy, clock, jitter)
+        self._handover = HandoverRetries(self._fulfilment, policy, clock, jitter, stop)
         self._dead_letters = dead_letters
         self._reader = reader
 
-    def process(self, delivery: Delivery) -> Outcome | Stopped:
+    def process(self, delivery: Delivery) -> Outcome | Stopped | Interrupted:
         with structlog.contextvars.bound_contextvars(
             topic=delivery.topic,
             partition=delivery.partition,
@@ -126,7 +138,7 @@ class OrderProcessor:
             except Exception as error:
                 return self._set_aside_unexpected(delivery, progress, error)
 
-    def _process(self, delivery: Delivery, progress: _Progress) -> Outcome | Stopped:
+    def _process(self, delivery: Delivery, progress: _Progress) -> Outcome | Stopped | Interrupted:
         try:
             event = self._reader.read(delivery.key, delivery.value)
         except InvalidEvent as invalid:
@@ -188,6 +200,8 @@ class OrderProcessor:
                 return Stopped(StopReason.FULFILMENT, handover.failure.error)
             if isinstance(handover, GaveUp):
                 return self._give_up(delivery, event.event_id, order.order_id, handover)
+            if isinstance(handover, Abandoned):
+                return Interrupted(handover.attempts)
             fulfilment_order_id = handover.result.fulfilment_order_id
             self._store.record_handover(order.order_id, fulfilment_order_id)
             log.info(

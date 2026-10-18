@@ -157,13 +157,21 @@ class FulfilmentClient(Protocol):
 
 
 class Clock(Protocol):
-    """Time for retry backoff (ADR 0005), so it is tested without sleeping."""
+    """Time for the poll loop and the flood guard (ADR 0005), so it is tested without waiting."""
 
     def monotonic(self) -> float:
         """Seconds from an arbitrary start, never going backwards."""
 
-    def sleep(self, seconds: float) -> None:
-        """Returns once the time has passed."""
+
+class StopSignal(Protocol):
+    """Shutdown requested (ADR 0007): the flag the signal handler sets, a `threading.Event`.
+    Retry backoff waits on it, so a stop cuts a wait short."""
+
+    def is_set(self) -> bool:
+        """Whether a stop has been requested."""
+
+    def wait(self, timeout: float) -> bool:
+        """Returns once the time has passed, or earlier once a stop is requested; True then."""
 
 
 class DeadLetterReason(Enum):

@@ -70,6 +70,7 @@ def build(
             policy=settings.retry_policy,
             clock=clock,
             jitter=jitter or full_jitter(random.Random()),
+            stop=stop,
         ),
         stop,
         clock=clock,

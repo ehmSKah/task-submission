@@ -32,7 +32,13 @@ from order_consumer.application.ports import (
     StoreUnavailable,
     TraceSource,
 )
-from order_consumer.application.processing import OrderProcessor, Outcome, Stopped, StopReason
+from order_consumer.application.processing import (
+    Interrupted,
+    OrderProcessor,
+    Outcome,
+    Stopped,
+    StopReason,
+)
 from order_consumer.application.retries import Jitter, RetryPolicy
 from order_consumer.domain.downstream import DownstreamRequest
 from order_consumer.domain.event import OrderPlacedReader
@@ -151,7 +157,7 @@ class FakeFulfilment:
 
 @dataclass
 class FakeClock:
-    """Time passes only when the processor waits."""
+    """Time passes only when the processor waits: on the stop flag, see FakeStop."""
 
     now: float = 1000.0
     sleeps: list[float] = field(default_factory=list)
@@ -162,6 +168,25 @@ class FakeClock:
     def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
         self.now += seconds
+
+
+@dataclass
+class FakeStop:
+    """The shutdown flag on the fake clock: requested from `requested_at` on, if ever. A wait ends
+    as soon as it is requested."""
+
+    clock: FakeClock
+    requested_at: float | None = None
+
+    def is_set(self) -> bool:
+        return self.requested_at is not None and self.clock.now >= self.requested_at
+
+    def wait(self, timeout: float) -> bool:
+        if self.requested_at is not None and self.requested_at < self.clock.now + timeout:
+            self.clock.sleep(max(0.0, self.requested_at - self.clock.now))
+            return True
+        self.clock.sleep(timeout)
+        return False
 
 
 def longest(cap: float) -> float:
@@ -197,9 +222,11 @@ class ProcessorWithFakes:
     clock: FakeClock = field(default_factory=FakeClock)
     fulfilment: FakeFulfilment = field(init=False)
     processor: OrderProcessor = field(init=False)
+    stop: FakeStop = field(init=False)
 
     def __post_init__(self) -> None:
         self.dead_letters.store = self.store
+        self.stop = FakeStop(self.clock)
         self.fulfilment = FakeFulfilment(self.store, self.failures)
         self.processor = OrderProcessor(
             self.store,
@@ -209,11 +236,12 @@ class ProcessorWithFakes:
             policy=self.policy,
             clock=self.clock,
             jitter=self.jitter,
+            stop=self.stop,
         )
 
     def process(
         self, value: bytes | None = None, message_trace: MessageTrace = CONTINUED
-    ) -> Outcome:
+    ) -> Outcome | Stopped | Interrupted:
         return self.processor.process(delivery(value, message_trace))
 
 
@@ -486,6 +514,44 @@ def test_a_handover_that_keeps_failing_ends_failed_and_dead_lettered() -> None:
     assert dead_letter.attempts == 5
     assert (dead_letter.event_id, dead_letter.order_id) == (EVENT_ID, ORDER_ID)
     assert json.loads(dead_letter.detail) == {"status": None, "error": "ReadTimeout"}
+
+
+def test_a_stop_requested_during_a_backoff_ends_the_wait_and_starts_no_further_attempt() -> None:
+    """Shutdown finishes the attempt in progress, not the whole retry sequence (ADR 0007)."""
+    harness = ProcessorWithFakes(failures=[unavailable(), unavailable()])
+    harness.stop.requested_at = harness.clock.now + 1.5  # during the 2 s wait before attempt 3
+
+    outcome = harness.process()
+
+    assert isinstance(outcome, Interrupted)
+    assert len(harness.fulfilment.requests) == 2
+    assert harness.clock.sleeps == [1.0, 0.5], "the second wait ended when the stop came"
+    assert harness.store.orders[ORDER_ID].handover_status == "awaiting_handover"
+    assert harness.dead_letters.written == []
+
+
+def test_a_stop_requested_during_an_attempt_lets_it_finish_and_starts_no_retry() -> None:
+    harness = ProcessorWithFakes(failures=[unavailable()])
+    harness.stop.requested_at = harness.clock.now
+
+    outcome = harness.process()
+
+    assert isinstance(outcome, Interrupted)
+    assert len(harness.fulfilment.requests) == 1
+    assert harness.clock.sleeps == []
+    assert harness.store.orders[ORDER_ID].handover_status == "awaiting_handover"
+    assert harness.dead_letters.written == []
+
+
+def test_an_attempt_finishing_after_a_stop_request_still_reaches_its_outcome() -> None:
+    """A handover that succeeds, or is refused, is terminal: the poll loop commits it."""
+    rejected = HandoverFailed(ResponseClass.REJECTED, "422 Unprocessable Content", status=422)
+    succeeding, refused = ProcessorWithFakes(), ProcessorWithFakes(failures=[rejected])
+    for harness in (succeeding, refused):
+        harness.stop.requested_at = harness.clock.now
+
+    assert succeeding.process() is Outcome.HANDED_OVER
+    assert refused.process() is Outcome.DEAD_LETTERED
 
 
 @pytest.mark.parametrize(

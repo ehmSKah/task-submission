@@ -2,7 +2,8 @@
 
 The message stays in hand while it is retried: transient failures are retried with exponential
 backoff and full jitter, a handover the fulfilment service refuses is given up at once, and a
-systemic answer ends the attempts at once, for the caller to stop consumption.
+systemic answer ends the attempts at once, for the caller to stop consumption. A shutdown lets the
+attempt in progress finish and starts no further one (ADR 0007).
 """
 
 import random
@@ -19,6 +20,7 @@ from order_consumer.application.ports import (
     HandoverFailed,
     HandoverResult,
     ResponseClass,
+    StopSignal,
 )
 from order_consumer.domain.downstream import DownstreamRequest
 
@@ -97,17 +99,33 @@ class SystemicAnswer:
     attempts: int
 
 
+@dataclass(frozen=True, slots=True)
+class Abandoned:
+    """A stop was requested before the next attempt: the handover is neither done nor given up."""
+
+    attempts: int
+
+
 class HandoverRetries:
     def __init__(
-        self, fulfilment: FulfilmentClient, policy: RetryPolicy, clock: Clock, jitter: Jitter
+        self,
+        fulfilment: FulfilmentClient,
+        policy: RetryPolicy,
+        clock: Clock,
+        jitter: Jitter,
+        stop: StopSignal,
     ) -> None:
         self._fulfilment = fulfilment
         self._policy = policy
         self._clock = clock
         self._jitter = jitter
+        self._stop = stop
 
-    def hand_over(self, request: DownstreamRequest) -> HandedOver | GaveUp | SystemicAnswer:
-        """Ends at the first systemic answer, without further attempts."""
+    def hand_over(
+        self, request: DownstreamRequest
+    ) -> HandedOver | GaveUp | SystemicAnswer | Abandoned:
+        """Ends at the first systemic answer, without further attempts, and at a stop request
+        before the next attempt."""
         policy = self._policy
         attempt = 0
         while True:
@@ -130,7 +148,8 @@ class HandoverRetries:
                 return GaveUp(DeadLetterReason.RETRIES_EXHAUSTED, attempt, failure)
             if retry_after is None:
                 retry_after = policy.backoff(attempt, self._jitter)
-            self._clock.sleep(retry_after)
+            if self._stop.is_set() or self._stop.wait(retry_after):
+                return Abandoned(attempt)
 
     def _attempt(self, request: DownstreamRequest, attempt: int) -> HandedOver | HandoverFailed:
         """One attempt in a span of its own, carrying what its log line says (ADR 0008); the
