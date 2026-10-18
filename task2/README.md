@@ -47,7 +47,7 @@ Needs Docker, `make` and `uv` ([versions](#tools)).
 git clone <this repository> && cd <clone>/task2
 make up       # builds the images, starts the stack and waits until both consumers consume
 make demo     # the assignment's four test categories, live, in about 20 seconds
-make test     # every suite: unit, integration, reliability (about 10 minutes)
+make test     # every suite: unit, integration, reliability (about 6 minutes)
 make down     # stops the stack; `make clean` also deletes its data
 ```
 
