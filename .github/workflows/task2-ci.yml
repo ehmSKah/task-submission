@@ -1,5 +1,6 @@
 # task2: static checks, unit tests with the core coverage gate, then the integration and reliability
-# tests against the Compose stack it ships (ADR 0009). Runs only when task2 or this workflow changes.
+# tests against the Compose stack it ships, and the demo (ADR 0009). Runs only when task2 or this
+# workflow changes.
 name: task2-ci
 
 on:
@@ -68,6 +69,8 @@ jobs:
       - run: make up
       - run: make test-integration PYTEST_ARGS=--junitxml=build/junit-integration.xml
       - run: make test-reliability PYTEST_ARGS=--junitxml=build/junit-reliability.xml
+      # The reviewer's first command, as a smoke test: fails at the first unexpected outcome.
+      - run: make demo
       - if: failure()
         run: |
           mkdir -p build
