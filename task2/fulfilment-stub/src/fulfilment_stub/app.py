@@ -1,7 +1,8 @@
 """The fulfilment stub: the fulfilment service's contract, plus a control side for tests (ADR 0003).
 
 Requests are checked against the OpenAPI file, the contract's only definition, so a `400` from the
-stub means the consumer's mapping produced something the contract doesn't allow.
+stub means the consumer's mapping produced something the contract doesn't allow. Each request to
+the contract side continues the caller's trace (ADR 0008).
 """
 
 import asyncio
@@ -21,6 +22,8 @@ from fastapi.responses import JSONResponse
 from openapi_core import OpenAPI
 from openapi_core.contrib.starlette import StarletteOpenAPIRequest
 from openapi_core.exceptions import OpenAPIError
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.trace import TracerProvider
 from pydantic import BaseModel, Field, model_validator
 from starlette.types import Receive, Scope, Send
 
@@ -193,13 +196,23 @@ def create_app(
     spec_path: Path,
     token: str,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    tracer_provider: TracerProvider | None = None,
 ) -> FastAPI:
-    """`sleep` is how a delay rule waits; tests replace it to hold a request in progress."""
+    """`sleep` is how a delay rule waits; tests replace it to hold a request in progress. Spans go
+    to `tracer_provider`, or the global one."""
     openapi = OpenAPI.from_file_path(str(spec_path))
     journal = Journal()
     idempotency_records: dict[str, IdempotencyRecord] = {}
     fault_rules = FaultRules()
     app = FastAPI(title="Fulfilment stub", openapi_url=None, docs_url=None, redoc_url=None)
+    # One server span per contract request. Health checks and the control side would only bury
+    # the handovers; headers are not recorded.
+    FastAPIInstrumentor.instrument_app(
+        app,
+        tracer_provider=tracer_provider,
+        excluded_urls="/health,/_control",
+        exclude_spans=["receive", "send"],
+    )
 
     def bearer_matches(request: Request) -> bool:
         scheme, _, presented = request.headers.get("authorization", "").partition(" ")
@@ -211,6 +224,7 @@ def create_app(
         entry: dict[str, Any] = {
             "receivedAt": datetime.now(UTC).isoformat(),
             "idempotencyKey": request.headers.get("idempotency-key"),
+            "traceparent": request.headers.get("traceparent"),
             "externalReference": None,
             "status": None,  # until the request is answered; never if its connection is dropped
             "fault": None,  # the rule applied to it
