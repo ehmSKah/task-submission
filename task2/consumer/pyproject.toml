@@ -6,7 +6,9 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "confluent-kafka>=2.16",
     "httpx>=0.28",
+    "jsonschema>=4.26",
     "psycopg[binary]>=3.2",
+    "rfc3339-validator>=0.1.4",
     "structlog>=25.4",
 ]
 
