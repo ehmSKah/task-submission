@@ -14,6 +14,7 @@ from order_consumer.config import Settings
 from order_consumer.main import build
 from tests.integration.stack import (
     CONSUMER_DATABASE_URL,
+    EVENT_SCHEMA,
     FULFILMENT_TOKEN,
     KAFKA_BOOTSTRAP,
     STUB_URL,
@@ -29,8 +30,10 @@ def json_logs() -> None:
 
 @pytest.fixture
 def topic() -> str:
+    """The test's own topic, and its dead-letter topic named after it."""
     name = f"orders.test.{uuid4().hex[:12]}"
     create_topic(name)
+    create_topic(f"{name}.dlt")
     return name
 
 
@@ -44,6 +47,8 @@ def consumer(topic: str) -> Iterator[ConsumerGroup]:
         database_url=CONSUMER_DATABASE_URL,
         fulfilment_base_url=STUB_URL,
         fulfilment_token=FULFILMENT_TOKEN,
+        kafka_dead_letter_topic=f"{topic}.dlt",
+        event_schema=EVENT_SCHEMA,
     )
     stop = threading.Event()
     failures: list[BaseException] = []
@@ -57,7 +62,7 @@ def consumer(topic: str) -> Iterator[ConsumerGroup]:
 
     thread = threading.Thread(target=run, name=f"consumer-{group}", daemon=True)
     thread.start()
-    yield ConsumerGroup(topic=topic, group=group)
+    yield ConsumerGroup(topic=topic, group=group, dead_letter_topic=f"{topic}.dlt")
     stop.set()
     thread.join(timeout=15)
     assert not thread.is_alive(), "the in-process consumer did not stop"

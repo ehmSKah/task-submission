@@ -1,5 +1,6 @@
 """The assignment's first test category: successful processing (ADR 0009)."""
 
+import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -13,7 +14,7 @@ from tests.integration.stack import (
     publish,
     stored_order,
 )
-from tests.support.events import order_placed_event
+from tests.support.events import order_placed_envelope, order_placed_event
 
 pytestmark = pytest.mark.integration
 
@@ -42,3 +43,17 @@ def test_several_events_across_partitions_are_all_handed_over_once(
 
     assert_nothing_lost(order_ids, consumer)
     assert_nothing_duplicated(order_ids)
+
+
+def test_unknown_fields_inside_v1_are_ignored_and_not_handed_over(consumer: ConsumerGroup) -> None:
+    """The stub rejects fields outside the fulfilment contract, so a handover proves they were
+    dropped and the request had the fulfilment service's own shape."""
+    order_id = uuid4()
+    lines = [{"sku": "KNE-ESC-0042", "quantity": 2, "unitPrice": 2249, "giftWrap": True}]
+    envelope = order_placed_envelope(order_id, promoCode="AUTUMN", lines=lines)
+    envelope["partitionkey"] = "an extension attribute"
+
+    publish(consumer.topic, [(order_id, json.dumps(envelope).encode())])
+
+    assert_nothing_lost([order_id], consumer)
+    assert_nothing_duplicated([order_id])
