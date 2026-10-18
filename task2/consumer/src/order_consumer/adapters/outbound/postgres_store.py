@@ -1,5 +1,7 @@
 """The order store on PostgreSQL, in plain SQL (ADR 0002)."""
 
+import time
+from collections.abc import Callable
 from datetime import UTC
 from typing import Literal
 from uuid import UUID
@@ -13,12 +15,22 @@ from order_consumer.application.ports import (
     HandoverStatus,
     ReceivedEvent,
     Stored,
+    StoreUnavailable,
 )
 from order_consumer.domain.order import Order, OrderLine
 
+# Three quick reconnects within about 5 s before the database counts as unavailable (ADR 0006).
+RECONNECT_DELAYS_SECONDS = (0.5, 1.0, 2.0)
+CONNECT_TIMEOUT_SECONDS = 2
+
 
 class PostgresOrderStore:
-    """One connection per consumer process: processing is one message at a time (ADR 0005)."""
+    """One connection per consumer process: processing is one message at a time (ADR 0005).
+
+    A step that fails because the database can't be reached, or the connection broke, is done
+    again on a new connection. Every step is safe to repeat, even after a commit whose answer was
+    lost (ADR 0002, 0004).
+    """
 
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
@@ -26,15 +38,34 @@ class PostgresOrderStore:
 
     def _connect(self) -> psycopg.Connection:
         if self._connection is None or self._connection.closed:
-            self._connection = psycopg.connect(self._database_url)
+            self._connection = psycopg.connect(
+                self._database_url, connect_timeout=CONNECT_TIMEOUT_SECONDS
+            )
             # Explicit, since storing relies on it: see `_stored_version`.
             self._connection.isolation_level = IsolationLevel.READ_COMMITTED
         return self._connection
 
+    def _reconnecting[T](self, step: Callable[[psycopg.Connection], T]) -> T:
+        for delay in RECONNECT_DELAYS_SECONDS:
+            try:
+                return step(self._connect())
+            except psycopg.OperationalError:
+                self.close()
+                time.sleep(delay)
+        try:
+            return step(self._connect())
+        except psycopg.OperationalError as error:
+            self.close()
+            raise StoreUnavailable(f"{type(error).__name__}: {error}") from error
+
     def store_new(
         self, order: Order, event: ReceivedEvent
     ) -> Stored | AlreadyStored | EventIdTaken:
-        connection = self._connect()
+        return self._reconnecting(lambda connection: self._store_new(connection, order, event))
+
+    def _store_new(
+        self, connection: psycopg.Connection, order: Order, event: ReceivedEvent
+    ) -> Stored | AlreadyStored | EventIdTaken:
         with connection.transaction() as transaction, connection.cursor() as cursor:
             # The primary key is the final guard: of two consumers racing on one order, the second
             # waits for the first to commit, then stores nothing (ADR 0002).
@@ -75,9 +106,11 @@ class PostgresOrderStore:
         return EventIdTaken()
 
     def record_duplicate(self, order_id: UUID, event: ReceivedEvent) -> None:
-        connection = self._connect()
-        with connection.transaction(), connection.cursor() as cursor:
-            self._record(cursor, order_id, event, "duplicate")
+        def record(connection: psycopg.Connection) -> None:
+            with connection.transaction(), connection.cursor() as cursor:
+                self._record(cursor, order_id, event, "duplicate")
+
+        self._reconnecting(record)
 
     @staticmethod
     def _record(
@@ -141,7 +174,14 @@ class PostgresOrderStore:
         )
 
     def record_handover(self, order_id: UUID, fulfilment_order_id: str) -> None:
-        connection = self._connect()
+        self._reconnecting(
+            lambda connection: self._record_handover(connection, order_id, fulfilment_order_id)
+        )
+
+    @staticmethod
+    def _record_handover(
+        connection: psycopg.Connection, order_id: UUID, fulfilment_order_id: str
+    ) -> None:
         with connection.transaction():
             connection.execute(
                 """
@@ -155,7 +195,10 @@ class PostgresOrderStore:
             )
 
     def mark_handover_failed(self, order_id: UUID) -> None:
-        connection = self._connect()
+        self._reconnecting(lambda connection: self._mark_handover_failed(connection, order_id))
+
+    @staticmethod
+    def _mark_handover_failed(connection: psycopg.Connection, order_id: UUID) -> None:
         with connection.transaction():
             # Never over a completed handover: of two consumers racing on one order, the one that
             # gave up must not undo the other's success.
@@ -171,3 +214,4 @@ class PostgresOrderStore:
     def close(self) -> None:
         if self._connection is not None:
             self._connection.close()
+            self._connection = None

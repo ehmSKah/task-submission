@@ -15,6 +15,7 @@ from order_consumer.application.ports import (
     AlreadyStored,
     DeadLetter,
     DeadLetterReason,
+    DeadLetterUnwritable,
     Delivery,
     EventIdTaken,
     HandoverFailed,
@@ -23,9 +24,10 @@ from order_consumer.application.ports import (
     ReceivedEvent,
     ResponseClass,
     Stored,
+    StoreUnavailable,
 )
-from order_consumer.application.processing import OrderProcessor, Outcome
-from order_consumer.application.retries import Jitter, RetryPolicy, SystemicFailure
+from order_consumer.application.processing import OrderProcessor, Outcome, Stopped
+from order_consumer.application.retries import Jitter, RetryPolicy
 from order_consumer.domain.downstream import DownstreamRequest
 from order_consumer.domain.event import OrderPlacedReader
 from order_consumer.domain.order import Order, to_order
@@ -70,10 +72,17 @@ class FakeOrderStore:
     orders: dict[UUID, StoredOrder] = field(default_factory=dict)
     processed: dict[UUID, ProcessedEvent] = field(default_factory=dict)
     stored: list[UUID] = field(default_factory=list)
+    # The steps that find the database unavailable, e.g. {"record_handover"}.
+    unavailable: set[str] = field(default_factory=set)
+
+    def _reach(self, step: str) -> None:
+        if step in self.unavailable:
+            raise StoreUnavailable("connection refused")
 
     def store_new(
         self, order: Order, event: ReceivedEvent
     ) -> Stored | AlreadyStored | EventIdTaken:
+        self._reach("store_new")
         existing = self.orders.get(order.order_id)
         recorded = self.processed.get(event.event_id)
         if recorded is not None and recorded.order_id != order.order_id:
@@ -94,6 +103,7 @@ class FakeOrderStore:
         self.processed.setdefault(event.event_id, ProcessedEvent(order_id, "duplicate", event))
 
     def record_handover(self, order_id: UUID, fulfilment_order_id: str) -> None:
+        self._reach("record_handover")
         stored = self.orders[order_id]
         stored.handover_status = "handed_over"
         stored.fulfilment_order_id = fulfilment_order_id
@@ -113,7 +123,7 @@ class FakeFulfilment:
     """Answers each attempt with the next scripted failure, and succeeds once they are used up."""
 
     store: FakeOrderStore
-    failures: list[HandoverFailed] = field(default_factory=list)
+    failures: list[Exception] = field(default_factory=list)
     requests: list[DownstreamRequest] = field(default_factory=list)
     stored_before_handover: list[bool] = field(default_factory=list)
 
@@ -155,7 +165,7 @@ class FakeDeadLetterSink:
 
     def write(self, dead_letter: DeadLetter) -> None:
         if self.fails:
-            raise RuntimeError("the dead-letter topic can't be written")
+            raise DeadLetterUnwritable("not confirmed in time")
         stored = self.store.orders.get(ORDER_ID) if self.store is not None else None
         self.handover_status_when_written.append(stored.handover_status if stored else None)
         self.written.append(dead_letter)
@@ -167,7 +177,7 @@ class ProcessorWithFakes:
 
     store: FakeOrderStore = field(default_factory=FakeOrderStore)
     dead_letters: FakeDeadLetterSink = field(default_factory=FakeDeadLetterSink)
-    failures: list[HandoverFailed] = field(default_factory=list)
+    failures: list[Exception] = field(default_factory=list)
     policy: RetryPolicy = field(default_factory=RetryPolicy)
     jitter: Jitter = longest
     clock: FakeClock = field(default_factory=FakeClock)
@@ -410,11 +420,25 @@ def test_the_detail_of_a_dead_letter_fits_in_4_kb_and_still_counts_every_error()
     assert 0 < len(detail["errors"]) < 20
 
 
-def test_an_invalid_event_has_no_outcome_while_its_dead_letter_cant_be_written() -> None:
+def test_an_unwritable_dead_letter_stops_processing() -> None:
+    """Nothing can be committed without the dead letter, so the only safe move is to stop
+    (ADR 0006)."""
     harness = ProcessorWithFakes(dead_letters=FakeDeadLetterSink(fails=True))
 
-    with pytest.raises(RuntimeError):
-        harness.process(order_placed_event(ORDER_ID, EVENT_ID, total=1))
+    outcome = harness.process(order_placed_event(ORDER_ID, EVENT_ID, total=1))
+
+    assert outcome == Stopped("systemic: dead-letter-topic-unwritable", "not confirmed in time")
+
+
+def test_a_failed_handover_with_an_unwritable_dead_letter_stops_after_marking_it_failed() -> None:
+    harness = ProcessorWithFakes(
+        failures=[unavailable(retry_after=60.0)], dead_letters=FakeDeadLetterSink(fails=True)
+    )
+
+    outcome = harness.process()
+
+    assert isinstance(outcome, Stopped)
+    assert harness.store.orders[ORDER_ID].handover_status == "handover_failed"
 
 
 def test_two_transient_failures_then_success_end_handed_over_after_three_attempts() -> None:
@@ -529,16 +553,15 @@ def test_a_retry_after_longer_than_15_seconds_ends_the_retries_at_once() -> None
 
 @pytest.mark.parametrize("status", [401, 404, 302, 200])
 def test_a_systemic_answer_stops_processing_with_nothing_written(status: int) -> None:
-    """Stopping consumption on it is the poll loop's business; until it pauses, the failure
-    propagates, so nothing is committed and the event is redelivered (ADR 0003, 0006)."""
-    systemic = HandoverFailed(ResponseClass.SYSTEMIC, f"{status}", status=status)
+    """Wrong for every order, not this one: the outcome asks the poll loop to stop, with nothing
+    committed and nothing dead-lettered (ADR 0003, 0006)."""
+    systemic = HandoverFailed(ResponseClass.SYSTEMIC, f"{status} Wrong", status=status)
     harness = ProcessorWithFakes(failures=[unavailable(), systemic])
 
-    with pytest.raises(SystemicFailure) as stopped:
-        harness.process()
+    outcome = harness.process()
 
-    assert stopped.value.attempts == 2, "no attempt after the systemic answer"
-    assert stopped.value.failure is systemic
+    assert outcome == Stopped("systemic: fulfilment", f"{status} Wrong")
+    assert len(harness.fulfilment.requests) == 2, "no attempt after the systemic answer"
     assert harness.store.orders[ORDER_ID].handover_status == "awaiting_handover"
     assert harness.dead_letters.written == []
 
@@ -552,3 +575,88 @@ def test_a_redelivery_completes_a_failed_handover() -> None:
     assert outcome is Outcome.HANDED_OVER
     assert harness.store.orders[ORDER_ID].handover_status == "handed_over"
     assert harness.store.stored == [ORDER_ID]
+
+
+def test_an_unavailable_database_stops_processing_before_the_handover() -> None:
+    harness = ProcessorWithFakes(store=FakeOrderStore(unavailable={"store_new"}))
+
+    outcome = harness.process()
+
+    assert outcome == Stopped("systemic: postgres-unavailable", "connection refused")
+    assert harness.fulfilment.requests == []
+    assert harness.dead_letters.written == []
+
+
+def test_a_database_lost_after_the_handover_stops_processing_until_it_is_recorded() -> None:
+    """The probe repeats the handover, and the fulfilment service replays it (ADR 0003, 0004)."""
+    harness = ProcessorWithFakes(store=FakeOrderStore(unavailable={"record_handover"}))
+
+    assert harness.process() == Stopped("systemic: postgres-unavailable", "connection refused")
+    assert harness.store.orders[ORDER_ID].handover_status == "awaiting_handover"
+
+    harness.store.unavailable.clear()
+    assert harness.process() is Outcome.HANDED_OVER
+    assert len(harness.fulfilment.requests) == 2
+
+
+def test_an_unexpected_exception_is_dead_lettered_with_its_type_and_message() -> None:
+    """A bug for this message: crashing would restart onto it forever (ADR 0006). The stack trace
+    goes to the error log only."""
+    harness = ProcessorWithFakes(failures=[KeyError("lines")])
+
+    with capture_logs() as logs:
+        outcome = harness.process()
+
+    assert outcome is Outcome.DEAD_LETTERED
+    [dead_letter] = harness.dead_letters.written
+    assert dead_letter.delivery == delivery()
+    assert dead_letter.reason is DeadLetterReason.UNEXPECTED
+    assert json.loads(dead_letter.detail) == {"type": "KeyError", "message": "'lines'"}
+    assert dead_letter.attempts == 1
+    assert (dead_letter.event_id, dead_letter.order_id) == (EVENT_ID, ORDER_ID)
+    [error] = [entry for entry in logs if entry["event"] == "processing.unexpected_error"]
+    assert error["log_level"] == "error"
+    assert error["exc_info"] is True
+
+
+def test_processing_goes_on_after_an_unexpected_exception() -> None:
+    harness = ProcessorWithFakes(failures=[RuntimeError("a bug")])
+    harness.process()
+
+    assert harness.process() is Outcome.HANDED_OVER
+
+
+def test_an_unexpected_exception_before_the_event_could_be_read_is_dead_lettered_without_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = ProcessorWithFakes()
+
+    def broken_reader(*_args: object) -> None:
+        raise ValueError("a bug in the reader")
+
+    monkeypatch.setattr(reader, "read", broken_reader)
+    outcome = harness.process()
+
+    assert outcome is Outcome.DEAD_LETTERED
+    [dead_letter] = harness.dead_letters.written
+    assert (dead_letter.event_id, dead_letter.order_id, dead_letter.attempts) == (None, None, 0)
+
+
+def test_the_detail_of_an_unexpected_dead_letter_fits_in_4_kb() -> None:
+    harness = ProcessorWithFakes(failures=[RuntimeError("€" * 3000)])
+
+    harness.process()
+
+    [dead_letter] = harness.dead_letters.written
+    assert len(dead_letter.detail.encode()) <= 4096
+    detail = json.loads(dead_letter.detail)
+    assert detail["type"] == "RuntimeError"
+    assert len(detail["message"]) > 1000
+
+
+def test_an_unexpected_exception_whose_dead_letter_cant_be_written_stops_processing() -> None:
+    harness = ProcessorWithFakes(
+        failures=[RuntimeError("a bug")], dead_letters=FakeDeadLetterSink(fails=True)
+    )
+
+    assert isinstance(harness.process(), Stopped)

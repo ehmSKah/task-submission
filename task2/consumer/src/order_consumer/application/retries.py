@@ -2,7 +2,7 @@
 
 The message stays in hand while it is retried: transient failures are retried with exponential
 backoff and full jitter, a handover the fulfilment service refuses is given up at once, and a
-systemic failure stops everything.
+systemic answer ends the attempts at once, for the caller to stop consumption.
 """
 
 import random
@@ -87,13 +87,12 @@ class GaveUp:
     retry_after: float | None = None  # a Retry-After too long to wait for, which ended the retries
 
 
-class SystemicFailure(Exception):
+@dataclass(frozen=True, slots=True)
+class SystemicAnswer:
     """The fulfilment service answered in a way that is wrong for every order (ADR 0003)."""
 
-    def __init__(self, failure: HandoverFailed, attempts: int) -> None:
-        super().__init__(f"systemic handover failure: {failure.error}")
-        self.failure = failure
-        self.attempts = attempts
+    failure: HandoverFailed
+    attempts: int
 
 
 class HandoverRetries:
@@ -105,8 +104,8 @@ class HandoverRetries:
         self._clock = clock
         self._jitter = jitter
 
-    def hand_over(self, request: DownstreamRequest) -> HandedOver | GaveUp:
-        """Raises SystemicFailure at the first systemic answer, without further attempts."""
+    def hand_over(self, request: DownstreamRequest) -> HandedOver | GaveUp | SystemicAnswer:
+        """Ends at the first systemic answer, without further attempts."""
         policy = self._policy
         attempt = 0
         while True:
@@ -126,7 +125,7 @@ class HandoverRetries:
                 )
                 match failure.response_class:
                     case ResponseClass.SYSTEMIC:
-                        raise SystemicFailure(failure, attempt) from failure
+                        return SystemicAnswer(failure, attempt)
                     case ResponseClass.REJECTED:
                         return GaveUp(DeadLetterReason.REJECTED, attempt, failure)
                 retry_after = failure.retry_after

@@ -1,5 +1,6 @@
 """Processing one delivery: read it, then store, hand over and record (ADR 0004), skip a duplicate
-(ADR 0002), or set an invalid or conflicting event or a failed handover aside as a dead letter
+(ADR 0002), set an invalid or conflicting event, a failed handover or an unexpected exception aside
+as a dead letter, or ask for consumption to stop when the failure is not about this message
 (ADR 0006).
 
 Returns an Outcome and never commits: only the poll loop commits, according to the outcome
@@ -7,6 +8,7 @@ Returns an Outcome and never commits: only the poll loop commits, according to t
 """
 
 import json
+from dataclasses import dataclass
 from enum import Enum
 from uuid import UUID
 
@@ -18,21 +20,25 @@ from order_consumer.application.ports import (
     DeadLetter,
     DeadLetterReason,
     DeadLetterSink,
+    DeadLetterUnwritable,
     Delivery,
     EventIdTaken,
     FulfilmentClient,
+    HandoverResult,
     HandoverStatus,
     OrderStore,
     ReceivedEvent,
     Stored,
+    StoreUnavailable,
 )
 from order_consumer.application.retries import (
     GaveUp,
     HandoverRetries,
     Jitter,
     RetryPolicy,
+    SystemicAnswer,
 )
-from order_consumer.domain.downstream import to_downstream_request
+from order_consumer.domain.downstream import DownstreamRequest, to_downstream_request
 from order_consumer.domain.event import OrderPlacedReader
 from order_consumer.domain.order import differing_fields, to_order
 from order_consumer.domain.validation import InvalidEvent
@@ -43,9 +49,40 @@ MAX_DETAIL_BYTES = 4096
 
 
 class Outcome(Enum):
+    """Terminal: the poll loop commits the offset."""
+
     HANDED_OVER = "handed_over"
     DUPLICATE = "duplicate"  # already handed over: no new effects
     DEAD_LETTERED = "dead_lettered"
+
+
+@dataclass(frozen=True, slots=True)
+class Stopped:
+    """Not terminal: the failure is not about this message, so consumption stops with nothing
+    committed and nothing dead-lettered, and the message is tried again later (ADR 0006)."""
+
+    reason: str  # what the instance shows while paused, e.g. "systemic: postgres-unavailable"
+    error: str  # what happened, e.g. "401 Unauthorized"
+
+
+@dataclass
+class _Progress:
+    """What is known about the delivery in hand, for its dead letter should an unexpected exception
+    end its processing."""
+
+    event_id: UUID | None = None
+    order_id: UUID | None = None
+    attempts: int = 0  # handover attempts started
+
+
+class _CountingAttempts:
+    def __init__(self, fulfilment: FulfilmentClient) -> None:
+        self._fulfilment = fulfilment
+        self.progress = _Progress()
+
+    def hand_over(self, request: DownstreamRequest) -> HandoverResult:
+        self.progress.attempts += 1
+        return self._fulfilment.hand_over(request)
 
 
 class OrderProcessor:
@@ -61,77 +98,91 @@ class OrderProcessor:
         jitter: Jitter,
     ) -> None:
         self._store = store
-        self._handover = HandoverRetries(fulfilment, policy, clock, jitter)
+        self._fulfilment = _CountingAttempts(fulfilment)
+        self._handover = HandoverRetries(self._fulfilment, policy, clock, jitter)
         self._dead_letters = dead_letters
         self._reader = reader
 
-    def process(self, delivery: Delivery) -> Outcome:
+    def process(self, delivery: Delivery) -> Outcome | Stopped:
         with structlog.contextvars.bound_contextvars(
             topic=delivery.topic, partition=delivery.partition, offset=delivery.offset
         ):
+            progress = self._fulfilment.progress = _Progress()
             try:
-                event = self._reader.read(delivery.key, delivery.value)
-            except InvalidEvent as invalid:
-                return self._set_aside(delivery, invalid)
+                return self._process(delivery, progress)
+            except StoreUnavailable as unavailable:
+                return Stopped("systemic: postgres-unavailable", str(unavailable))
+            except Exception as error:
+                return self._set_aside_unexpected(delivery, progress, error)
 
-            order = to_order(event.data)
-            with structlog.contextvars.bound_contextvars(
-                event_id=str(event.event_id), order_id=str(order.order_id)
-            ):
-                log.info("event.received")
+    def _process(self, delivery: Delivery, progress: _Progress) -> Outcome | Stopped:
+        try:
+            event = self._reader.read(delivery.key, delivery.value)
+        except InvalidEvent as invalid:
+            return self._set_aside(delivery, invalid)
 
-                received = ReceivedEvent(
-                    event.event_id, delivery.topic, delivery.partition, delivery.offset
-                )
-                match self._store.store_new(order, received):
-                    case Stored():
-                        log.info("order.accepted")
-                    case AlreadyStored() as accepted:
-                        # Compared before anything else: a conflicting event is never handed over,
-                        # not even to complete the first version's unfinished handover.
-                        if fields := differing_fields(accepted.order, order):
-                            return self._set_aside_conflict(
-                                delivery,
-                                event.event_id,
-                                order.order_id,
-                                accepted.first_event_id,
-                                fields,
-                            )
-                        duplicate = "redelivery" if accepted.event_recorded else "re-emission"
-                        if not accepted.event_recorded:
-                            self._store.record_duplicate(order.order_id, received)
-                        # Skip, or complete an unfinished handover, nothing more (ADR 0004).
-                        if accepted.handover_status is HandoverStatus.HANDED_OVER:
-                            log.info("order.duplicate", duplicate=duplicate)
-                            return Outcome.DUPLICATE
-                        log.info(
-                            "handover.unfinished",
-                            handover_status=accepted.handover_status.value,
-                            duplicate=duplicate,
-                        )
-                    case EventIdTaken():
-                        # The same event id with other content (ADR 0002): here another order.
+        progress.event_id = event.event_id
+        order = to_order(event.data)
+        progress.order_id = order.order_id
+        with structlog.contextvars.bound_contextvars(
+            event_id=str(event.event_id), order_id=str(order.order_id)
+        ):
+            log.info("event.received")
+
+            received = ReceivedEvent(
+                event.event_id, delivery.topic, delivery.partition, delivery.offset
+            )
+            match self._store.store_new(order, received):
+                case Stored():
+                    log.info("order.accepted")
+                case AlreadyStored() as accepted:
+                    # Compared before anything else: a conflicting event is never handed over,
+                    # not even to complete the first version's unfinished handover.
+                    if fields := differing_fields(accepted.order, order):
                         return self._set_aside_conflict(
                             delivery,
                             event.event_id,
                             order.order_id,
-                            event.event_id,
-                            ["/data/orderId"],
+                            accepted.first_event_id,
+                            fields,
                         )
+                    duplicate = "redelivery" if accepted.event_recorded else "re-emission"
+                    if not accepted.event_recorded:
+                        self._store.record_duplicate(order.order_id, received)
+                    # Skip, or complete an unfinished handover, nothing more (ADR 0004).
+                    if accepted.handover_status is HandoverStatus.HANDED_OVER:
+                        log.info("order.duplicate", duplicate=duplicate)
+                        return Outcome.DUPLICATE
+                    log.info(
+                        "handover.unfinished",
+                        handover_status=accepted.handover_status.value,
+                        duplicate=duplicate,
+                    )
+                case EventIdTaken():
+                    # The same event id with other content (ADR 0002): here another order.
+                    return self._set_aside_conflict(
+                        delivery,
+                        event.event_id,
+                        order.order_id,
+                        event.event_id,
+                        ["/data/orderId"],
+                    )
 
-                handover = self._handover.hand_over(to_downstream_request(order))
-                if isinstance(handover, GaveUp):
-                    return self._give_up(delivery, event.event_id, order.order_id, handover)
-                fulfilment_order_id = handover.result.fulfilment_order_id
-                self._store.record_handover(order.order_id, fulfilment_order_id)
-                log.info(
-                    "handover.completed",
-                    fulfilment_order_id=fulfilment_order_id,
-                    attempts=handover.attempts,
-                )
-                return Outcome.HANDED_OVER
+            handover = self._handover.hand_over(to_downstream_request(order))
+            if isinstance(handover, SystemicAnswer):
+                return Stopped("systemic: fulfilment", handover.failure.error)
+            if isinstance(handover, GaveUp):
+                return self._give_up(delivery, event.event_id, order.order_id, handover)
+            fulfilment_order_id = handover.result.fulfilment_order_id
+            self._store.record_handover(order.order_id, fulfilment_order_id)
+            log.info(
+                "handover.completed",
+                fulfilment_order_id=fulfilment_order_id,
+                attempts=handover.attempts,
+            )
+            return Outcome.HANDED_OVER
 
-    def _set_aside(self, delivery: Delivery, invalid: InvalidEvent) -> Outcome:
+    def _set_aside(self, delivery: Delivery, invalid: InvalidEvent) -> Outcome | Stopped:
         """Invalid is permanent (ADR 0001): dead-lettered at once, never retried, nothing
         stored."""
         readable = {
@@ -160,7 +211,7 @@ class OrderProcessor:
         order_id: UUID,
         accepted_event_id: UUID,
         fields: list[str],
-    ) -> Outcome:
+    ) -> Outcome | Stopped:
         """Conflicting is permanent (ADR 0002): the first accepted version stays, the event is not
         recorded, and it is dead-lettered at once with the fields that differ."""
         log.warning("order.conflict", fields=fields, accepted_event_id=str(accepted_event_id))
@@ -178,15 +229,43 @@ class OrderProcessor:
             )
         )
 
-    def _write(self, dead_letter: DeadLetter) -> Outcome:
-        """A failure to write the dead letter propagates, so nothing is committed (ADR 0006)."""
-        self._dead_letters.write(dead_letter)
+    def _set_aside_unexpected(
+        self, delivery: Delivery, progress: _Progress, error: Exception
+    ) -> Outcome | Stopped:
+        """A bug for this message (ADR 0006): dead-lettered at once with the exception's type and
+        message. Crashing instead would restart onto the same message forever. The stack trace
+        goes to the error log only, never into the dead letter."""
+        ids = {
+            name: str(value)
+            for name, value in (("event_id", progress.event_id), ("order_id", progress.order_id))
+            if value is not None
+        }
+        with structlog.contextvars.bound_contextvars(**ids):
+            log.error("processing.unexpected_error", error=type(error).__name__, exc_info=True)
+            return self._write(
+                DeadLetter(
+                    delivery=delivery,
+                    reason=DeadLetterReason.UNEXPECTED,
+                    detail=_unexpected_detail(error),
+                    attempts=progress.attempts,
+                    event_id=progress.event_id,
+                    order_id=progress.order_id,
+                )
+            )
+
+    def _write(self, dead_letter: DeadLetter) -> Outcome | Stopped:
+        """Without the dead letter nothing can be committed, so an unwritable one stops
+        consumption (ADR 0006)."""
+        try:
+            self._dead_letters.write(dead_letter)
+        except DeadLetterUnwritable as unwritable:
+            return Stopped("systemic: dead-letter-topic-unwritable", str(unwritable))
         log.warning("dead_letter.written", reason=dead_letter.reason.value)
         return Outcome.DEAD_LETTERED
 
     def _give_up(
         self, delivery: Delivery, event_id: UUID, order_id: UUID, gave_up: GaveUp
-    ) -> Outcome:
+    ) -> Outcome | Stopped:
         """A failed handover (ADR 0004): `handover_failed` is set before the dead letter is
         written, so a crash in between only causes a redelivery and another attempt."""
         self._store.mark_handover_failed(order_id)
@@ -218,6 +297,20 @@ def _handover_detail(gave_up: GaveUp) -> str:
         if len(encoded.encode()) <= MAX_DETAIL_BYTES or not problem:
             return encoded
         problem = problem[: len(problem) * 3 // 4]
+
+
+def _unexpected_detail(error: Exception) -> str:
+    """The exception's type and message, the message cut until the detail fits in 4 KB."""
+    message = str(error)
+    while True:
+        detail = json.dumps(
+            {"type": type(error).__name__, "message": message},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        if len(detail.encode()) <= MAX_DETAIL_BYTES or not message:
+            return detail
+        message = message[: len(message) * 3 // 4]
 
 
 def _invalid_detail(invalid: InvalidEvent) -> str:
