@@ -72,15 +72,15 @@ class FakeOrderStore:
     ) -> Stored | AlreadyStored | EventIdTaken:
         existing = self.orders.get(order.order_id)
         recorded = self.processed.get(event.event_id)
+        if recorded is not None and recorded.order_id != order.order_id:
+            return EventIdTaken()
         if existing is not None:
             return AlreadyStored(
                 order=existing.order,
                 first_event_id=existing.first_event_id,
                 handover_status=HandoverStatus(existing.handover_status),
-                event_recorded=recorded is not None and recorded.order_id == order.order_id,
+                event_recorded=recorded is not None,
             )
-        if recorded is not None:
-            return EventIdTaken()
         self.orders[order.order_id] = StoredOrder(order=order, first_event_id=event.event_id)
         self.processed[event.event_id] = ProcessedEvent(order.order_id, "accepted", event)
         self.stored.append(order.order_id)

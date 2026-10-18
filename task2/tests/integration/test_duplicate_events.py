@@ -26,6 +26,7 @@ from tests.integration.stack import (
     assert_nothing_lost,
     create_topic,
     handover_statuses,
+    order_row_count,
     processed_events,
     publish,
     stored_order,
@@ -130,6 +131,36 @@ def test_a_conflicting_event_is_dead_lettered_and_the_first_version_stays(
     assert stored_total(order_id) == 4498
     assert handover_statuses(order_id) == [201]
     assert recorded(order_id) == [(str(first_event_id), "accepted")]
+
+
+@pytest.mark.parametrize(
+    "order_exists",
+    [pytest.param(False, id="for a new order"), pytest.param(True, id="for a stored order")],
+)
+def test_an_event_id_already_recorded_for_another_order_is_dead_lettered_as_a_conflict(
+    consumer: ConsumerGroup, order_exists: bool
+) -> None:
+    first_order_id, other_order_id, first_event_id = uuid4(), uuid4(), uuid4()
+    accepted = [first_order_id, other_order_id] if order_exists else [first_order_id]
+    # The orders' partitions may differ, so the reused event is published once they are handed over.
+    publish(consumer.topic, [(order_id, order_placed_event(order_id)) for order_id in accepted[1:]])
+    publish(consumer.topic, [(first_order_id, order_placed_event(first_order_id, first_event_id))])
+    assert_nothing_lost(accepted, consumer)
+    reused = order_placed_event(other_order_id, first_event_id)
+
+    publish(consumer.topic, [(other_order_id, reused)])
+
+    [dead_letter] = wait_for_dead_letters(consumer)
+    assert_all_committed(consumer)
+    assert dead_letter.value == reused
+    assert dead_letter.header("dlt.reason") == "conflict"
+    assert json.loads(dead_letter.header("dlt.detail") or "") == {
+        "acceptedEventId": str(first_event_id),
+        "fields": ["/data/orderId"],
+    }
+    assert_nothing_duplicated(accepted)
+    assert order_row_count(other_order_id) == (1 if order_exists else 0)
+    assert str(first_event_id) not in [event_id for event_id, _ in recorded(other_order_id)]
 
 
 def test_a_conflicting_event_is_not_handed_over_while_the_first_handover_is_unfinished(

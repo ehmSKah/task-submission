@@ -63,7 +63,8 @@ class AlreadyStored:
 
 @dataclass(frozen=True, slots=True)
 class EventIdTaken:
-    """The incoming event id is already recorded for another order: nothing was stored."""
+    """The incoming event id is already recorded for another order: nothing was stored, whether
+    or not an order with the incoming id exists."""
 
 
 class OrderStore(Protocol):

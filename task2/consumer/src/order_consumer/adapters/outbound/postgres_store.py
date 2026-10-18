@@ -4,6 +4,7 @@ from datetime import UTC
 from uuid import UUID
 
 import psycopg
+from psycopg import IsolationLevel
 
 from order_consumer.application.ports import (
     AlreadyStored,
@@ -25,6 +26,8 @@ class PostgresOrderStore:
     def _connect(self) -> psycopg.Connection:
         if self._connection is None or self._connection.closed:
             self._connection = psycopg.connect(self._database_url)
+            # Explicit, since storing relies on it: see `_stored_version`.
+            self._connection.isolation_level = IsolationLevel.READ_COMMITTED
         return self._connection
 
     def store_new(
@@ -53,7 +56,7 @@ class PostgresOrderStore:
                 ),
             )
             if cursor.rowcount == 0:
-                return self._already_stored(cursor, order.order_id, event.event_id)
+                return self._stored_version(cursor, order.order_id, event.event_id)
             if not self._record(cursor, order.order_id, event, "accepted"):
                 # The event id already brought another order: a conflict, so store nothing.
                 raise psycopg.Rollback(transaction)
@@ -89,14 +92,16 @@ class PostgresOrderStore:
         return cursor.rowcount == 1
 
     @staticmethod
-    def _already_stored(cursor: psycopg.Cursor, order_id: UUID, event_id: UUID) -> AlreadyStored:
-        """The stored version. Read in the inserting transaction: under read committed, each
-        statement sees what a racing consumer committed before the insert gave way."""
+    def _stored_version(
+        cursor: psycopg.Cursor, order_id: UUID, event_id: UUID
+    ) -> AlreadyStored | EventIdTaken:
+        """The stored version, unless the event id is recorded for another order. Read in the
+        inserting transaction: under read committed, each statement sees what a racing consumer
+        committed before the insert gave way."""
         cursor.execute(
             """
             SELECT customer_id, placed_at, currency, total, first_event_id, handover_status,
-                   EXISTS (SELECT 1 FROM processed_events
-                           WHERE event_id = %s AND order_id = orders.order_id)
+                   (SELECT order_id FROM processed_events WHERE event_id = %s)
             FROM orders WHERE order_id = %s
             """,
             (event_id, order_id),
@@ -104,7 +109,9 @@ class PostgresOrderStore:
         row = cursor.fetchone()
         if row is None:
             raise LookupError(f"order {order_id} is not stored")
-        customer_id, placed_at, currency, total, first_event_id, handover_status, recorded = row
+        customer_id, placed_at, currency, total, first_event_id, handover_status, recorded_for = row
+        if recorded_for not in (None, order_id):
+            return EventIdTaken()
         cursor.execute(
             "SELECT sku, quantity, unit_price FROM order_lines WHERE order_id = %s ORDER BY sku",
             (order_id,),
@@ -124,7 +131,7 @@ class PostgresOrderStore:
             ),
             first_event_id=first_event_id,
             handover_status=HandoverStatus(handover_status),
-            event_recorded=recorded,
+            event_recorded=recorded_for == order_id,
         )
 
     def record_handover(self, order_id: UUID, fulfilment_order_id: str) -> None:
