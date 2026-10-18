@@ -100,3 +100,16 @@ def test_reset_clears_the_journal(client: TestClient) -> None:
 
     assert client.get("/_control/requests").json() == []
     assert client.get("/_control/fulfilment-orders").json() == []
+
+
+def test_a_contract_violation_names_the_fields_without_echoing_values(client: TestClient) -> None:
+    secret = "VALUE-THAT-MUST-NOT-BE-ECHOED"
+    response = client.post(
+        "/fulfilment-orders",
+        json=request_body(total={"amount": secret, "currency": "EUR"}),
+        headers=headers(),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["errors"] == [{"pointer": "/total/amount", "rule": "pattern"}]
+    assert secret not in response.text

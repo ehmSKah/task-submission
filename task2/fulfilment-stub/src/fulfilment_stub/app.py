@@ -25,19 +25,37 @@ log = structlog.get_logger()
 class Journal:
     requests: list[dict[str, Any]] = field(default_factory=list)
     fulfilment_orders: list[dict[str, str]] = field(default_factory=list)
-    created: int = 0
 
     def reset(self) -> None:
         self.requests.clear()
         self.fulfilment_orders.clear()
-        self.created = 0
 
 
-def problem(status: int, title: str, detail: str | None = None) -> JSONResponse:
-    body: dict[str, Any] = {"title": title, "status": status}
-    if detail:
-        body["detail"] = detail
-    return JSONResponse(body, status_code=status, media_type="application/problem+json")
+def problem(status: int, title: str, **extra: Any) -> JSONResponse:
+    return JSONResponse(
+        {"title": title, "status": status, **extra},
+        status_code=status,
+        media_type="application/problem+json",
+    )
+
+
+def contract_violations(error: OpenAPIError) -> dict[str, Any]:
+    """What broke the contract, without the values: openapi-core's own message quotes the whole
+    request body, which must reach neither the logs nor the response (ADR 0008)."""
+    schema_errors = getattr(error.__cause__, "schema_errors", None)
+    if not schema_errors:
+        # Not about the body (e.g. a missing header): these messages carry no request values.
+        return {"detail": str(error)}
+    return {
+        "detail": "The request body does not match the contract.",
+        "errors": [
+            {
+                "pointer": "".join(f"/{part}" for part in schema_error.absolute_path),
+                "rule": schema_error.validator,
+            }
+            for schema_error in schema_errors
+        ],
+    }
 
 
 def create_app(spec_path: Path, token: str) -> FastAPI:
@@ -66,13 +84,16 @@ def create_app(spec_path: Path, token: str) -> FastAPI:
             openapi.validate_request(StarletteOpenAPIRequest(request, body))
         except OpenAPIError as error:
             entry["status"] = 400
-            log.info("request.invalid", error=str(error))
-            return problem(400, "Bad Request", str(error))
+            violations = contract_violations(error)
+            log.info("request.invalid", **violations)
+            return problem(400, "Bad Request", **violations)
 
         external_reference = json.loads(body)["externalReference"]
         entry["externalReference"] = external_reference
-        journal.created += 1
-        fulfilment_order = {"id": f"ful-{journal.created}", "externalReference": external_reference}
+        fulfilment_order = {
+            "id": f"ful-{len(journal.fulfilment_orders) + 1}",
+            "externalReference": external_reference,
+        }
         journal.fulfilment_orders.append(fulfilment_order)
         entry["status"] = 201
         log.info("fulfilment_order.created", **fulfilment_order)
