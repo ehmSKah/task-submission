@@ -10,9 +10,10 @@ Correctness never depends on a consumer finishing its work: anything not committ
 
 **Shutdown (SIGTERM, SIGINT)**
 - **The signal handler only sets a flag.** The single-threaded loop checks it between steps, so nothing is interrupted halfway through a database transaction.
-- **Finish the current step, then stop.** The handover attempt in progress (at most 10 s, ADR 0003) completes; no further retry or message is started.
+- **Finish the current step, then stop.** The handover attempt in progress (at most 10 s, ADR 0003) completes; no further retry or message is started. A backoff wait waits on the flag itself, so a stop ends it at once, and a message fetched by the poll the signal arrived in is left to the next owner.
   - If the message has reached a terminal outcome, its offset is committed.
   - Otherwise it stays uncommitted and is redelivered; the crash table of ADR 0004 makes that safe.
+  - `consumer.stopping` says whether the instance was paused and which message, if any, it leaves uncommitted.
 - **`close()` leaves the group at once**, so the instance's partitions move to the other instance immediately instead of after a session timeout.
 - **A paused instance stops immediately**; its in-hand message is uncommitted.
 - **`stop_grace_period: 20s`** in Compose, leaving headroom over the 10 s attempt.
@@ -24,13 +25,14 @@ Correctness never depends on a consumer finishing its work: anything not committ
 | Moment | In hand | What happens |
 |---|---|---|
 | Between messages | nothing | nothing; every finished message is already committed, so `on_revoke` commits nothing |
-| While paused (ADR 0006) | one uncommitted message, possibly from a revoked partition | if its partition was revoked, it is **dropped** without committing; the new owner processes it from the committed offset |
+| While paused (ADR 0006) | one uncommitted message, possibly from a revoked partition | if its partition was revoked, it is **dropped** without committing (`message.dropped`); the new owner processes it from the committed offset |
 
 - **`on_lost`** (membership gone, e.g. after exceeding `max.poll.interval.ms`): anything in hand is dropped and **nothing is committed**. Such a commit would fail anyway (`UNKNOWN_MEMBER_ID`).
-- **The circuit state survives a revocation.** It describes the fulfilment service, not the partition; a paused instance keeps probing with the next message on its remaining partitions.
+- **The circuit state survives a revocation.** It describes the fulfilment service, not the partition; a paused instance keeps probing with the next message on its remaining partitions. Having dropped the message in hand, it stays paused until its next probe is due, then resumes its remaining partitions: the next message is the probe, and pauses it again if the cause is still there. With nothing left to process it would otherwise stay paused, and unhealthy, with no way to find out the cause is gone.
+- **A refused commit is logged and skipped** (`commit.failed`, with the broker's error, e.g. `UNKNOWN_MEMBER_ID`): a zombie's partition already belongs to another instance, which processes the message from the committed offset. A fatal client error still ends the process.
 
 **Membership**
-- **Dynamic:** no `group.instance.id`; `session.timeout.ms` stays at its 45 s default.
+- **Dynamic:** no `group.instance.id`; `session.timeout.ms` stays at its 45 s default (`KAFKA_SESSION_TIMEOUT_MS`, shortened only by the reliability suite, ADR 0009; one above `max.poll.interval.ms` is refused at start-up).
 - **Compose runs one consumer service with `replicas: 2`.**
 
 **Restarts**
@@ -59,9 +61,11 @@ Correctness never depends on a consumer finishing its work: anything not committ
 | Hard kill mid-handover | a stub rule slows order X's handover; once the journal shows its request in progress, the consumer is killed and started again | X still has one fulfilment order; its repeat was answered with `409` or the replay |
 | Graceful stop mid-stream | SIGTERM while 50 orders are being processed | the other instance takes over at once; the stop takes under 20 s; at most one redelivery |
 | Rebalance under load | start with one instance, scale to two halfway | partitions split 2 + 1 |
-| Zombie consumer | the test configuration shrinks `max.poll.interval.ms` (and `session.timeout.ms`, which may not exceed it); a stub rule slows one handover past it | the zombie's commit fails and is logged; no second order row or fulfilment order |
-| Pause during a rebalance | a stub outage opens the circuit; then the other instance is stopped or started | the dropped in-hand message is processed by its new owner after recovery |
+| Zombie consumer | a stub rule slows one handover; while it is in progress the instance is frozen (`docker pause`, like a long GC or VM stall) past its session timeout, shrunk to 6 s by the test configuration, then woken up | the zombie's commit fails and is logged; no second order row or fulfilment order |
+| Pause during a rebalance | an outage pauses the instances (PostgreSQL stopping; with the flood guard, a stub outage opening the circuit); then one instance is stopped, or one joins and takes the partition of the message in hand | the dropped in-hand message is processed by its new owner after recovery |
 
+- **The zombie is frozen rather than slowed.** A handover can't outlast `max.poll.interval.ms`: the attempt deadline caps every attempt, and the start-up check of ADR 0006 keeps all of them within half of it. A stalled process is the zombie this design can still meet; the freeze lands mid-handover as exactly as the hard kill does.
+- **The newcomer takes a known partition.** Which partition cooperative-sticky moves to a joining member is up to the assignor; the test learns it from a dry run of the same rebalance and publishes the held order on it, and fails if no message is dropped, so it can't pass vacuously.
 - **Crash points are injected in-process** because a real kill can't reliably land between "the fulfilment service answered" and "we recorded it"; the wrapper makes all three exact and repeatable. The hard-kill test adds one realistic process-level crash on top.
 
 ## Considered options
