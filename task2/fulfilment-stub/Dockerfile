@@ -15,7 +15,9 @@ FROM python:3.13-slim-trixie
 RUN useradd --system --uid 10001 stub
 COPY --from=build /app/.venv /app/.venv
 COPY openapi/fulfilment.yaml /app/openapi/fulfilment.yaml
-ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 FULFILMENT_SPEC=/app/openapi/fulfilment.yaml
+# The stable HTTP conventions for the request spans (ADR 0008).
+ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 FULFILMENT_SPEC=/app/openapi/fulfilment.yaml \
+    OTEL_SEMCONV_STABILITY_OPT_IN=http
 USER stub
 EXPOSE 8081
 HEALTHCHECK --interval=2s --timeout=3s --retries=30 \

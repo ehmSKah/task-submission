@@ -16,7 +16,7 @@ FROM python:3.13-slim-trixie
 RUN useradd --system --uid 10001 consumer
 COPY --from=build /app/.venv /app/.venv
 COPY schemas/order-placed.v1.schema.json /app/schemas/order-placed.v1.schema.json
-ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 \
+ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 OTEL_SEMCONV_STABILITY_OPT_IN=http \
     ORDER_EVENT_SCHEMA=/app/schemas/order-placed.v1.schema.json
 USER consumer
 CMD ["python", "-m", "order_consumer"]
