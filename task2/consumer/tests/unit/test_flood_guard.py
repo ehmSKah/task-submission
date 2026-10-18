@@ -136,6 +136,53 @@ def test_a_probe_the_service_rejects_closes_the_circuit_and_dead_letters_the_ord
     assert harness.processor.process(order(uuid4())) is Outcome.HANDED_OVER, "after retries"
 
 
+def test_orders_ended_by_a_long_retry_after_count_as_out_of_retries() -> None:
+    """The service said it is unavailable for a while: the flood guard's business (ADR 0006)."""
+    harness = ProcessorWithFakes()
+
+    outcomes = []
+    for _ in range(3):
+        harness.failures.append(unavailable(retry_after=120.0))
+        outcomes.append(harness.processor.process(order(uuid4())))
+
+    assert outcomes[:2] == [Outcome.DEAD_LETTERED] * 2
+    assert outcomes[2] == Stopped(StopReason.CIRCUIT_OPEN, "503 Service Unavailable")
+
+
+def test_a_probe_meeting_a_systemic_answer_pauses_on_with_that_reason_the_circuit_still_open() -> (
+    None
+):
+    harness = ProcessorWithFakes()
+    held = open_circuit(harness)
+    harness.failures.append(HandoverFailed(ResponseClass.SYSTEMIC, "401 Unauthorized", status=401))
+
+    assert harness.processor.process(order(held)) == Stopped(
+        StopReason.FULFILMENT, "401 Unauthorized"
+    )
+    attempts = len(harness.fulfilment.requests)
+    harness.failures.append(unavailable())
+    assert harness.processor.process(order(held)) == Stopped(
+        StopReason.CIRCUIT_OPEN, "503 Service Unavailable"
+    )
+    assert len(harness.fulfilment.requests) == attempts + 1, "still a probe"
+
+
+def test_an_order_out_of_retries_is_counted_once_its_dead_letter_is_written() -> None:
+    """Without the dead letter it is processed again after the pause, and counted only then."""
+    harness = ProcessorWithFakes()
+    first = uuid4()
+    harness.dead_letters.fails = True
+    assert run_out_of_retries(harness, first) == Stopped(
+        StopReason.DEAD_LETTER_TOPIC_UNWRITABLE, "not confirmed in time"
+    )
+    harness.dead_letters.fails = False
+
+    outcomes = [run_out_of_retries(harness, order_id) for order_id in (first, uuid4())]
+
+    assert outcomes == [Outcome.DEAD_LETTERED] * 2, "the second order is only the second"
+    assert isinstance(run_out_of_retries(harness, uuid4()), Stopped)
+
+
 def hit_a_bug(harness: ProcessorWithFakes, order_id: UUID) -> Outcome | Stopped:
     harness.failures.append(RuntimeError("a bug"))
     return harness.processor.process(order(order_id))
