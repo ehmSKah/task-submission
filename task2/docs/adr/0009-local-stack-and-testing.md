@@ -10,7 +10,7 @@ The **Compose stack is the deliverable**, so it is also what the tests run again
 
 **Harness**
 - **`docker compose up --wait`** with `compose.test.yaml` layered on top, which shortens backoff caps, attempt deadlines, the probe interval and, for the zombie test, the poll interval.
-- **In-process consumer tests.** pytest runs the consumer inside the test process against the stack's Kafka, PostgreSQL and stub. Each test module uses its own topics (`orders.test.<id>`, `orders.test.<id>.dlt`) and consumer group, so the stack's consumers never take its messages. The crash-point wrapper of ADR 0007 runs this way.
+- **In-process consumer tests.** pytest runs the consumer inside the test process against the stack's Kafka, PostgreSQL and stub. Each test uses its own topics (`orders.test.<id>`, `orders.test.<id>.dlt`) and consumer group, so the stack's consumers never take its messages, and a new group reading from the earliest offset never sees another test's events. The crash-point wrapper of ADR 0007 runs this way.
 - **Container tests.** These kill, stop and scale the real consumer containers on the real `orders` topic.
 - **Isolation:** every test uses fresh order ids, the stub's fault rules match per order (ADR 0003), and assertions look only at the test's own orders. No test depends on an empty database.
 
