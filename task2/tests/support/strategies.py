@@ -22,11 +22,12 @@ order_lines = st.lists(
     unique_by=lambda line: line["sku"],
 )
 
-# RFC 3339 timestamps with an offset of up to ±14 hours, to the minute.
+# RFC 3339 timestamps with an offset of up to ±14 hours, to the minute, in the years 2000-2999
+# whatever the offset.
 timestamps = st.builds(
     lambda moment, offset: moment.astimezone(timezone(timedelta(minutes=offset))).isoformat(),
     st.datetimes(
-        min_value=datetime(2000, 1, 1), max_value=datetime(2100, 1, 1), timezones=st.just(UTC)
+        min_value=datetime(2000, 1, 2), max_value=datetime(2999, 12, 30), timezones=st.just(UTC)
     ),
     st.integers(min_value=-14 * 60, max_value=14 * 60),
 )

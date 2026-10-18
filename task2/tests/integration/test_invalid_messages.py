@@ -37,7 +37,7 @@ def encoded(envelope: dict[str, Any]) -> bytes:
 
 
 def dead_letter_for(
-    consumer: ConsumerGroup, value: bytes, key: bytes | None
+    consumer: ConsumerGroup, value: bytes | None, key: bytes | None
 ) -> tuple[Record, dict[str, Any]]:
     """Publishes one record and returns its dead letter, checked against ADR 0006, and its detail.
 
@@ -68,10 +68,17 @@ def pointers(detail: dict[str, Any]) -> list[str]:
     return sorted(error["pointer"] for error in detail["errors"])
 
 
-def test_an_unreadable_event_is_dead_lettered(consumer: ConsumerGroup) -> None:
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(b"\xff\xfe not UTF-8", id="not UTF-8"),
+        pytest.param(None, id="a tombstone"),
+    ],
+)
+def test_an_unreadable_event_is_dead_lettered(consumer: ConsumerGroup, value: bytes | None) -> None:
     order_id = uuid4()
 
-    dead_letter, detail = dead_letter_for(consumer, b"\xff\xfe not UTF-8", str(order_id).encode())
+    dead_letter, detail = dead_letter_for(consumer, value, str(order_id).encode())
 
     assert detail["layer"] == "unreadable"
     assert pointers(detail) == [""]

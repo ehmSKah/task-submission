@@ -8,7 +8,6 @@ import os
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -26,7 +25,6 @@ CONSUMER_DATABASE_URL = (
 )
 STUB_URL = f"http://{HOST}:{os.environ.get('STUB_PORT', '8081')}"
 FULFILMENT_TOKEN = "local-dev-token"
-EVENT_SCHEMA = Path(__file__).parents[2] / "schemas" / "order-placed.v1.schema.json"
 
 
 @dataclass(frozen=True)
@@ -79,9 +77,10 @@ def publish(topic: str, events: Iterable[tuple[UUID, bytes]]) -> None:
 
 
 def publish_records(
-    topic: str, records: Iterable[tuple[bytes | None, bytes, Sequence[tuple[str, bytes]]]]
+    topic: str,
+    records: Iterable[tuple[bytes | None, bytes | None, Sequence[tuple[str, bytes]]]],
 ) -> None:
-    """Records as they are: any key, any bytes, any headers."""
+    """Records as they are: any key, any bytes or none, any headers."""
     producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP, "enable.idempotence": True})
     for key, value, headers in records:
         producer.produce(topic, key=key, value=value, headers=list(headers))
@@ -107,7 +106,11 @@ def records(topic: str) -> list[Record]:
         reader.assign(partitions)
         found: list[Record] = []
         deadline = time.monotonic() + 10
-        while len(found) < expected and time.monotonic() < deadline:
+        while len(found) < expected:
+            if time.monotonic() > deadline:
+                raise AssertionError(
+                    f"read {len(found)} of the {expected} records on {topic}: {found!r}"
+                )
             message = reader.poll(0.5)
             if message is None or message.error() is not None:
                 continue

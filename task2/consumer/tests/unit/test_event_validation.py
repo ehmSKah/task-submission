@@ -1,7 +1,6 @@
 """Reading an order placed event: the five validation layers of ADR 0001, in order."""
 
 import json
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -11,15 +10,14 @@ from hypothesis import strategies as st
 
 from order_consumer.domain.event import OrderPlacedReader
 from order_consumer.domain.validation import InvalidEvent, Layer
-from tests.support.events import order_placed_envelope
+from tests.support.events import EVENT_SCHEMA, order_placed_envelope
 from tests.support.strategies import order_data
 
-SCHEMA = Path(__file__).parents[3] / "schemas" / "order-placed.v1.schema.json"
 ORDER_ID = UUID("3f1c2a9e-8b4d-4c1e-9f2a-6d7e8f9a0b1c")
 EVENT_ID = UUID("7d2e1f3a-4b5c-4d6e-8f9a-0b1c2d3e4f5a")
 KEY = str(ORDER_ID).encode()
 
-reader = OrderPlacedReader.from_file(SCHEMA)
+reader = OrderPlacedReader.from_file(EVENT_SCHEMA)
 
 
 def encoded(envelope: dict[str, Any]) -> bytes:
@@ -35,7 +33,7 @@ def test_a_valid_event_is_read_with_its_event_id_and_data() -> None:
     assert event.data == envelope["data"]
 
 
-def rejected(key: bytes | None, value: bytes) -> InvalidEvent:
+def rejected(key: bytes | None, value: bytes | None) -> InvalidEvent:
     with pytest.raises(InvalidEvent) as caught:
         reader.read(key, value)
     return caught.value
@@ -44,13 +42,14 @@ def rejected(key: bytes | None, value: bytes) -> InvalidEvent:
 @pytest.mark.parametrize(
     "value",
     [
+        pytest.param(None, id="no value (a tombstone)"),
         pytest.param(b"\xff\xfe{}", id="not UTF-8"),
         pytest.param(b'{"specversion": "1.0",', id="not JSON"),
         pytest.param(b'{"total": NaN}', id="not standard JSON"),
         pytest.param(b"", id="empty"),
     ],
 )
-def test_bytes_that_are_not_json_text_are_unreadable(value: bytes) -> None:
+def test_bytes_that_are_not_json_text_are_unreadable(value: bytes | None) -> None:
     invalid = rejected(KEY, value)
 
     assert invalid.layer is Layer.UNREADABLE
@@ -186,6 +185,12 @@ def test_every_schema_violation_in_the_data_is_reported_with_its_pointer() -> No
             {"lines": [{"sku": "KNE-ESC-0042", "quantity": 1, "unitPrice": 1_000_001}]},
             "/data/lines/0/unitPrice",
             id="unit price above 1,000,000",
+        ),
+        pytest.param(
+            {"placedAt": "0001-01-01T00:00:00+01:00"}, "/data/placedAt", id="placed before 2000"
+        ),
+        pytest.param(
+            {"placedAt": "9999-12-31T23:59:59-01:00"}, "/data/placedAt", id="placed after 2999"
         ),
         pytest.param({"total": "4498"}, "/data/total", id="money as a string"),
         pytest.param({"total": 44.98}, "/data/total", id="money as a fraction"),
@@ -380,5 +385,5 @@ def test_any_total_other_than_the_sum_is_invalid(data: dict[str, Any], differenc
 
 
 def test_the_schema_files_examples_are_read() -> None:
-    for example in json.loads(SCHEMA.read_text())["examples"]:
+    for example in json.loads(EVENT_SCHEMA.read_text())["examples"]:
         reader.read(example["data"]["orderId"].encode(), encoded(example))

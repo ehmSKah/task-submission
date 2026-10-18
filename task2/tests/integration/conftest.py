@@ -14,13 +14,13 @@ from order_consumer.config import Settings
 from order_consumer.main import build
 from tests.integration.stack import (
     CONSUMER_DATABASE_URL,
-    EVENT_SCHEMA,
     FULFILMENT_TOKEN,
     KAFKA_BOOTSTRAP,
     STUB_URL,
     ConsumerGroup,
     create_topic,
 )
+from tests.support.events import EVENT_SCHEMA
 
 
 @pytest.fixture(scope="session", autouse=True)

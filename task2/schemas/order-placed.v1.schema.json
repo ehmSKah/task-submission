@@ -46,7 +46,7 @@
       "properties": {
         "orderId": { "$ref": "#/$defs/uuid" },
         "customerId": { "$ref": "#/$defs/uuid" },
-        "placedAt": { "type": "string", "format": "date-time" },
+        "placedAt": { "type": "string", "format": "date-time", "pattern": "^2[0-9]{3}-" },
         "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
         "lines": {
           "type": "array",

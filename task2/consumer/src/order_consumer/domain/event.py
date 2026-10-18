@@ -88,7 +88,7 @@ class OrderPlacedReader:
     def from_file(cls, path: Path) -> "OrderPlacedReader":
         return cls(json.loads(path.read_text(encoding="utf-8")))
 
-    def read(self, key: bytes | None, value: bytes) -> OrderPlacedEvent:
+    def read(self, key: bytes | None, value: bytes | None) -> OrderPlacedEvent:
         envelope = _parse(value)
         layer, errors = self._first_failing_layer(key, envelope)
         if errors:
@@ -135,8 +135,11 @@ def _pointer(path: Iterable[str | int]) -> str:
     return "".join("/" + str(part).replace("~", "~0").replace("/", "~1") for part in path)
 
 
-def _parse(value: bytes) -> Any:
+def _parse(value: bytes | None) -> Any:
     """Layer 1. Decoded explicitly: `json.loads` on bytes would also accept UTF-16 and UTF-32."""
+    if value is None:
+        message = "no value: the record is a tombstone"
+        raise InvalidEvent(Layer.UNREADABLE, [FieldError(pointer="", message=message)])
     try:
         return json.loads(value.decode("utf-8"), parse_constant=_reject_constant)
     except UnicodeDecodeError as error:

@@ -37,7 +37,7 @@ The consumer handles exactly one kind of event, the **order placed event**, whic
 - **No personal data.** The customer is a reference id. Dead letters keep the original bytes for the topic's retention, and logs describe events, so personal data in the event would spread to both. Keeping it out is deliberate data minimisation.
 - **`placedAt` and `time` are kept apart.** `placedAt` is the business fact; `time` is when the event was emitted. They differ when an event is emitted again later.
 - **The currency allow-list:** EUR, USD and GBP (exponent 2), JPY (exponent 0) and KWD (exponent 3), so every exponent in use is exercised. Adding a currency is a one-line change with its exponent.
-- **Indicative limits** (fixed in [`order-placed.v1.schema.json`](../../schemas/order-placed.v1.schema.json)): 1–50 lines, quantity 1–999, `unitPrice` 0–1,000,000 minor units, `total` an integer ≥ 0, `sku` upper-case letters and digits in hyphen-separated groups (`^[A-Z0-9]+(-[A-Z0-9]+)*$`, at most 64 characters), `currency` three upper-case letters, the event id, order id and customer id UUIDs, timestamps RFC 3339 with an offset.
+- **Indicative limits** (fixed in [`order-placed.v1.schema.json`](../../schemas/order-placed.v1.schema.json)): 1–50 lines, quantity 1–999, `unitPrice` 0–1,000,000 minor units, `total` an integer ≥ 0, `sku` upper-case letters and digits in hyphen-separated groups (`^[A-Z0-9]+(-[A-Z0-9]+)*$`, at most 64 characters), `currency` three upper-case letters, the event id, order id and customer id UUIDs, timestamps RFC 3339 with an offset, `placedAt` in the years 2000–2999 (a plausible range that also keeps every valid placement time convertible to UTC).
 
 **Validation**, in order; checking stops at the first layer that fails:
 

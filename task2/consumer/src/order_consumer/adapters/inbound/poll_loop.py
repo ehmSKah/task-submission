@@ -48,7 +48,7 @@ def _delivery(message: Message, topic: str) -> Delivery:
     timestamp_type, timestamp_ms = message.timestamp()
     return Delivery(
         key=message.key(),
-        value=message.value() or b"",
+        value=message.value(),
         topic=message.topic() or topic,
         partition=message.partition() or 0,
         offset=message.offset() or 0,
@@ -60,7 +60,8 @@ def _delivery(message: Message, topic: str) -> Delivery:
 
 
 def _headers(message: Message) -> tuple[tuple[str, bytes | None], ...]:
-    """Kept in their order and with repeated keys; a consumed record's values are bytes."""
+    """Kept in their order and with repeated keys. The client's types also allow str values,
+    though a consumed record's are bytes."""
     headers = message.headers() or []
     pairs = headers.items() if isinstance(headers, dict) else headers
     return tuple(

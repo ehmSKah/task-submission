@@ -1,8 +1,11 @@
 """Order placed events for tests, shaped as ADR 0001 defines them."""
 
 import json
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
+
+EVENT_SCHEMA = Path(__file__).parents[2] / "schemas" / "order-placed.v1.schema.json"
 
 
 def order_placed_envelope(

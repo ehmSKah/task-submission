@@ -15,7 +15,7 @@ class Delivery:
     """One Kafka record, without anything Kafka-specific."""
 
     key: bytes | None
-    value: bytes
+    value: bytes | None  # None for a tombstone
     topic: str
     partition: int
     offset: int
