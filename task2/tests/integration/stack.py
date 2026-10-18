@@ -6,14 +6,20 @@ state it observed.
 
 import os
 import time
-from collections.abc import Callable, Collection, Iterable
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import psycopg
-from confluent_kafka import Consumer, ConsumerGroupState, Producer, TopicPartition
+from confluent_kafka import (
+    OFFSET_BEGINNING,
+    Consumer,
+    ConsumerGroupState,
+    Producer,
+    TopicPartition,
+)
 from confluent_kafka.admin import AdminClient, ConsumerGroupDescription, NewTopic
 from psycopg.rows import dict_row
 
@@ -33,9 +39,22 @@ class ConsumerGroup:
 
     topic: str
     group: str
+    dead_letter_topic: str = "orders.dlt"
 
 
 STACK_CONSUMERS = ConsumerGroup(topic="orders", group="order-consumer")
+
+
+@dataclass(frozen=True)
+class Record:
+    key: bytes | None
+    value: bytes | None
+    headers: list[tuple[str, bytes]]
+
+    def header(self, name: str) -> str | None:
+        values = [value for key, value in self.headers if key == name]
+        assert len(values) <= 1, f"header {name} appears {len(values)} times"
+        return values[0].decode() if values else None
 
 
 def eventually[T](
@@ -60,10 +79,60 @@ def create_topic(name: str, partitions: int = 3) -> None:
 
 
 def publish(topic: str, events: Iterable[tuple[UUID, bytes]]) -> None:
+    publish_records(topic, [(str(order_id).encode(), value, []) for order_id, value in events])
+
+
+def publish_records(
+    topic: str,
+    records: Iterable[tuple[bytes | None, bytes | None, Sequence[tuple[str, bytes]]]],
+) -> None:
+    """Records as they are: any key, any bytes or none, any headers."""
     producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP, "enable.idempotence": True})
-    for order_id, value in events:
-        producer.produce(topic, key=str(order_id).encode(), value=value)
-    assert producer.flush(30) == 0, "not every event was delivered to Kafka"
+    for key, value, headers in records:
+        producer.produce(topic, key=key, value=value, headers=list(headers))
+    assert producer.flush(30) == 0, "not every record was delivered to Kafka"
+
+
+def records(topic: str) -> list[Record]:
+    """Every record on the topic so far, read with a throwaway group."""
+    reader = Consumer(
+        {
+            "bootstrap.servers": KAFKA_BOOTSTRAP,
+            "group.id": f"test-reader-{uuid4().hex[:12]}",
+            "enable.auto.commit": False,
+        }
+    )
+    try:
+        metadata = reader.list_topics(topic, timeout=10).topics[topic]
+        partitions = [TopicPartition(topic, p, OFFSET_BEGINNING) for p in metadata.partitions]
+        expected = 0
+        for tp in partitions:
+            low, high = reader.get_watermark_offsets(tp, timeout=10)
+            expected += high - low
+        reader.assign(partitions)
+        found: list[Record] = []
+        deadline = time.monotonic() + 10
+        while len(found) < expected:
+            if time.monotonic() > deadline:
+                raise AssertionError(
+                    f"read {len(found)} of the {expected} records on {topic}: {found!r}"
+                )
+            message = reader.poll(0.5)
+            if message is None or message.error() is not None:
+                continue
+            headers = [(name, value or b"") for name, value in message.headers() or []]
+            found.append(Record(message.key(), message.value(), headers))
+        return found
+    finally:
+        reader.close()
+
+
+def wait_for_dead_letters(consumers: ConsumerGroup, count: int = 1) -> list[Record]:
+    return eventually(
+        lambda: records(consumers.dead_letter_topic),
+        until=lambda found: len(found) >= count,
+        what=f"{count} dead letter(s) on {consumers.dead_letter_topic}",
+    )
 
 
 def stored_order(order_id: UUID) -> dict[str, Any] | None:
@@ -165,12 +234,23 @@ def assert_nothing_lost(
     """Every order ends handed over, and the group's committed offsets reach the end (ADR 0007)."""
     for order_id in order_ids:
         wait_until_handed_over(order_id, timeout)
+    assert_all_committed(consumers, timeout)
+
+
+def assert_all_committed(consumers: ConsumerGroup, timeout: float = 30.0) -> None:
     eventually(
         lambda: lag(consumers),
         until=lambda lags: all(behind == 0 for behind in lags.values()),
         what=f"group {consumers.group} to commit to the end of {consumers.topic}",
         timeout=timeout,
     )
+
+
+def assert_not_accepted(order_ids: Iterable[UUID]) -> None:
+    """Nothing stored and nothing handed over: no order row, no fulfilment order (ADR 0001)."""
+    for order_id in order_ids:
+        assert order_row_count(order_id) == 0, f"order rows for {order_id}"
+        assert fulfilment_orders(order_id) == [], f"fulfilment orders for {order_id}"
 
 
 def wait_until_handed_over(order_id: UUID, timeout: float = 30.0) -> None:

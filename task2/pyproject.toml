@@ -27,6 +27,7 @@ dev = [
     "mypy>=1.18",
     "import-linter>=2.5",
     "types-PyYAML",
+    "types-jsonschema",
 ]
 
 [tool.pytest.ini_options]

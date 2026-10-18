@@ -19,6 +19,7 @@ from tests.integration.stack import (
     ConsumerGroup,
     create_topic,
 )
+from tests.support.events import EVENT_SCHEMA
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -28,8 +29,10 @@ def json_logs() -> None:
 
 @pytest.fixture
 def topic() -> str:
+    """The test's own topic, and its dead-letter topic named after it."""
     name = f"orders.test.{uuid4().hex[:12]}"
     create_topic(name)
+    create_topic(f"{name}.dlt")
     return name
 
 
@@ -43,6 +46,8 @@ def consumer_settings(topic: str) -> Settings:
         database_url=CONSUMER_DATABASE_URL,
         fulfilment_base_url=STUB_URL,
         fulfilment_token=FULFILMENT_TOKEN,
+        kafka_dead_letter_topic=f"{topic}.dlt",
+        event_schema=EVENT_SCHEMA,
     )
 
 

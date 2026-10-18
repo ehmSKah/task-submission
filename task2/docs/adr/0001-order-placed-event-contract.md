@@ -36,7 +36,8 @@ The consumer handles exactly one kind of event, the **order placed event**, whic
 - **Money** is an integer in minor units with an ISO 4217 currency from an allow-list. The allow-list records each currency's exponent, so minor units can be turned into a decimal amount.
 - **No personal data.** The customer is a reference id. Dead letters keep the original bytes for the topic's retention, and logs describe events, so personal data in the event would spread to both. Keeping it out is deliberate data minimisation.
 - **`placedAt` and `time` are kept apart.** `placedAt` is the business fact; `time` is when the event was emitted. They differ when an event is emitted again later.
-- **Indicative limits** (fixed in the schema at build time): 1–50 lines, quantity 1–999, `unitPrice` 0–1,000,000, `sku` matches a simple pattern, timestamps are RFC 3339 with an offset.
+- **The currency allow-list:** EUR, USD and GBP (exponent 2), JPY (exponent 0) and KWD (exponent 3), so every exponent in use is exercised. Adding a currency is a one-line change with its exponent.
+- **Indicative limits** (fixed in [`order-placed.v1.schema.json`](../../schemas/order-placed.v1.schema.json)): 1–50 lines, quantity 1–999, `unitPrice` 0–1,000,000 minor units, `total` an integer ≥ 0, `sku` upper-case letters and digits in hyphen-separated groups (`^[A-Z0-9]+(-[A-Z0-9]+)*$`, at most 64 characters), `currency` three upper-case letters, the event id, order id and customer id UUIDs, timestamps RFC 3339 with an offset, `placedAt` in the years 2000–2999 (a plausible range that also keeps every valid placement time convertible to UTC).
 
 **Validation**, in order; checking stops at the first layer that fails:
 
@@ -49,6 +50,14 @@ The consumer handles exactly one kind of event, the **order placed event**, whic
 | 5 | Business rule | total ≠ sum of quantity × unit price; a SKU twice in one order; currency not allowed; Kafka key ≠ `orderId` |
 
 - **Layers 1–4 are checked with a JSON Schema** (`order-placed.v1.schema.json`), plus the parsing in front of it. Layer 5 is code, because a schema can't express "the total equals the sum".
+- **One schema file, one part per layer.** Its `$defs` hold `cloudEvent` (layer 2), `supportedTypeAndVersion` (layer 3) and `orderPlaced` (layer 4), and the file as a whole is all three, so it reads as the complete contract. Where a check sits:
+  - *Layer 1:* strict UTF-8 and standard JSON (`NaN` and `Infinity` are not JSON); an empty value, such as a tombstone, is unreadable.
+  - *Layer 2:* `specversion` `1.0`, `id`, `source` and `type` present; `id` a UUID; `time`, when present, RFC 3339 with an offset; `datacontenttype`, when present, `application/json` (CloudEvents' JSON format implies it when absent). JSON that is not an object fails here.
+  - *Layer 3:* `type` `order.placed` and `dataschema` exactly `urn:task2:schema:order-placed:1`. `dataschema` is optional in CloudEvents but required here, because it carries the major version.
+  - *Layer 4:* `data` present and within the limits above.
+  - *Layer 5:* total, SKUs, currency and key. **The key is compared as bytes**: the same UUID written in another case would still land on another partition.
+- **Patterns follow ECMA-262**, as JSON Schema specifies: `$` is the end of the input. Python's `$` also matches before a final newline, so the consumer matches it as `\Z`; otherwise `"KNE-ESC-0042\n"` would pass.
+- **An error** is a JSON Pointer and a message, e.g. `/data/lines/0/quantity` and `0 is less than the minimum of 1`. A missing property is reported at the object that lacks it, as JSON Schema validators do. The dead letter also gives the number of errors, so a cut-off list is visible as one.
 - **The Kafka key must equal `orderId`.** A mismatched key puts the order on the wrong partition, which would quietly break the one-partition-per-order assumption.
 - **All errors of the failing layer are reported**, each with a JSON Pointer to the field, capped at 20, not just the first one.
 - **An invalid event is permanent and never retried.** Retrying the same bytes cannot succeed. It goes to the dead-letter topic with its reason; nothing is stored. How it gets there and what a dead letter carries are decided with the retry strategy.
@@ -64,7 +73,7 @@ Event v1 ──(1)──► Order ──(2)──► Downstream request
 producer's        our own        downstream's
 contract          model          contract
 ```
-1. **Event v1 → Order.** Timestamps are normalised to UTC. Line totals and the item count are derived. Unknown fields are dropped. The event id, event time and trace id are kept next to the order as processing metadata, not as order fields.
+1. **Event v1 → Order.** Timestamps are normalised to UTC. Whole numbers written with a fraction (`2.0`, which JSON Schema accepts as an integer) become integers. Line totals and the item count are derived. Unknown fields are dropped. The event id, event time and trace id are kept next to the order as processing metadata, not as order fields.
 2. **Order → Downstream request.** The downstream has its own shape, for example money as a decimal string with its currency and the order id as an external reference. The exact contract is decided with the downstream API.
 
 - **Both mappings are pure functions**, unit-tested without Kafka, a database or HTTP. A change in the producer's schema touches only mapping 1; a change in the downstream touches only mapping 2.

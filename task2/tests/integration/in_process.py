@@ -51,7 +51,11 @@ def crash_after_handover(fulfilment: FulfilmentClient) -> FulfilmentClient:
 
 
 def group_of(settings: Settings) -> ConsumerGroup:
-    return ConsumerGroup(topic=settings.kafka_topic, group=settings.kafka_group_id)
+    return ConsumerGroup(
+        topic=settings.kafka_topic,
+        group=settings.kafka_group_id,
+        dead_letter_topic=settings.kafka_dead_letter_topic,
+    )
 
 
 def run_until_crash(

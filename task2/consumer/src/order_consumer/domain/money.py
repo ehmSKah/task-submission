@@ -3,7 +3,7 @@
 from decimal import Decimal
 
 # The allow-list: each currency with its exponent, the number of minor-unit digits.
-CURRENCY_EXPONENTS: dict[str, int] = {"EUR": 2, "USD": 2, "GBP": 2, "JPY": 0}
+CURRENCY_EXPONENTS: dict[str, int] = {"EUR": 2, "USD": 2, "GBP": 2, "JPY": 0, "KWD": 3}
 
 
 def decimal_amount(minor_units: int, currency: str) -> str:

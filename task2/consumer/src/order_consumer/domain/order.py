@@ -33,15 +33,21 @@ class Order:
 
 
 def to_order(data: Mapping[str, Any]) -> Order:
-    """Mapping 1. Expects data that has already passed validation."""
+    """Mapping 1. Expects data that has already passed validation.
+
+    JSON has one number type, so a schema integer may arrive written as 2.0; `int` changes only
+    how it is written, never its value.
+    """
     return Order(
         order_id=UUID(data["orderId"]),
         customer_id=UUID(data["customerId"]),
         placed_at=datetime.fromisoformat(data["placedAt"]).astimezone(UTC),
         currency=data["currency"],
         lines=tuple(
-            OrderLine(sku=line["sku"], quantity=line["quantity"], unit_price=line["unitPrice"])
+            OrderLine(
+                sku=line["sku"], quantity=int(line["quantity"]), unit_price=int(line["unitPrice"])
+            )
             for line in data["lines"]
         ),
-        total=data["total"],
+        total=int(data["total"]),
     )

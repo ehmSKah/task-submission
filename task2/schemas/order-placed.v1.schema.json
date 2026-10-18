@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:task2:schema:order-placed:1",
+  "title": "Order placed event, version 1",
+  "description": "A CloudEvent in structured mode carrying a complete new order (ADR 0001). The consumer checks the three parts in order and stops at the first that fails: the CloudEvent envelope, the supported type and version, and the order data. Business rules a schema can't express (the total equals the sum of the lines, a SKU at most once, an allowed currency, the Kafka key equals the order id) are checked in code. Unknown fields are allowed and ignored within a major version.",
+  "allOf": [
+    { "$ref": "#/$defs/cloudEvent" },
+    { "$ref": "#/$defs/supportedTypeAndVersion" },
+    { "$ref": "#/$defs/orderPlaced" }
+  ],
+  "$defs": {
+    "cloudEvent": {
+      "description": "Layer 2: a CloudEvents 1.0 envelope in structured JSON mode, with a UUID as event id.",
+      "type": "object",
+      "required": ["specversion", "id", "source", "type"],
+      "properties": {
+        "specversion": { "const": "1.0" },
+        "id": { "type": "string", "format": "uuid" },
+        "source": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "time": { "type": "string", "format": "date-time" },
+        "dataschema": { "type": "string", "minLength": 1 },
+        "datacontenttype": { "const": "application/json" }
+      }
+    },
+    "supportedTypeAndVersion": {
+      "description": "Layer 3: the type is order.placed and the major version in dataschema is 1.",
+      "type": "object",
+      "required": ["type", "dataschema"],
+      "properties": {
+        "type": { "const": "order.placed" },
+        "dataschema": { "const": "urn:task2:schema:order-placed:1" }
+      }
+    },
+    "orderPlaced": {
+      "description": "Layer 4: the order in data.",
+      "type": "object",
+      "required": ["data"],
+      "properties": {
+        "data": { "$ref": "#/$defs/order" }
+      }
+    },
+    "order": {
+      "type": "object",
+      "required": ["orderId", "customerId", "placedAt", "currency", "lines", "total"],
+      "properties": {
+        "orderId": { "$ref": "#/$defs/uuid" },
+        "customerId": { "$ref": "#/$defs/uuid" },
+        "placedAt": { "type": "string", "format": "date-time", "pattern": "^2[0-9]{3}-" },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "lines": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": { "$ref": "#/$defs/line" }
+        },
+        "total": { "$ref": "#/$defs/minorUnits" }
+      }
+    },
+    "line": {
+      "type": "object",
+      "required": ["sku", "quantity", "unitPrice"],
+      "properties": {
+        "sku": { "type": "string", "pattern": "^[A-Z0-9]+(-[A-Z0-9]+)*$", "maxLength": 64 },
+        "quantity": { "type": "integer", "minimum": 1, "maximum": 999 },
+        "unitPrice": { "$ref": "#/$defs/minorUnits", "maximum": 1000000 }
+      }
+    },
+    "uuid": { "type": "string", "format": "uuid" },
+    "minorUnits": { "type": "integer", "minimum": 0 }
+  },
+  "examples": [
+    {
+      "specversion": "1.0",
+      "id": "7d2e1f3a-4b5c-4d6e-8f9a-0b1c2d3e4f5a",
+      "source": "/orders",
+      "type": "order.placed",
+      "time": "2026-10-17T09:12:04Z",
+      "dataschema": "urn:task2:schema:order-placed:1",
+      "datacontenttype": "application/json",
+      "data": {
+        "orderId": "3f1c2a9e-8b4d-4c1e-9f2a-6d7e8f9a0b1c",
+        "customerId": "a9e2b7c4-1d3f-4e5a-8b6c-7d8e9f0a1b2c",
+        "placedAt": "2026-10-17T11:12:03+02:00",
+        "currency": "EUR",
+        "lines": [
+          { "sku": "KNE-ESC-0042", "quantity": 2, "unitPrice": 1999 },
+          { "sku": "KNE-ELV-0007", "quantity": 1, "unitPrice": 500 }
+        ],
+        "total": 4498
+      }
+    }
+  ]
+}

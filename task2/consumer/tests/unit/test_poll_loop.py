@@ -8,7 +8,8 @@ import pytest
 from confluent_kafka import KafkaError
 
 from order_consumer.adapters.inbound.poll_loop import PollLoop
-from order_consumer.application.processing import Delivery, Outcome
+from order_consumer.application.ports import Delivery
+from order_consumer.application.processing import Outcome
 
 
 @dataclass
@@ -33,6 +34,12 @@ class FakeMessage:
 
     def offset(self) -> int:
         return self.offset_
+
+    def headers(self) -> list[tuple[str, bytes]] | None:
+        return None
+
+    def timestamp(self) -> tuple[int, int]:
+        return (1, 1_792_228_324_000)
 
 
 @dataclass
@@ -97,6 +104,12 @@ def test_each_offset_is_committed_after_its_message_was_handed_over() -> None:
 
 def test_a_duplicate_with_nothing_unfinished_is_committed() -> None:
     result = run([FakeMessage(7)], outcomes={7: Outcome.DUPLICATE})
+
+    assert result["timeline"] == ["processed 7", "commit 7"]
+
+
+def test_the_offset_of_a_dead_lettered_message_is_committed() -> None:
+    result = run([FakeMessage(7)], outcomes={7: Outcome.DEAD_LETTERED})
 
     assert result["timeline"] == ["processed 7", "commit 7"]
 
