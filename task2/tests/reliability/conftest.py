@@ -5,7 +5,14 @@ from collections.abc import Iterator
 
 import pytest
 
-from tests.reliability.containers import STACK_FILES, STACK_INSTANCES, compose, consumers, docker
+from tests.reliability.containers import (
+    STACK_FILES,
+    STACK_INSTANCES,
+    compose,
+    consumers,
+    docker,
+    wait_until_healthy,
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -31,14 +38,14 @@ def stack_restored() -> Iterator[None]:
     yield
     for frozen in consumers(status="paused"):
         docker("unpause", frozen)
+    compose("up", "--detach", "--wait", "--no-deps", "--no-recreate", "postgres")
     compose(
         "up",
         "--detach",
-        "--wait",
         "--no-deps",
         "--no-recreate",
         "--scale",
         f"consumer={STACK_INSTANCES}",
         "consumer",
-        "postgres",
     )
+    wait_until_healthy()

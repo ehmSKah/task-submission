@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from tests.integration.stack import eventually
+
 TASK2 = Path(__file__).parents[2]
 STACK_FILES = ("-f", str(TASK2 / "compose.yaml"))
 TEST_FILES = (*STACK_FILES, "-f", str(TASK2 / "compose.test.yaml"))
@@ -20,13 +22,32 @@ GRACE_PERIOD_SECONDS = 20.0
 
 
 def compose(*args: str, files: tuple[str, ...] = TEST_FILES) -> str:
-    return subprocess.run(
-        ["docker", "compose", *files, *args], check=True, capture_output=True, text=True
-    ).stdout
+    return docker("compose", *files, *args)
 
 
 def docker(*args: str) -> str:
-    return subprocess.run(["docker", *args], check=True, capture_output=True, text=True).stdout
+    """Fails with what the command printed."""
+    result = subprocess.run(["docker", *args], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise AssertionError(
+            f"`docker {' '.join(args)}` failed ({result.returncode}): {result.stderr.strip()}"
+        )
+    return result.stdout
+
+
+def wait_until_healthy(instances: int = STACK_INSTANCES) -> None:
+    """Unlike `up --wait`, which gives up on a container that is unhealthy for now: one that has
+    just woken up or stopped pausing is, until its next beat."""
+    eventually(
+        lambda: {name: health(name) for name in consumers()},
+        until=lambda states: len(states) == instances and set(states.values()) == {"healthy"},
+        what=f"{instances} healthy consumers",
+        timeout=90.0,
+    )
+
+
+def health(container: str) -> str:
+    return docker("inspect", "--format", "{{.State.Health.Status}}", container).strip()
 
 
 def scale(instances: int, wait: bool = True) -> None:
