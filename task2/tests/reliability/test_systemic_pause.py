@@ -5,7 +5,6 @@ Stops and starts the stack's own PostgreSQL, so it runs on its own, after the in
 """
 
 import subprocess
-from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -21,19 +20,14 @@ from tests.integration.stack import (
     records,
     wait_until_stable,
 )
+from tests.reliability.containers import STACK_INSTANCES, TASK2, compose, start_postgres
 from tests.support.events import order_placed_event
 
 pytestmark = pytest.mark.reliability
 
-TASK2 = Path(__file__).parents[2]
-STACK_INSTANCES = 2
-# A paused consumer probes every 30 s; its reconnects then take a few seconds more.
+# A paused consumer probes every 5 s with the suite's timings (30 s otherwise); its reconnects
+# then take a few seconds more.
 RECOVERY_TIMEOUT = 90.0
-
-
-def compose(*args: str) -> None:
-    """The stack's project comes from COMPOSE_PROJECT_NAME, as for `make`."""
-    subprocess.run(["docker", "compose", "-f", str(TASK2 / "compose.yaml"), *args], check=True)
 
 
 def make_ps() -> str:
@@ -92,7 +86,7 @@ def test_a_consumer_pauses_while_postgres_is_down_and_resumes_when_it_is_back() 
         assert sum(lag(STACK_CONSUMERS).values()) >= 1, "nothing committed"
         assert dead_letters_for(order_id) == [], "nothing dead-lettered"
     finally:
-        compose("up", "--detach", "--wait", "--no-deps", "--no-recreate", "postgres")
+        start_postgres()
 
     assert_nothing_lost([order_id], STACK_CONSUMERS, timeout=RECOVERY_TIMEOUT)
     assert_nothing_duplicated([order_id])

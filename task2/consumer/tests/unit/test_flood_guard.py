@@ -273,6 +273,7 @@ def test_the_thresholds_are_configuration() -> None:
         policy=harness.policy,
         clock=harness.clock,
         jitter=harness.jitter,
+        stop=harness.stop,
         thresholds=FloodGuardThresholds(circuit_breaker=1, bug_guard=2),
     )
 

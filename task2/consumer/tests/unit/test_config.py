@@ -1,5 +1,5 @@
 """Settings from the environment, and the start-up checks that refuse a bad configuration
-(ADR 0003, 0005, 0006)."""
+(ADR 0003, 0005, 0006, 0007)."""
 
 import pytest
 from structlog.testing import capture_logs
@@ -73,6 +73,23 @@ def test_a_setting_that_is_not_a_positive_number_is_refused(name: str, value: st
 def test_a_retry_budget_above_half_the_poll_interval_is_refused() -> None:
     with pytest.raises(ConfigurationError, match=r"half of max\.poll\.interval\.ms"):
         Settings.from_env(REQUIRED | {"HANDOVER_MAX_ATTEMPTS": "10"})
+
+
+def test_the_session_timeout_defaults_to_the_clients_45_seconds_and_can_be_shortened() -> None:
+    """Shortened only by the reliability suite's zombie test (ADR 0007, 0009)."""
+    assert Settings.from_env(REQUIRED).kafka_session_timeout_ms == 45_000
+    shortened = Settings.from_env(REQUIRED | {"KAFKA_SESSION_TIMEOUT_MS": "6000"})
+    assert shortened.kafka_session_timeout_ms == 6000
+
+
+def test_a_session_timeout_above_the_poll_interval_is_refused() -> None:
+    """The client refuses it too, but only once the consumer is created: as a crash."""
+    env = REQUIRED | {"KAFKA_SESSION_TIMEOUT_MS": "300001"}
+
+    with pytest.raises(
+        ConfigurationError, match=r"KAFKA_SESSION_TIMEOUT_MS .* KAFKA_MAX_POLL_INTERVAL_MS"
+    ):
+        Settings.from_env(env)
 
 
 def test_the_consumer_refuses_to_start_with_exit_code_2(monkeypatch: pytest.MonkeyPatch) -> None:

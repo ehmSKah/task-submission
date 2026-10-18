@@ -16,6 +16,8 @@ EVENT_SCHEMA = Path("/app/schemas/order-placed.v1.schema.json")
 
 # librdkafka's default: a consumer that doesn't poll for this long loses its partitions.
 MAX_POLL_INTERVAL_MS = 300_000
+# librdkafka's default: a member silent for this long is evicted from the group (ADR 0007).
+SESSION_TIMEOUT_MS = 45_000
 # A paused instance tries the message in hand again this often (ADR 0006).
 PAUSE_PROBE_INTERVAL_SECONDS = 30.0
 
@@ -47,6 +49,7 @@ class Settings:
     fulfilment_timeouts: FulfilmentTimeouts = field(default_factory=FulfilmentTimeouts)
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     kafka_max_poll_interval_ms: int = MAX_POLL_INTERVAL_MS
+    kafka_session_timeout_ms: int = SESSION_TIMEOUT_MS
     otlp_endpoint: str | None = None  # where spans are exported; without one they are discarded
     pause_probe_interval_seconds: float = PAUSE_PROBE_INTERVAL_SECONDS
     # Off by default: a paused instance keeps its partitions, right for shared causes (ADR 0006).
@@ -112,6 +115,7 @@ class Settings:
             kafka_max_poll_interval_ms=positive(
                 "KAFKA_MAX_POLL_INTERVAL_MS", int, MAX_POLL_INTERVAL_MS
             ),
+            kafka_session_timeout_ms=positive("KAFKA_SESSION_TIMEOUT_MS", int, SESSION_TIMEOUT_MS),
             otlp_endpoint=http_url_or_none("OTEL_EXPORTER_OTLP_ENDPOINT"),
             pause_probe_interval_seconds=positive(
                 "PAUSE_PROBE_INTERVAL_SECONDS", float, PAUSE_PROBE_INTERVAL_SECONDS
@@ -125,6 +129,11 @@ class Settings:
             ),
             health_file=Path(env.get("HEALTH_FILE", str(HEALTH_FILE))),
         )
+        if settings.kafka_session_timeout_ms > settings.kafka_max_poll_interval_ms:
+            raise ConfigurationError(
+                f"KAFKA_SESSION_TIMEOUT_MS ({settings.kafka_session_timeout_ms}) exceeds "
+                f"KAFKA_MAX_POLL_INTERVAL_MS ({settings.kafka_max_poll_interval_ms})"
+            )
         if not settings.event_schema.is_file():
             raise ConfigurationError(f"ORDER_EVENT_SCHEMA {settings.event_schema} is not a file")
         try:

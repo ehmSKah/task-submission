@@ -4,8 +4,6 @@ Drives the stack's own consumer containers on the real `orders` topic, so it run
 after the integration tests.
 """
 
-import subprocess
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -20,24 +18,17 @@ from tests.integration.stack import (
     publish,
     wait_until_stable,
 )
+from tests.reliability.containers import STACK_INSTANCES, compose
 from tests.support.events import order_placed_event
 
 pytestmark = pytest.mark.reliability
-
-COMPOSE_FILE = Path(__file__).parents[2] / "compose.yaml"
 
 # Shorter than the consumer's 5 s read timeout (ADR 0003): while the stub still holds the request,
 # the consumer that sent it is still waiting for the answer, so a kill then lands mid-handover.
 HANDOVER_DELAY_SECONDS = 4
 # A killed instance never leaves the group: its partitions move only once its session has timed
-# out (45 s, ADR 0007).
+# out (6 s with the suite's timings, 45 s otherwise; ADR 0007, 0009).
 RECOVERY_TIMEOUT = 120.0
-STACK_INSTANCES = 2
-
-
-def compose(*args: str) -> None:
-    """The stack's project comes from COMPOSE_PROJECT_NAME, as for `make`."""
-    subprocess.run(["docker", "compose", "-f", str(COMPOSE_FILE), *args], check=True)
 
 
 def test_consumers_killed_mid_handover_leave_one_fulfilment_order() -> None:

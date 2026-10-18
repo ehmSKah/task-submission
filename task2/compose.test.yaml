@@ -1,0 +1,10 @@
+# Shorter timings for the reliability suite (ADR 0009), layered on compose.yaml by its session
+# fixture for the consumer service only, and taken off again when the suite ends:
+#   docker compose -f compose.yaml -f compose.test.yaml up --detach --wait --no-deps consumer
+services:
+  consumer:
+    environment:
+      # A frozen zombie is evicted after 6 s, the broker's minimum, instead of 45 s (ADR 0007).
+      KAFKA_SESSION_TIMEOUT_MS: "6000"
+      # A paused instance probes every 5 s instead of every 30 s (ADR 0006).
+      PAUSE_PROBE_INTERVAL_SECONDS: "5"

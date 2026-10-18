@@ -9,7 +9,7 @@ The **Compose stack is the deliverable**, so it is also what the tests run again
 ## Decision
 
 **Harness**
-- **`docker compose up --wait`** with `compose.test.yaml` layered on top, which shortens backoff caps, attempt deadlines, the probe interval and, for the zombie test, the poll interval.
+- **`docker compose up --wait`** for the stack. The reliability suite layers `compose.test.yaml` on top for the consumer service only: it recreates the consumers with it before its tests and with the stack's own settings afterwards, so `make up` and the reviewer's stack are untouched. The override shortens the session timeout (6 s, for the zombie test) and the probe interval (5 s). Each container test leaves the stack as it found it: whatever it stopped, froze or scaled down runs again, healthy.
 - **In-process consumer tests.** pytest runs the consumer inside the test process against the stack's Kafka, PostgreSQL and stub. Each test uses its own topics (`orders.test.<id>`, `orders.test.<id>.dlt`) and consumer group, so the stack's consumers never take its messages, and a new group reading from the earliest offset never sees another test's events. The crash-point wrapper of ADR 0007 runs this way.
 - **Container tests.** These kill, stop and scale the real consumer containers on the real `orders` topic.
 - **Isolation:** every test uses fresh order ids, the stub's fault rules match per order (ADR 0003), and assertions look only at the test's own orders. No test depends on an empty database.
