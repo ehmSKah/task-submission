@@ -5,6 +5,7 @@ import pytest
 from structlog.testing import capture_logs
 
 from order_consumer import main
+from order_consumer.application.flood_guard import FloodGuardThresholds
 from order_consumer.application.retries import RetryPolicy
 from order_consumer.config import ConfigurationError, FulfilmentTimeouts, Settings
 from tests.support.events import EVENT_SCHEMA
@@ -103,3 +104,23 @@ def test_the_otlp_endpoint_is_read_from_the_standard_variable() -> None:
 def test_an_otlp_endpoint_that_is_not_an_http_url_is_refused() -> None:
     with pytest.raises(ConfigurationError, match="OTEL_EXPORTER_OTLP_ENDPOINT"):
         Settings.from_env(REQUIRED | {"OTEL_EXPORTER_OTLP_ENDPOINT": "jaeger:4318"})
+
+
+def test_the_flood_guard_thresholds_default_to_the_documented_values_and_can_be_changed() -> None:
+    """ADR 0006: 3 orders out of retries open the circuit, 5 unexpected exceptions trip the bug
+    guard; the probe interval is the pause's."""
+    defaults = Settings.from_env(REQUIRED)
+    changed = Settings.from_env(
+        REQUIRED | {"CIRCUIT_BREAKER_THRESHOLD": "2", "BUG_GUARD_THRESHOLD": "10"}
+    )
+
+    assert defaults.flood_guard == FloodGuardThresholds(circuit_breaker=3, bug_guard=5)
+    assert defaults.pause_probe_interval_seconds == 30.0
+    assert changed.flood_guard == FloodGuardThresholds(circuit_breaker=2, bug_guard=10)
+
+
+@pytest.mark.parametrize("name", ["CIRCUIT_BREAKER_THRESHOLD", "BUG_GUARD_THRESHOLD"])
+def test_a_flood_guard_threshold_that_is_not_a_positive_whole_number_is_refused(name: str) -> None:
+    for value in ("0", "2.5", "three"):
+        with pytest.raises(ConfigurationError, match=name):
+            Settings.from_env(REQUIRED | {name: value})

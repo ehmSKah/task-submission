@@ -3,7 +3,8 @@
 The stub's fault rules make the fulfilment service fail for one order at a time. Transient failures
 are retried until the handover completes or the retries run out; a refused handover is
 dead-lettered at once; a systemic answer pauses the consumer with nothing committed, until a probe
-succeeds.
+succeeds. Orders running out of retries one after another, an outage, open the circuit: the
+consumer pauses the same way instead of dead-lettering them.
 """
 
 import dataclasses
@@ -16,7 +17,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from order_consumer.application.retries import RetryPolicy
 from order_consumer.config import FulfilmentTimeouts, Settings
-from tests.integration.in_process import group_of, heartbeat, running
+from tests.integration.in_process import group_of, heartbeat, running, wait_until_paused
 from tests.integration.stack import (
     Record,
     add_fault_rule,
@@ -36,6 +37,7 @@ from tests.integration.stack import (
 )
 from tests.integration.traces import named, parent_id, span_id, trace_spans
 from tests.support.events import order_placed_event
+from tests.support.log_lines import LogLines
 
 pytestmark = pytest.mark.integration
 
@@ -212,14 +214,6 @@ def test_a_timeout_then_409_in_progress_then_the_replay_end_with_one_fulfilment_
     assert stored is not None and stored["fulfilment_order_id"] == created["id"]
 
 
-def wait_until_paused(settings: Settings, reason: str) -> dict[str, Any]:
-    return eventually(
-        lambda: heartbeat(settings) or {},
-        until=lambda beat: beat.get("state") == "paused",
-        what=f"the consumer to pause ({reason})",
-    )
-
-
 def test_a_wrong_token_pauses_the_consumer_without_dead_letters_or_commits(
     settings: Settings,
 ) -> None:
@@ -299,3 +293,59 @@ def test_a_failed_handover_is_completed_when_its_event_comes_again(settings: Set
         )
         assert_all_committed(group_of(settings))
     assert_nothing_duplicated([order_id])
+
+
+def test_an_outage_opens_the_circuit_and_the_waiting_orders_follow_in_order_once_it_ends(
+    settings: Settings, log_lines: LogLines
+) -> None:
+    """ADR 0006: the first two orders run out of retries and are dead-lettered; the third opens the
+    circuit and is held. The orders behind it wait in Kafka, on every partition; each probe is one
+    attempt. The outage ends after the second probe, and the third probe closes the circuit."""
+    settings = dataclasses.replace(settings, pause_probe_interval_seconds=2.0)
+    attempts = settings.retry_policy.max_attempts
+    first, second, third, fourth, fifth, elsewhere = (uuid4() for _ in range(6))
+    for order_id in (first, second):
+        add_fault_rule(order_id, times=attempts, status=503)
+    add_fault_rule(third, times=attempts + 2, status=503)
+    on_partition_0 = [first, second, third, fourth, fifth]
+    publish(
+        settings.kafka_topic,
+        [(order_id, order_placed_event(order_id)) for order_id in on_partition_0],
+        partition=0,
+    )
+
+    with running(settings):
+        paused = wait_until_paused(settings, "the circuit opening")
+        publish(settings.kafka_topic, [(elsewhere, order_placed_event(elsewhere))], partition=1)
+        eventually(
+            lambda: handover_statuses(third),
+            until=lambda statuses: len(statuses) == attempts + 1,
+            what="a probe that still meets the outage",
+        )
+        assert [stored_order(order_id) for order_id in (fourth, fifth, elsewhere)] == [None] * 3
+        assert lag(group_of(settings)) == {0: 3, 1: 1, 2: 0}, "nothing committed after the second"
+
+        waiting = [third, fourth, fifth, elsewhere]
+        assert_nothing_lost(waiting, group_of(settings))
+
+    assert (paused["reason"], paused["error"]) == ("circuit-open", "503 Service Unavailable")
+    dead_letters = records(settings.kafka_dead_letter_topic)
+    assert {record.header("dlt.order-id") for record in dead_letters} == {str(first), str(second)}
+    assert len(dead_letters) == 2
+    assert {record.header("dlt.reason") for record in dead_letters} == {"retries-exhausted"}
+    assert [handover_status(order_id) for order_id in (first, second)] == ["handover_failed"] * 2
+    assert handover_statuses(third) == [503] * (attempts + 2) + [201], "a probe is one attempt"
+    assert_nothing_duplicated(waiting)
+    handed_over = [stored_order(order_id) for order_id in (third, fourth, fifth)]
+    times = [row["handed_over_at"] for row in handed_over if row is not None]
+    assert times == sorted(times), "handed over in the order they were published"
+    events = [entry["event"] for entry in log_lines.entries()]
+    flood_guard = [event for event in events if event.startswith("circuit.")]
+    assert flood_guard == [
+        "circuit.opened",
+        "circuit.probe_failed",
+        "circuit.probe_failed",
+        "circuit.closed",
+    ]
+    beat = heartbeat(settings)
+    assert beat is not None and beat["state"] == "running"

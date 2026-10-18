@@ -40,6 +40,10 @@ _Avoid_: retry, resend
 A handover the consumer has given up on, because it ran out of retries or because the fulfilment service refused the order. The order stays accepted, and the handover can still be completed later.
 _Avoid_: lost order, rejected order
 
+**Flood guard**:
+What keeps an outage or a bug from turning healthy orders into dead letters. When orders keep running out of retries, the circuit opens; when messages keep failing unexpectedly, the bug guard trips. Either way the message in hand is held, consumption pauses, and it resumes by itself once that message can be processed.
+_Avoid_: rate limiter, throttle
+
 **Invalid event**:
 An event that can never be processed as sent: unreadable, not a well-formed event, of an unsupported type or version, breaking the schema, or breaking a business rule such as a wrong order total. Being invalid is permanent; retrying cannot change it.
 _Avoid_: bad message, poison pill (a crash-causing message, which is a different problem)

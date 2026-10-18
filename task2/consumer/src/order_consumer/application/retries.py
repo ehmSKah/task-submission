@@ -106,13 +106,18 @@ class HandoverRetries:
         self._clock = clock
         self._jitter = jitter
 
-    def hand_over(self, request: DownstreamRequest) -> HandedOver | GaveUp | SystemicAnswer:
-        """Ends at the first systemic answer, without further attempts."""
+    def hand_over(
+        self, request: DownstreamRequest, max_attempts: int | None = None
+    ) -> HandedOver | GaveUp | SystemicAnswer:
+        """Ends at the first systemic answer, without further attempts. `max_attempts` overrides
+        the policy's, e.g. a single attempt to probe a service thought to be down."""
         policy = self._policy
+        if max_attempts is None:
+            max_attempts = policy.max_attempts
         attempt = 0
         while True:
             attempt += 1
-            outcome = self._attempt(request, attempt)
+            outcome = self._attempt(request, attempt, max_attempts)
             if isinstance(outcome, HandedOver):
                 return outcome
             failure = outcome
@@ -126,16 +131,17 @@ class HandoverRetries:
                 # The service is unavailable for a while: that is the flood guard's business,
                 # not a reason to retry against it sooner (ADR 0006).
                 return GaveUp(DeadLetterReason.RETRIES_EXHAUSTED, attempt, failure, retry_after)
-            if attempt == policy.max_attempts:
+            if attempt == max_attempts:
                 return GaveUp(DeadLetterReason.RETRIES_EXHAUSTED, attempt, failure)
             if retry_after is None:
                 retry_after = policy.backoff(attempt, self._jitter)
             self._clock.sleep(retry_after)
 
-    def _attempt(self, request: DownstreamRequest, attempt: int) -> HandedOver | HandoverFailed:
+    def _attempt(
+        self, request: DownstreamRequest, attempt: int, max_attempts: int
+    ) -> HandedOver | HandoverFailed:
         """One attempt in a span of its own, carrying what its log line says (ADR 0008); the
         HTTP request's span, and the fulfilment service's, sit inside it."""
-        max_attempts = self._policy.max_attempts
         with tracer.start_as_current_span(
             "handover attempt",
             attributes={"handover.attempt": attempt, "handover.max_attempts": max_attempts},
