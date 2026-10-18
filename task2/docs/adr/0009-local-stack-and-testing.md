@@ -39,6 +39,7 @@ The README maps each assignment requirement to its tests.
 - **No `sleep` in test code.** One helper, `eventually(condition, timeout=30 s)`, polls every 100 ms for a state: an order's `handover_status`, the stub's journal of fulfilment orders, a dead letter for an order id, a heartbeat showing `paused`. On timeout it fails with the last state it observed.
 - **Order of start-up:** in-process tests publish first and then start the consumer (which reads from the earliest offset), so there is no race between assignment and publishing. Container tests wait until both heartbeats show assigned partitions.
 - **Time in unit tests is fake**, and the jitter source is injectable, so backoff and the flood guard are exact.
+- **Integration tests may pin the jitter** where a scenario depends on when attempts happen: timeout → `409` in progress → replay needs one attempt inside the stub's delay and a later one after it. Everywhere else the jitter stays random, within its bounds.
 - **No automatic re-runs** of failed tests: a flaky test is a bug.
 - **Serial by default.** Container tests share the real consumers and must be serial; in-process tests could run in parallel thanks to their own topics, if that is ever needed.
 

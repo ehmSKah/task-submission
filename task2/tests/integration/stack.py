@@ -201,12 +201,26 @@ def wait_until_stable(
     return frozenset(member.member_id for member in settled.members)
 
 
-def add_fault_rule(order_id: UUID, times: int = 1, delay_seconds: float = 0.0) -> None:
+def add_fault_rule(
+    order_id: UUID,
+    times: int = 1,
+    delay_seconds: float = 0.0,
+    status: int | None = None,
+    retry_after: str | None = None,
+    drop_connection: bool = False,
+) -> None:
     """A stub fault for this order only, so tests side by side don't interfere (ADR 0003)."""
-    response = httpx.post(
-        f"{STUB_URL}/_control/fault-rules",
-        json={"externalReference": str(order_id), "times": times, "delaySeconds": delay_seconds},
-    )
+    rule: dict[str, Any] = {
+        "externalReference": str(order_id),
+        "times": times,
+        "delaySeconds": delay_seconds,
+        "dropConnection": drop_connection,
+    }
+    if status is not None:
+        rule["status"] = status
+    if retry_after is not None:
+        rule["retryAfter"] = retry_after
+    response = httpx.post(f"{STUB_URL}/_control/fault-rules", json=rule)
     response.raise_for_status()
 
 
