@@ -5,7 +5,6 @@ The stack's consumers never take a test's messages, and no test sees another's e
 
 import threading
 from collections.abc import Iterator
-from dataclasses import dataclass
 from uuid import uuid4
 
 import pytest
@@ -18,14 +17,9 @@ from tests.integration.stack import (
     FULFILMENT_TOKEN,
     KAFKA_BOOTSTRAP,
     STUB_URL,
+    ConsumerGroup,
     create_topic,
 )
-
-
-@dataclass(frozen=True)
-class InProcessConsumer:
-    topic: str
-    group: str
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -41,7 +35,7 @@ def topic() -> str:
 
 
 @pytest.fixture
-def consumer(topic: str) -> Iterator[InProcessConsumer]:
+def consumer(topic: str) -> Iterator[ConsumerGroup]:
     group = f"order-consumer-test-{uuid4().hex[:12]}"
     settings = Settings(
         kafka_bootstrap_servers=KAFKA_BOOTSTRAP,
@@ -63,7 +57,7 @@ def consumer(topic: str) -> Iterator[InProcessConsumer]:
 
     thread = threading.Thread(target=run, name=f"consumer-{group}", daemon=True)
     thread.start()
-    yield InProcessConsumer(topic=topic, group=group)
+    yield ConsumerGroup(topic=topic, group=group)
     stop.set()
     thread.join(timeout=15)
     assert not thread.is_alive(), "the in-process consumer did not stop"

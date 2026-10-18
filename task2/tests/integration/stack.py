@@ -4,23 +4,35 @@ No test sleeps (ADR 0009): `eventually` waits for a state and, on timeout, fails
 state it observed.
 """
 
-import json
 import os
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 import psycopg
 from confluent_kafka import Consumer, Producer, TopicPartition
 from confluent_kafka.admin import AdminClient, NewTopic
+from psycopg.rows import dict_row
 
 HOST = os.environ.get("STACK_HOST", "localhost")
 KAFKA_BOOTSTRAP = f"{HOST}:9094"
 CONSUMER_DATABASE_URL = f"postgresql://order_consumer:local-dev-consumer@{HOST}:5432/orders"
 STUB_URL = f"http://{HOST}:8081"
 FULFILMENT_TOKEN = "local-dev-token"
+
+
+@dataclass(frozen=True)
+class ConsumerGroup:
+    """A group consuming a topic: an in-process test consumer, or the stack's own consumers."""
+
+    topic: str
+    group: str
+
+
+STACK_CONSUMERS = ConsumerGroup(topic="orders", group="order-consumer")
 
 
 def eventually[T](
@@ -44,31 +56,6 @@ def create_topic(name: str, partitions: int = 3) -> None:
         future.result(timeout=30)
 
 
-def order_placed_event(order_id: UUID, event_id: UUID | None = None) -> bytes:
-    return json.dumps(
-        {
-            "specversion": "1.0",
-            "id": str(event_id or uuid4()),
-            "source": "/orders",
-            "type": "order.placed",
-            "time": "2026-10-17T09:12:04Z",
-            "dataschema": "urn:task2:schema:order-placed:1",
-            "datacontenttype": "application/json",
-            "data": {
-                "orderId": str(order_id),
-                "customerId": str(uuid4()),
-                "placedAt": "2026-10-17T11:12:03+02:00",
-                "currency": "EUR",
-                "lines": [
-                    {"sku": "KNE-ESC-0042", "quantity": 2, "unitPrice": 1999},
-                    {"sku": "KNE-ELV-0007", "quantity": 1, "unitPrice": 500},
-                ],
-                "total": 4498,
-            },
-        }
-    ).encode()
-
-
 def publish(topic: str, events: Iterable[tuple[UUID, bytes]]) -> None:
     producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP, "enable.idempotence": True})
     for order_id, value in events:
@@ -77,17 +64,12 @@ def publish(topic: str, events: Iterable[tuple[UUID, bytes]]) -> None:
 
 
 def stored_order(order_id: UUID) -> dict[str, Any] | None:
-    with psycopg.connect(CONSUMER_DATABASE_URL) as connection:
-        cursor = connection.execute(
+    with psycopg.connect(CONSUMER_DATABASE_URL, row_factory=dict_row) as connection:
+        return connection.execute(
             "SELECT handover_status, fulfilment_order_id, placed_at, total, item_count "
             "FROM orders WHERE order_id = %s",
             (order_id,),
-        )
-        row = cursor.fetchone()
-    if row is None:
-        return None
-    columns = ["handover_status", "fulfilment_order_id", "placed_at", "total", "item_count"]
-    return dict(zip(columns, row, strict=True))
+        ).fetchone()
 
 
 def order_row_count(order_id: UUID) -> int:
@@ -108,9 +90,10 @@ def fulfilment_orders(order_id: UUID) -> list[dict[str, str]]:
     return result
 
 
-def lag(topic: str, group: str) -> dict[int, int]:
+def lag(consumers: ConsumerGroup) -> dict[int, int]:
     """Per partition: how many records the group has not yet committed."""
-    probe = Consumer({"bootstrap.servers": KAFKA_BOOTSTRAP, "group.id": group})
+    topic = consumers.topic
+    probe = Consumer({"bootstrap.servers": KAFKA_BOOTSTRAP, "group.id": consumers.group})
     try:
         metadata = probe.list_topics(topic, timeout=10).topics[topic]
         partitions = [TopicPartition(topic, partition) for partition in metadata.partitions]
@@ -125,14 +108,14 @@ def lag(topic: str, group: str) -> dict[int, int]:
         probe.close()
 
 
-def assert_nothing_lost(order_ids: Iterable[UUID], topic: str, group: str) -> None:
+def assert_nothing_lost(order_ids: Iterable[UUID], consumers: ConsumerGroup) -> None:
     """Every order ends handed over, and the group's committed offsets reach the end (ADR 0007)."""
     for order_id in order_ids:
         wait_until_handed_over(order_id)
     eventually(
-        lambda: lag(topic, group),
+        lambda: lag(consumers),
         until=lambda lags: all(behind == 0 for behind in lags.values()),
-        what=f"group {group} to commit to the end of {topic}",
+        what=f"group {consumers.group} to commit to the end of {consumers.topic}",
     )
 
 

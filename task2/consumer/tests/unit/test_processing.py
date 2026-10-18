@@ -1,6 +1,5 @@
 """Processing one delivery (ADR 0004): store, hand over, record, and report the outcome."""
 
-import json
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -8,37 +7,16 @@ from order_consumer.application.ports import HandoverResult
 from order_consumer.application.processing import Delivery, OrderProcessor, Outcome
 from order_consumer.domain.downstream import DownstreamRequest
 from order_consumer.domain.order import Order
+from tests.support.events import order_placed_event
 
 ORDER_ID = UUID("3f1c2a9e-8b4d-4c1e-9f2a-6d7e8f9a0b1c")
 EVENT_ID = UUID("7d2e1f3a-4b5c-4d6e-8f9a-0b1c2d3e4f5a")
 
 
-def order_placed_event() -> bytes:
-    return json.dumps(
-        {
-            "specversion": "1.0",
-            "id": str(EVENT_ID),
-            "source": "/orders",
-            "type": "order.placed",
-            "time": "2026-10-17T09:12:04Z",
-            "dataschema": "urn:task2:schema:order-placed:1",
-            "datacontenttype": "application/json",
-            "data": {
-                "orderId": str(ORDER_ID),
-                "customerId": "a9e2b7c4-1d3f-4e5a-8b6c-7d8e9f0a1b2c",
-                "placedAt": "2026-10-17T09:12:03Z",
-                "currency": "EUR",
-                "lines": [{"sku": "KNE-ESC-0042", "quantity": 2, "unitPrice": 1999}],
-                "total": 3998,
-            },
-        }
-    ).encode()
-
-
 def delivery() -> Delivery:
     return Delivery(
         key=str(ORDER_ID).encode(),
-        value=order_placed_event(),
+        value=order_placed_event(ORDER_ID, EVENT_ID),
         topic="orders",
         partition=1,
         offset=42,
@@ -108,4 +86,4 @@ def test_the_handover_carries_the_order_id_as_idempotency_key() -> None:
 
     [request] = fulfilment.requests
     assert request.idempotency_key == str(ORDER_ID)
-    assert request.as_payload()["externalReference"] == str(ORDER_ID)
+    assert request.payload["externalReference"] == str(ORDER_ID)

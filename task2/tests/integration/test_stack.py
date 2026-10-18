@@ -7,11 +7,12 @@ import pytest
 
 from tests.integration.stack import (
     CONSUMER_DATABASE_URL,
+    STACK_CONSUMERS,
     assert_nothing_duplicated,
     assert_nothing_lost,
-    order_placed_event,
     publish,
 )
+from tests.support.events import order_placed_event
 
 pytestmark = pytest.mark.integration
 
@@ -19,9 +20,9 @@ pytestmark = pytest.mark.integration
 def test_the_stacks_consumers_hand_over_events_from_the_orders_topic() -> None:
     order_id = uuid4()
 
-    publish("orders", [(order_id, order_placed_event(order_id))])
+    publish(STACK_CONSUMERS.topic, [(order_id, order_placed_event(order_id))])
 
-    assert_nothing_lost([order_id], topic="orders", group="order-consumer")
+    assert_nothing_lost([order_id], STACK_CONSUMERS)
     assert_nothing_duplicated([order_id])
 
 

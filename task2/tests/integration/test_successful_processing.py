@@ -5,25 +5,25 @@ from uuid import uuid4
 
 import pytest
 
-from tests.integration.conftest import InProcessConsumer
 from tests.integration.stack import (
+    ConsumerGroup,
     assert_nothing_duplicated,
     assert_nothing_lost,
     fulfilment_orders,
-    order_placed_event,
     publish,
     stored_order,
 )
+from tests.support.events import order_placed_event
 
 pytestmark = pytest.mark.integration
 
 
-def test_a_valid_event_is_stored_handed_over_and_committed(consumer: InProcessConsumer) -> None:
+def test_a_valid_event_is_stored_handed_over_and_committed(consumer: ConsumerGroup) -> None:
     order_id = uuid4()
 
     publish(consumer.topic, [(order_id, order_placed_event(order_id))])
 
-    assert_nothing_lost([order_id], consumer.topic, consumer.group)
+    assert_nothing_lost([order_id], consumer)
     assert_nothing_duplicated([order_id])
     stored = stored_order(order_id)
     assert stored is not None
@@ -34,11 +34,11 @@ def test_a_valid_event_is_stored_handed_over_and_committed(consumer: InProcessCo
 
 
 def test_several_events_across_partitions_are_all_handed_over_once(
-    consumer: InProcessConsumer,
+    consumer: ConsumerGroup,
 ) -> None:
     order_ids = [uuid4() for _ in range(10)]
 
     publish(consumer.topic, [(order_id, order_placed_event(order_id)) for order_id in order_ids])
 
-    assert_nothing_lost(order_ids, consumer.topic, consumer.group)
+    assert_nothing_lost(order_ids, consumer)
     assert_nothing_duplicated(order_ids)
