@@ -21,6 +21,7 @@ The **Compose stack is the deliverable**, so it is also what the tests run again
 | Unit | `consumer/tests/unit` | plain Python with fakes behind every port and a fake clock | each validation layer and business rule; both mappings, with property tests (the total always equals the sum of line totals; money formats correctly for every currency exponent); duplicate versus conflict; retry policy and backoff; the flood guard's states; the outcome-to-commit table; the start-up budget check; log redaction |
 | Stub unit | `fulfilment-stub/tests` | the stub in the test process | the stored response, `422`, `409` in progress, fault rules, the journal |
 | Demo unit | `demo/tests` | plain Python with a fake stack | the sample events, against the consumer's own validation; outcome counting from log lines; the runner stopping at the first unmet outcome; the sections matching the four category files and `make demo-tests` |
+| Docs | `tests/docs` | the repository's files | every relative link and heading resolves (so every file the README's requirement table names exists); no link to an issue, a working branch or an agent file; the design doc's headings and its link to every ADR; every `make` target the README names exists |
 | Integration | `tests/integration` | the in-process consumer against the stack | the four assignment categories; crash points; dead-letter contents; replay; trace continuity (OpenTelemetry's in-memory span exporter); no token in logs or spans; one terminal log line per message |
 | Reliability | `tests/reliability` | the consumer containers | hard kill mid-handover, graceful stop mid-stream, rebalance under load, zombie consumer, pause during a rebalance (ADR 0007) |
 | Static | the repository | | ruff, mypy (strict), import-linter; the JSON Schema and OpenAPI files are valid and their examples pass |
@@ -89,7 +90,7 @@ The README maps each assignment requirement to its tests.
 | Job | Runs |
 |---|---|
 | static | `make lint`, plus actionlint for the workflow |
-| unit | consumer and stub unit tests; coverage of `domain` and `application` must reach 90 % of lines, with branch coverage measured |
+| unit | the unit, stub, demo and docs suites (`make test-unit`); coverage of `domain` and `application` must reach 90 % of lines, with branch coverage measured |
 | integration | `make up`, `make test-integration`, `make test-reliability`, then `make demo` as a smoke test; uploads test reports, and on failure the Compose logs and heartbeat files; 25-minute timeout |
 
 - **The coverage gate covers the core only.** That is where coverage is meaningful; adapters are proven by the integration tests against real services.
