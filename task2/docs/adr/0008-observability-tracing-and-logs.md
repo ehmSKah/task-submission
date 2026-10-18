@@ -17,13 +17,14 @@ The correlation id is the **trace id of a W3C Trace Context `traceparent` header
 | Within the consumer | bound once per message, so every log line and span for that message carries it |
 | Handover | sent as `traceparent` on every attempt; the stub continues the trace and logs the same trace id |
 | Stored | `orders.trace_id` and `processed_events.trace_id` (ADR 0002) |
-| Dead letters | original headers copied; if the consumer started a new trace, its `traceparent` is set (ADR 0006) |
+| Dead letters | original headers copied; if the consumer started a new trace, its `traceparent` replaces the record's, and a `tracestate`, which belonged to the replaced trace, is left out (ADR 0006) |
 | Replay | headers are kept, so a replayed dead letter continues its original trace |
 
 **Traces** (OpenTelemetry SDK)
-- **One span per message** (`process orders`), with child spans for the database write and **each handover attempt** (`httpx` instrumentation). Retries appear as sibling attempt spans with their status and duration; the stub's span sits inside each attempt.
-- **Span names and attributes follow OpenTelemetry's messaging and HTTP conventions** (topic, partition, offset, consumer group; method, status code).
-- **The exporter is configuration** (OTLP endpoint). With none configured, spans are created and discarded at negligible cost.
+- **One span per message** (`process orders`), with child spans for each database write and **each handover attempt** (`handover attempt`). Retries appear as sibling attempt spans with their status and duration. Inside each attempt sits the `httpx` instrumentation's span for the request, and inside that the stub's span.
+- **An attempt span carries what the attempt's log line says:** `handover.attempt`, `handover.max_attempts`, `handover.response_class`, `handover.status` and `handover.error`, with an error status when the attempt failed. The retry loop opens it through the OpenTelemetry API, which is vendor-neutral and does nothing without the SDK: the HTTP adapter doesn't know the attempt number, and an attempt abandoned at its deadline ends before its request does.
+- **Span names and attributes follow OpenTelemetry's messaging, database and HTTP conventions** (topic, partition, offset, consumer group; the database and the tables written; method, status code). The HTTP instrumentations use the stable conventions (`OTEL_SEMCONV_STABILITY_OPT_IN=http`, set in both images). The message span also carries its `outcome`.
+- **The exporter is configuration** (`OTEL_EXPORTER_OTLP_ENDPOINT`, OTLP over HTTP). With none configured, spans are created and discarded at negligible cost. Only W3C Trace Context is propagated, no baggage.
 - **Jaeger runs in an optional Compose profile** (`make up-tracing`); it accepts OTLP directly, so no collector is needed locally.
 
 **Logs**
@@ -64,7 +65,7 @@ The correlation id is the **trace id of a W3C Trace Context `traceparent` header
 
 - **By construction:** log calls pass named fields, never whole objects or bodies; the `httpx` instrumentation is not configured to record headers.
 - **Defence in depth:** a `structlog` processor redacts fields whose names look sensitive (`authorization`, `token`, `password`, `secret`, `dsn`).
-- **Tested:** a handover with a known token, asserting that it appears in no log line and no span attribute. The stub follows the same rules.
+- **Tested:** a handover with a known token, asserting that it appears in no log line and no span attribute. The stub follows the same rules. The stub's health check and control side are not traced, and its journal records the `traceparent` each request carried, so tests can prove every attempt sent one.
 
 **Following one failure end to end**, given an order id:
 1. **PostgreSQL:** `orders` shows `handover_status`, `trace_id` and the Kafka position; `processed_events` lists every event that arrived for the order.
@@ -88,7 +89,7 @@ The correlation id is the **trace id of a W3C Trace Context `traceparent` header
 
 ## Consequences
 
-- **Dependencies:** `opentelemetry-sdk`, the OTLP exporter and the `httpx` instrumentation for both services, plus `structlog`.
-- **Compose:** an optional `tracing` profile with Jaeger; consumer and stub read the OTLP endpoint from the environment.
+- **Dependencies:** `opentelemetry-sdk` and the OTLP exporter for both services, the `httpx` instrumentation for the consumer and the FastAPI instrumentation for the stub, plus `structlog`.
+- **Compose:** an optional `tracing` profile with Jaeger; consumer and stub read the OTLP endpoint from the environment, which `make up-tracing` sets. Jaeger's UI port can be moved with `JAEGER_UI_PORT`, like the other host ports.
 - **Tests:** the token-leak test; one terminal line per message; trace continuity across a handover, a dead letter and its replay.
 - **Production evolution:** the OpenTelemetry Collector reading container logs and exporting logs and traces; metrics (consumer lag from a Kafka exporter; outcomes, attempts, latency, circuit state and dead-letter rate from the OpenTelemetry metrics SDK) with alerts on lag, an open circuit and dead-letter growth; sampling for traces at volume.

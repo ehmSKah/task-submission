@@ -10,7 +10,8 @@ KAFKA_PORT ?= 9094
 POSTGRES_PORT ?= 5432
 STUB_PORT ?= 8081
 UI_PORT ?= 8080
-export KAFKA_PORT POSTGRES_PORT STUB_PORT UI_PORT
+JAEGER_UI_PORT ?= 16686
+export KAFKA_PORT POSTGRES_PORT STUB_PORT UI_PORT JAEGER_UI_PORT
 
 COMPOSE := docker compose
 PYTEST := uv run pytest
@@ -18,7 +19,7 @@ PYTEST_ARGS ?=
 ACTIONLINT_IMAGE ?= rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
 
 .DEFAULT_GOAL := help
-.PHONY: help install up down clean ps logs psql lint lint-workflows test test-unit test-integration \
+.PHONY: help install up up-tracing down clean ps logs psql lint lint-workflows test test-unit test-integration \
 	test-reliability
 
 help: ## List the targets
@@ -27,18 +28,28 @@ help: ## List the targets
 install: ## Install the Python dependencies
 	uv sync --frozen
 
-up: ## Build and start the stack, and wait until it is healthy
-	$(COMPOSE) up --build --detach --wait
+define URLS
 	@echo "kafka-ui:         http://$(STACK_HOST):$(UI_PORT)"
 	@echo "fulfilment stub:  http://$(STACK_HOST):$(STUB_PORT)/_control/fulfilment-orders"
 	@echo "Kafka (host):     $(STACK_HOST):$(KAFKA_PORT)"
 	@echo "PostgreSQL:       $(STACK_HOST):$(POSTGRES_PORT) (make psql)"
+endef
 
+up: ## Build and start the stack, and wait until it is healthy
+	$(COMPOSE) up --build --detach --wait
+	$(URLS)
+
+up-tracing: ## The same, with Jaeger, and both services exporting their traces to it
+	OTLP_ENDPOINT=http://jaeger:4318 $(COMPOSE) --profile tracing up --build --detach --wait
+	$(URLS)
+	@echo "Jaeger:           http://$(STACK_HOST):$(JAEGER_UI_PORT)"
+
+# With the tracing profile, so Jaeger stops too when it was started.
 down: ## Stop the stack, keeping its data
-	$(COMPOSE) down
+	$(COMPOSE) --profile tracing down
 
 clean: ## Stop the stack and delete its data
-	$(COMPOSE) down --volumes --remove-orphans
+	$(COMPOSE) --profile tracing down --volumes --remove-orphans
 
 ps: ## Show the stack's services and their health
 	$(COMPOSE) ps --all

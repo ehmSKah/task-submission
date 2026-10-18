@@ -5,6 +5,9 @@
 # daemon, the daemon's host name with a remote one. Kafka advertises it to host clients.
 # COMPOSE_PROJECT_NAME and the *_PORT variables let several stacks share one Docker daemon, e.g.
 # one per worktree; the defaults are the documented ones.
+#
+# Traces are exported only when OTLP_ENDPOINT is set: `make up-tracing` starts Jaeger with the
+# `tracing` profile and points both services at it (ADR 0008). Otherwise spans are discarded.
 name: task2
 
 x-consumer-database-url: &consumer-database-url postgresql://order_consumer:local-dev-consumer@postgres:5432/orders
@@ -89,6 +92,7 @@ services:
       - "${STUB_PORT:-8081}:8081"
     environment:
       FULFILMENT_TOKEN: local-dev-token
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
 
   consumer:
     build:
@@ -111,6 +115,7 @@ services:
       DATABASE_URL: *consumer-database-url
       FULFILMENT_BASE_URL: http://fulfilment-stub:8081
       FULFILMENT_TOKEN: local-dev-token
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTLP_ENDPOINT:-}
     restart: unless-stopped
 
   kafka-ui:
@@ -124,6 +129,14 @@ services:
       KAFKA_CLUSTERS_0_NAME: task2
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
       KAFKA_CLUSTERS_0_READONLY: "true"
+
+  # Accepts OTLP directly (4318 inside the network), so no collector is needed; traces are kept
+  # in memory until it stops.
+  jaeger:
+    image: jaegertracing/jaeger:2.22.0
+    profiles: [tracing]
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
 
 volumes:
   kafka-data:

@@ -79,7 +79,7 @@ An outage is not a property of the message. Without a guard, a 30-minute fulfilm
 **What a dead letter carries**
 - **Value:** the original bytes, unchanged, even when unreadable.
 - **Key:** the original key (the order id).
-- **Original headers:** copied unchanged, including `traceparent`; if the consumer had to start a new trace, its `traceparent` is set so the dead letter and its log lines share one trace id (ADR 0008).
+- **Original headers:** copied unchanged, including `traceparent`; if the consumer had to start a new trace, its `traceparent` replaces the record's (and a `tracestate` is left out) so the dead letter and its log lines share one trace id (ADR 0008).
 - **Failure headers**, each with its own key (kafka-ui shows headers as a map, so a repeated key would hide values):
 
 | Header | Content |
