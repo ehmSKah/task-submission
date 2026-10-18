@@ -18,7 +18,7 @@ An idempotency key based on the event id alone catches S1 but not S2: order `3f1
 - **The order id is the business key.** It is the primary key of `orders` and the value of the downstream `Idempotency-Key` header. It catches S1 and S2.
 - **Every event id is recorded too**, with the outcome of processing it. This tells S1 and S2 apart in the logs, and makes "same event id, different content" detectable.
 
-**An event for an order that already exists.** The comparison is made on the normalised Order (the output of mapping 1 in ADR 0001), not on the raw bytes, and not on envelope or processing metadata. Whitespace, key order and fields the tolerant reader ignores are not differences.
+**An event for an order that already exists.** The comparison is made on the normalised Order (the output of mapping 1 in ADR 0001), not on the raw bytes, and not on envelope or processing metadata. Whitespace, key order and fields the tolerant reader ignores are not differences. Neither is the order of the lines (they are matched by SKU, which is unique within an order) nor the offset `placedAt` is written with (it is compared as an instant).
 
 | Case | Outcome |
 |---|---|

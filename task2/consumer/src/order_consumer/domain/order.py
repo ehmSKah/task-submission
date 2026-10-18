@@ -51,3 +51,22 @@ def to_order(data: Mapping[str, Any]) -> Order:
         ),
         total=int(data["total"]),
     )
+
+
+def differing_fields(accepted: Order, incoming: Order) -> list[str]:
+    """Where an incoming Order differs from the first accepted version, as JSON Pointers into the
+    event (ADR 0002). Only the normalised Order counts: lines are matched by SKU whatever their
+    order, and the placement time is compared as an instant."""
+
+    def by_sku(order: Order) -> dict[str, OrderLine]:
+        return {line.sku: line for line in order.lines}
+
+    comparisons = (
+        ("/data/orderId", accepted.order_id == incoming.order_id),
+        ("/data/customerId", accepted.customer_id == incoming.customer_id),
+        ("/data/placedAt", accepted.placed_at == incoming.placed_at),
+        ("/data/currency", accepted.currency == incoming.currency),
+        ("/data/lines", by_sku(accepted) == by_sku(incoming)),
+        ("/data/total", accepted.total == incoming.total),
+    )
+    return [pointer for pointer, same in comparisons if not same]
