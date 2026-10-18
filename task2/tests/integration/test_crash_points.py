@@ -13,15 +13,15 @@ from tests.integration.in_process import (
     crash_after_handover,
     crash_after_recording,
     crash_after_storing,
+    group_of,
     run_until_crash,
     running,
 )
 from tests.integration.stack import (
-    ConsumerGroup,
     assert_nothing_duplicated,
     assert_nothing_lost,
     fulfilment_orders,
-    handover_requests,
+    handover_statuses,
     lag,
     publish,
     stored_order,
@@ -29,10 +29,6 @@ from tests.integration.stack import (
 from tests.support.events import order_placed_event
 
 pytestmark = pytest.mark.integration
-
-
-def group_of(settings: Settings) -> ConsumerGroup:
-    return ConsumerGroup(topic=settings.kafka_topic, group=settings.kafka_group_id)
 
 
 def published_order(settings: Settings) -> UUID:
@@ -58,13 +54,13 @@ def test_a_crash_after_storing_is_completed_by_the_redelivery(
 
     run_until_crash(consumer_settings, wrap_store=crash_after_storing)
     assert handover_status(order_id) == "awaiting_handover"
-    assert handover_requests(order_id) == []
+    assert handover_statuses(order_id) == []
     assert uncommitted(consumer_settings) == 1
 
     with running(consumer_settings):
         assert_nothing_lost([order_id], group_of(consumer_settings))
     assert_nothing_duplicated([order_id])
-    assert handover_requests(order_id) == [201]
+    assert handover_statuses(order_id) == [201]
 
 
 def test_a_crash_after_the_handover_is_completed_by_the_replay(
@@ -80,7 +76,7 @@ def test_a_crash_after_the_handover_is_completed_by_the_replay(
     with running(consumer_settings):
         assert_nothing_lost([order_id], group_of(consumer_settings))
     assert_nothing_duplicated([order_id])
-    assert handover_requests(order_id) == [201, 201], "the repeat is answered with the replay"
+    assert handover_statuses(order_id) == [201, 201], "the repeat is answered with the replay"
     stored = stored_order(order_id)
     assert stored is not None
     assert stored["fulfilment_order_id"] == created["id"]
@@ -96,4 +92,4 @@ def test_a_crash_after_recording_is_skipped_on_redelivery(consumer_settings: Set
     with running(consumer_settings):
         assert_nothing_lost([order_id], group_of(consumer_settings))
     assert_nothing_duplicated([order_id])
-    assert handover_requests(order_id) == [201], "the redelivery has no new effects"
+    assert handover_statuses(order_id) == [201], "the redelivery has no new effects"

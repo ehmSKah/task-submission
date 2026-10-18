@@ -6,15 +6,15 @@ state it observed.
 
 import os
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
 import httpx
 import psycopg
-from confluent_kafka import Consumer, Producer, TopicPartition
-from confluent_kafka.admin import AdminClient, NewTopic
+from confluent_kafka import Consumer, ConsumerGroupState, Producer, TopicPartition
+from confluent_kafka.admin import AdminClient, ConsumerGroupDescription, NewTopic
 from psycopg.rows import dict_row
 
 HOST = os.environ.get("STACK_HOST", "localhost")
@@ -93,7 +93,7 @@ def fulfilment_orders(order_id: UUID) -> list[dict[str, str]]:
     return result
 
 
-def handover_requests(order_id: UUID) -> list[int | None]:
+def handover_statuses(order_id: UUID) -> list[int | None]:
     """The status the stub answered each handover request for the order with, in arrival order;
     `None` while a request is still in progress."""
     response = httpx.get(
@@ -101,6 +101,35 @@ def handover_requests(order_id: UUID) -> list[int | None]:
     )
     response.raise_for_status()
     return [entry["status"] for entry in response.json()]
+
+
+def wait_until_stable(
+    consumers: ConsumerGroup,
+    members: int,
+    replacing: Collection[str] = (),
+    timeout: float = 30.0,
+) -> frozenset[str]:
+    """Waits until the group has settled with exactly `members` members, each holding partitions
+    and none of them among the `replacing` member ids; returns the members' ids."""
+    admin = AdminClient({"bootstrap.servers": KAFKA_BOOTSTRAP})
+
+    def describe() -> ConsumerGroupDescription:
+        [future] = admin.describe_consumer_groups([consumers.group]).values()
+        description: ConsumerGroupDescription = future.result(timeout=10)
+        return description
+
+    settled = eventually(
+        describe,
+        until=lambda group: (
+            group.state == ConsumerGroupState.STABLE
+            and len(group.members) == members
+            and all(member.assignment.topic_partitions for member in group.members)
+            and not {member.member_id for member in group.members} & set(replacing)
+        ),
+        what=f"group {consumers.group} to settle with {members} new members holding partitions",
+        timeout=timeout,
+    )
+    return frozenset(member.member_id for member in settled.members)
 
 
 def add_fault_rule(order_id: UUID, times: int = 1, delay_seconds: float = 0.0) -> None:

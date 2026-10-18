@@ -12,6 +12,7 @@ from typing import Any, cast
 from order_consumer.application.ports import FulfilmentClient, OrderStore
 from order_consumer.config import Settings
 from order_consumer.main import build
+from tests.integration.stack import ConsumerGroup
 
 
 class SimulatedCrash(BaseException):
@@ -49,15 +50,22 @@ def crash_after_handover(fulfilment: FulfilmentClient) -> FulfilmentClient:
     return cast(FulfilmentClient, CrashAfter(fulfilment, "hand_over"))
 
 
+def group_of(settings: Settings) -> ConsumerGroup:
+    return ConsumerGroup(topic=settings.kafka_topic, group=settings.kafka_group_id)
+
+
 def run_until_crash(
-    settings: Settings, timeout: float = 30.0, **wrappers: Callable[..., Any]
+    settings: Settings,
+    wrap_store: Callable[[OrderStore], OrderStore] = lambda store: store,
+    wrap_fulfilment: Callable[[FulfilmentClient], FulfilmentClient] = lambda client: client,
+    timeout: float = 30.0,
 ) -> None:
     """Runs a consumer instance until its crash point fires; fails if it never does."""
     stop = threading.Event()
     deadline = threading.Timer(timeout, stop.set)
     deadline.start()
     try:
-        build(settings, stop, **wrappers).run()
+        build(settings, stop, wrap_store, wrap_fulfilment).run()
     except SimulatedCrash:
         return
     finally:

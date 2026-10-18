@@ -10,7 +10,7 @@ import pytest
 
 from order_consumer import logs
 from order_consumer.config import Settings
-from tests.integration.in_process import running
+from tests.integration.in_process import group_of, running
 from tests.integration.stack import (
     CONSUMER_DATABASE_URL,
     FULFILMENT_TOKEN,
@@ -49,6 +49,4 @@ def consumer_settings(topic: str) -> Settings:
 @pytest.fixture
 def consumer(consumer_settings: Settings) -> Iterator[ConsumerGroup]:
     with running(consumer_settings):
-        yield ConsumerGroup(
-            topic=consumer_settings.kafka_topic, group=consumer_settings.kafka_group_id
-        )
+        yield group_of(consumer_settings)

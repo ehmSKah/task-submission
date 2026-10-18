@@ -57,6 +57,12 @@ class FaultRuleRequest(BaseModel):
 class FaultRules:
     rules: list[FaultRule] = field(default_factory=list)
 
+    def add(self, rule: FaultRule) -> None:
+        self.rules.append(rule)
+
+    def reset(self) -> None:
+        self.rules.clear()
+
     def take(self, external_reference: str) -> FaultRule | None:
         """The first rule for the order, with one of its uses spent."""
         for rule in self.rules:
@@ -119,7 +125,7 @@ def create_app(
     """`sleep` is how a delay rule waits; tests replace it to hold a request in progress."""
     openapi = OpenAPI.from_file_path(str(spec_path))
     journal = Journal()
-    keys: dict[str, IdempotencyRecord] = {}
+    idempotency_records: dict[str, IdempotencyRecord] = {}
     fault_rules = FaultRules()
     app = FastAPI(title="Fulfilment stub", openapi_url=None, docs_url=None, redoc_url=None)
 
@@ -154,26 +160,27 @@ def create_app(
         rule = fault_rules.take(external_reference)
         key = request.headers["idempotency-key"]
         body_fingerprint = fingerprint(body)
-        known = keys.get(key)
-        if known is not None:
-            if rule is not None:
-                await sleep(rule.delay_seconds)
-            return answer_repeat(known, body_fingerprint, entry)
-
-        # Claimed: until this request is answered, a repeat with the same key gets 409.
-        claim = keys[key] = IdempotencyRecord(body_fingerprint)
+        record = idempotency_records.get(key)
+        claimed = record is None
+        if record is None:
+            # Claimed: until this request is answered, a repeat with the same key gets 409.
+            record = idempotency_records[key] = IdempotencyRecord(body_fingerprint)
         try:
             if rule is not None:
                 await sleep(rule.delay_seconds)
         except BaseException:
-            del keys[key]
+            if claimed:
+                idempotency_records.pop(key, None)
             raise
+        if not claimed:
+            return answer_repeat(record, body_fingerprint, entry)
+
         fulfilment_order = {
             "id": f"ful-{len(journal.fulfilment_orders) + 1}",
             "externalReference": external_reference,
         }
         journal.fulfilment_orders.append(fulfilment_order)
-        claim.response = fulfilment_order
+        record.response = fulfilment_order
         entry["status"] = 201
         log.info("fulfilment_order.created", **fulfilment_order)
         return JSONResponse(fulfilment_order, status_code=201)
@@ -199,7 +206,7 @@ def create_app(
 
     @app.post("/_control/fault-rules", status_code=201)
     def add_fault_rule(rule: FaultRuleRequest) -> FaultRuleRequest:
-        fault_rules.rules.append(FaultRule(rule.externalReference, rule.times, rule.delaySeconds))
+        fault_rules.add(FaultRule(rule.externalReference, rule.times, rule.delaySeconds))
         return rule
 
     @app.get("/_control/requests")
@@ -221,8 +228,8 @@ def create_app(
     @app.delete("/_control", status_code=204)
     def reset() -> None:
         journal.reset()
-        keys.clear()
-        fault_rules.rules.clear()
+        idempotency_records.clear()
+        fault_rules.reset()
 
     @app.get("/health")
     def health() -> dict[str, str]:
