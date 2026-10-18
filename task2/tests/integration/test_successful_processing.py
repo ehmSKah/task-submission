@@ -16,14 +16,13 @@ from tests.integration.stack import (
     handover_requests,
     processed_events,
     publish,
-    publish_records,
     stored_order,
 )
 from tests.integration.traces import (
     TERMINAL_EVENTS,
     named,
-    new_traceparent,
     parent_id,
+    publish_traced,
     span_id,
     trace_spans,
 )
@@ -80,24 +79,13 @@ def test_a_handover_is_one_trace_from_the_event_to_the_fulfilment_service(
     attempt are its children, the HTTP request sits inside the attempt, and the stub received the
     request's traceparent (ADR 0008)."""
     order_id = uuid4()
-    traceparent, trace_id, producer_span_id = new_traceparent()
-
-    publish_records(
-        consumer.topic,
-        [
-            (
-                str(order_id).encode(),
-                order_placed_event(order_id),
-                [("traceparent", traceparent.encode())],
-            )
-        ],
-    )
+    producer = publish_traced(consumer.topic, order_id)
 
     assert_nothing_lost([order_id], consumer)
-    found = trace_spans(spans, trace_id, consumer.topic)
+    found = trace_spans(spans, producer.trace_id, consumer.topic)
     [message] = named(found, f"process {consumer.topic}")
     assert message.kind is trace.SpanKind.CONSUMER
-    assert parent_id(message) == int(producer_span_id, 16)
+    assert parent_id(message) == int(producer.span_id, 16)
     assert {span.name for span in found if parent_id(span) == span_id(message)} == {
         "INSERT orders order_lines processed_events",
         "handover attempt",
@@ -109,53 +97,31 @@ def test_a_handover_is_one_trace_from_the_event_to_the_fulfilment_service(
     assert parent_id(request) == span_id(attempt)
     assert (request.attributes or {})["http.response.status_code"] == 201
     [received] = handover_requests(order_id)
-    assert received["traceparent"] == f"00-{trace_id}-{span_id(request):016x}-01"
+    assert received["traceparent"] == f"00-{producer.trace_id}-{span_id(request):016x}-01"
 
 
 def test_the_trace_id_is_stored_with_the_order_and_its_event(consumer: ConsumerGroup) -> None:
     order_id = uuid4()
-    traceparent, trace_id, _ = new_traceparent()
-
-    publish_records(
-        consumer.topic,
-        [
-            (
-                str(order_id).encode(),
-                order_placed_event(order_id),
-                [("traceparent", traceparent.encode())],
-            )
-        ],
-    )
+    producer = publish_traced(consumer.topic, order_id)
 
     assert_nothing_lost([order_id], consumer)
     stored = stored_order(order_id)
-    assert stored is not None and stored["trace_id"] == trace_id
+    assert stored is not None and stored["trace_id"] == producer.trace_id
     [event] = processed_events(order_id)
-    assert event["trace_id"] == trace_id
+    assert event["trace_id"] == producer.trace_id
 
 
 def test_a_handed_over_order_logs_one_terminal_line_and_every_line_carries_its_trace(
     consumer: ConsumerGroup, log_lines: LogLines
 ) -> None:
     order_id = uuid4()
-    traceparent, trace_id, _ = new_traceparent()
-
-    publish_records(
-        consumer.topic,
-        [
-            (
-                str(order_id).encode(),
-                order_placed_event(order_id),
-                [("traceparent", traceparent.encode())],
-            )
-        ],
-    )
+    producer = publish_traced(consumer.topic, order_id)
 
     assert_nothing_lost([order_id], consumer)
     lines = [entry for entry in log_lines.entries() if entry.get("order_id") == str(order_id)]
     assert [entry["event"] for entry in lines if entry["event"] in TERMINAL_EVENTS] == [
         "handover.completed"
     ]
-    assert {entry["trace_id"] for entry in lines} == {trace_id}
+    assert {entry["trace_id"] for entry in lines} == {producer.trace_id}
     [received] = [entry for entry in lines if entry["event"] == "event.received"]
     assert received["trace_source"] == "header"

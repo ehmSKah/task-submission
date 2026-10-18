@@ -28,7 +28,7 @@ LOG_LINES = LogLines()
 
 
 @pytest.fixture(scope="session", autouse=True)
-def observed() -> None:
+def logs_and_spans_kept() -> None:
     """JSON logs and spans as the consumer writes them on start-up, kept for the tests to read
     (ADR 0008): spans in memory, so no Jaeger is needed."""
     logs.configure("order-consumer-test", "DEBUG", stream=LOG_LINES)
@@ -48,6 +48,7 @@ def spans() -> Iterator[InMemorySpanExporter]:
     exporter = recorded_spans()
     exporter.clear()
     yield exporter
+    exporter.clear()
 
 
 @pytest.fixture

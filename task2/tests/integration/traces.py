@@ -1,20 +1,38 @@
 """Following one message's trace through the recorded spans and the stub's journal (ADR 0008)."""
 
-from uuid import uuid4
+from dataclasses import dataclass
+from uuid import UUID, uuid4
 
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from tests.integration.stack import eventually
+from tests.integration.stack import eventually, publish_records
+from tests.support.events import order_placed_event
 from tests.support.spans import in_trace
 
 TERMINAL_EVENTS = frozenset({"handover.completed", "order.duplicate", "dead_letter.written"})
 
 
-def new_traceparent() -> tuple[str, str, str]:
-    """A producer's traceparent, with its trace id and span id."""
-    trace_id, span_id = uuid4().hex, uuid4().hex[:16]
-    return f"00-{trace_id}-{span_id}-01", trace_id, span_id
+@dataclass(frozen=True)
+class ProducerTrace:
+    """The trace a producer published an event in."""
+
+    trace_id: str
+    span_id: str
+
+    @property
+    def traceparent(self) -> str:
+        return f"00-{self.trace_id}-{self.span_id}-01"
+
+
+def publish_traced(topic: str, order_id: UUID, value: bytes | None = None) -> ProducerTrace:
+    """Publishes the order's event, or `value`, with a traceparent of a new producer trace."""
+    producer = ProducerTrace(trace_id=uuid4().hex, span_id=uuid4().hex[:16])
+    event = order_placed_event(order_id) if value is None else value
+    publish_records(
+        topic, [(str(order_id).encode(), event, [("traceparent", producer.traceparent.encode())])]
+    )
+    return producer
 
 
 def trace_spans(spans: InMemorySpanExporter, trace_id: str, topic: str) -> list[ReadableSpan]:

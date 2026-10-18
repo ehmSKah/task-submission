@@ -145,22 +145,24 @@ class HandoverRetries:
             try:
                 result = self._fulfilment.hand_over(request)
             except HandoverFailed as failure:
+                fields = {
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "response_class": failure.response_class.value,
+                    "status": failure.status,
+                    "error": failure.error,
+                }
                 span.set_attributes(
                     {
-                        "handover.response_class": failure.response_class.value,
-                        "handover.error": failure.error,
+                        f"handover.{name}": value
+                        for name, value in fields.items()
+                        if value is not None
                     }
                 )
-                if failure.status is not None:
-                    span.set_attribute("handover.status", failure.status)
                 span.set_status(trace.StatusCode.ERROR, failure.error)
                 log.warning(
                     "handover.attempt_failed",
-                    attempt=attempt,
-                    max_attempts=max_attempts,
-                    response_class=failure.response_class.value,
-                    status=failure.status,
-                    error=failure.error,
+                    **fields,
                     duration_ms=round((self._clock.monotonic() - started) * 1000),
                 )
                 return failure

@@ -33,7 +33,7 @@ def in_trace(spans: tuple[ReadableSpan, ...], trace_id: str) -> list[ReadableSpa
     ]
 
 
-def all_attribute_values(spans: tuple[ReadableSpan, ...]) -> list[str]:
+def span_texts(spans: tuple[ReadableSpan, ...]) -> list[str]:
     """Everything a span can carry as text: names, attributes, events, links, status and the
     resource."""
     values: list[str] = []

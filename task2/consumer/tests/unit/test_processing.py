@@ -46,7 +46,7 @@ TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
 RECORD_TRACEPARENT = f"00-{TRACE_ID}-b7ad6b7169203331-01"
 CONTINUED = MessageTrace(TRACE_ID, f"00-{TRACE_ID}-53995c3f42cd8ad8-01", TraceSource.HEADER)
 STARTED_HERE_TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
-STARTED_HERE = f"00-{STARTED_HERE_TRACE_ID}-00f067aa0ba902b7-01"
+STARTED_HERE_TRACEPARENT = f"00-{STARTED_HERE_TRACE_ID}-00f067aa0ba902b7-01"
 
 reader = OrderPlacedReader.from_file(EVENT_SCHEMA)
 
@@ -573,7 +573,7 @@ def test_a_redelivery_completes_a_failed_handover() -> None:
 def test_a_re_emission_is_recorded_with_its_own_trace_id() -> None:
     harness = ProcessorWithFakes()
     harness.process()
-    own_trace = MessageTrace(STARTED_HERE_TRACE_ID, STARTED_HERE, TraceSource.NEW)
+    own_trace = MessageTrace(STARTED_HERE_TRACE_ID, STARTED_HERE_TRACEPARENT, TraceSource.NEW)
 
     harness.process(order_placed_event(ORDER_ID, RE_EMITTED_EVENT_ID), own_trace)
 
@@ -586,7 +586,7 @@ def test_every_line_of_a_message_says_where_its_trace_came_from(source: TraceSou
     harness = ProcessorWithFakes(failures=[unavailable()])
 
     with capture_logs(processors=[merge_contextvars]) as logs:
-        harness.process(message_trace=MessageTrace(TRACE_ID, STARTED_HERE, source))
+        harness.process(message_trace=MessageTrace(TRACE_ID, STARTED_HERE_TRACEPARENT, source))
 
     assert {entry["trace_source"] for entry in logs} == {source.value}
     [received] = [entry for entry in logs if entry["event"] == "event.received"]
@@ -597,8 +597,8 @@ def test_every_line_of_a_message_says_where_its_trace_came_from(source: TraceSou
     ("source", "traceparent"),
     [
         (TraceSource.HEADER, None),
-        (TraceSource.NEW, STARTED_HERE),
-        (TraceSource.REPLACED, STARTED_HERE),
+        (TraceSource.NEW, STARTED_HERE_TRACEPARENT),
+        (TraceSource.REPLACED, STARTED_HERE_TRACEPARENT),
     ],
 )
 def test_a_dead_letter_carries_the_trace_the_consumer_started(
@@ -606,7 +606,7 @@ def test_a_dead_letter_carries_the_trace_the_consumer_started(
 ) -> None:
     """With a valid traceparent, the copied headers already carry the trace."""
     harness = ProcessorWithFakes()
-    message_trace = MessageTrace(STARTED_HERE_TRACE_ID, STARTED_HERE, source)
+    message_trace = MessageTrace(STARTED_HERE_TRACE_ID, STARTED_HERE_TRACEPARENT, source)
 
     harness.process(order_placed_event(ORDER_ID, EVENT_ID, total=1), message_trace)
 

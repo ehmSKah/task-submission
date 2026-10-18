@@ -28,10 +28,10 @@ from tests.integration.stack import (
     stored_order,
     wait_for_dead_letters,
 )
-from tests.integration.traces import TERMINAL_EVENTS, new_traceparent, trace_spans
+from tests.integration.traces import TERMINAL_EVENTS, publish_traced, trace_spans
 from tests.support.events import order_placed_envelope, order_placed_event
 from tests.support.log_lines import LogLines
-from tests.support.spans import all_attribute_values
+from tests.support.spans import span_texts
 
 pytestmark = pytest.mark.integration
 
@@ -115,15 +115,11 @@ def test_a_dead_letter_carries_the_trace_the_consumer_started(
 
 def test_a_dead_letter_keeps_a_valid_traceparent_as_it_came(consumer: ConsumerGroup) -> None:
     order_id = uuid4()
-    traceparent, _, _ = new_traceparent()
-    invalid = order_placed_event(order_id, total=1)
 
-    publish_records(
-        consumer.topic, [(str(order_id).encode(), invalid, [("traceparent", traceparent.encode())])]
-    )
+    producer = publish_traced(consumer.topic, order_id, order_placed_event(order_id, total=1))
 
     [dead_letter] = wait_for_dead_letters(consumer)
-    assert dead_letter.header("traceparent") == traceparent, "a replay continues this trace"
+    assert dead_letter.header("traceparent") == producer.traceparent, "a replay continues it"
 
 
 def test_neither_the_token_nor_secrets_nor_the_customer_reach_a_log_line_or_span(
@@ -144,7 +140,7 @@ def test_neither_the_token_nor_secrets_nor_the_customer_reach_a_log_line_or_span
         wait_for_dead_letters(group_of(settings))
         assert_all_committed(group_of(settings))
 
-    span_text = "\n".join(all_attribute_values(spans.get_finished_spans()))
+    span_text = "\n".join(span_texts(spans.get_finished_spans()))
     assert "handover attempt" in span_text and "POST" in span_text
     for text in (log_lines.text(), span_text):
         assert FULFILMENT_TOKEN not in text

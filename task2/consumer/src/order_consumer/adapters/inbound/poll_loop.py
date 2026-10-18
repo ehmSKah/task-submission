@@ -51,7 +51,12 @@ def create_consumer(settings: Settings) -> Consumer:
     )
 
 
-def _delivery(message: Message, topic: str, message_trace: MessageTrace) -> Delivery:
+def _delivery(
+    message: Message,
+    topic: str,
+    headers: tuple[tuple[str, bytes | None], ...],
+    message_trace: MessageTrace,
+) -> Delivery:
     timestamp_type, timestamp_ms = message.timestamp()
     return Delivery(
         key=message.key(),
@@ -59,7 +64,7 @@ def _delivery(message: Message, topic: str, message_trace: MessageTrace) -> Deli
         topic=topic,
         partition=message.partition() or 0,
         offset=message.offset() or 0,
-        headers=_headers(message),
+        headers=headers,
         timestamp=None
         if timestamp_type == TIMESTAMP_NOT_AVAILABLE
         else datetime.fromtimestamp(timestamp_ms / 1000, UTC),
@@ -133,7 +138,8 @@ class PollLoop:
     def _process(self, message: Message) -> Outcome:
         """In the message's span, named and described by OpenTelemetry's messaging conventions."""
         topic = message.topic() or self._topic
-        parent, source = tracing.incoming_trace(_headers(message))
+        headers = _headers(message)
+        parent, source = tracing.incoming_trace(headers)
         with tracer.start_as_current_span(
             f"process {topic}",
             context=parent,
@@ -149,7 +155,7 @@ class PollLoop:
             },
         ) as span:
             outcome = self._processor.process(
-                _delivery(message, topic, tracing.current_trace(source))
+                _delivery(message, topic, headers, tracing.current_trace(source))
             )
             span.set_attribute("outcome", outcome.value)
             return outcome
