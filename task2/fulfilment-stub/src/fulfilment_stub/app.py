@@ -48,7 +48,7 @@ class FaultRule:
     The request claims its key, waits `delay_seconds`, then either answers with `status` or drops
     the connection, creating nothing, or, with neither, is processed as usual. A delay on its own
     therefore creates the order but answers late: a client that timed out meanwhile gets `409`
-    on its repeat, and the `201` stored response once the delay is over.
+    on its repeat, and the stored response once the delay is over.
     """
 
     external_reference: str

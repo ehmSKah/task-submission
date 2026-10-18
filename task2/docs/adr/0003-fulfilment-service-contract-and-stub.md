@@ -49,7 +49,7 @@ traceparent: 00-…               # W3C Trace Context, the correlation id (ADR 0
 | **Rejected** | `400`, `413`, `422`, any other `4xx` not listed as systemic | this order will never be accepted as sent; it goes to the dead-letter topic without retries |
 | **Systemic** | `401`, `403`, `404`, `405`, `415`, any `3xx`, any `2xx` other than `201` | our configuration or the service is wrong for *every* order; consumption stops without committing and nothing is dead-lettered |
 
-- **`409` in progress is transient.** When our request times out but the fulfilment service is still working on it, the retry gets `409` and a later one gets the `201` stored response: the handover completes exactly once. This is a named test.
+- **`409` in progress is transient.** When our request times out but the fulfilment service is still working on it, the retry gets `409` and a later one gets the stored response: the handover completes exactly once. This is a named test.
 - **Systemic failures are not dead-lettered.** With a wrong URL or token every order fails the same way. Dead-lettering them would fill the dead-letter topic with healthy orders that all need replaying. Not committing leaves the backlog safely in Kafka until the configuration is fixed. How consumption stops (pausing or exiting) is decided with the retry and restart strategies.
 
 **One handover attempt**
