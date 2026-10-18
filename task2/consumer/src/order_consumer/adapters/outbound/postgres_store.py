@@ -19,7 +19,8 @@ from order_consumer.application.ports import (
 )
 from order_consumer.domain.order import Order, OrderLine
 
-# Three quick reconnects within about 5 s before the database counts as unavailable (ADR 0006).
+# Three quick reconnects before the database counts as unavailable (ADR 0006): about 4 s when
+# connections are refused, about 12 s when they go unanswered.
 RECONNECT_DELAYS_SECONDS = (0.5, 1.0, 2.0)
 CONNECT_TIMEOUT_SECONDS = 2
 
@@ -39,7 +40,16 @@ class PostgresOrderStore:
     def _connect(self) -> psycopg.Connection:
         if self._connection is None or self._connection.closed:
             self._connection = psycopg.connect(
-                self._database_url, connect_timeout=CONNECT_TIMEOUT_SECONDS
+                self._database_url,
+                connect_timeout=CONNECT_TIMEOUT_SECONDS,
+                # A connection whose server stopped answering breaks instead of hanging: data
+                # left unacknowledged fails it after 10 s, and an idle one is probed every 2 s
+                # after 5 s of silence (libpq parameters).
+                tcp_user_timeout=10_000,
+                keepalives=1,
+                keepalives_idle=5,
+                keepalives_interval=2,
+                keepalives_count=3,
             )
             # Explicit, since storing relies on it: see `_stored_version`.
             self._connection.isolation_level = IsolationLevel.READ_COMMITTED
