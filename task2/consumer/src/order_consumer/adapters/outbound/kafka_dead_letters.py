@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 import structlog
 from confluent_kafka import KafkaError, KafkaException, Message, Producer
 
-from order_consumer.application.ports import DeadLetter
+from order_consumer.application.ports import DeadLetter, DeadLetterUnwritable
 from order_consumer.config import Settings
 from order_consumer.tracing import TRACEPARENT, TRACESTATE
 
@@ -21,10 +21,6 @@ log = structlog.get_logger()
 DELIVERY_TIMEOUT_MS = 10_000
 # Waiting a little longer than the delivery timeout lets librdkafka report its own verdict.
 FLUSH_TIMEOUT_S = DELIVERY_TIMEOUT_MS / 1000 + 5
-
-
-class DeadLetterWriteFailed(Exception):
-    pass
 
 
 def create_producer(settings: Settings) -> Producer:
@@ -102,7 +98,7 @@ class KafkaDeadLetterSink:
         if not confirmed:
             reason = failures[0] if failures else "not confirmed in time"
             log.error("dead_letter.write_failed", reason=reason, topic=self._topic)
-            raise DeadLetterWriteFailed(reason)
+            raise DeadLetterUnwritable(reason)
 
     def close(self) -> None:
         self._producer.flush(FLUSH_TIMEOUT_S)

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from order_consumer.application.retries import RetryBudgetExceeded, RetryPolicy
+from order_consumer.health import HEALTH_FILE
 
 # Where the consumer image puts the event's JSON Schema (ADR 0005: one definition per contract).
 EVENT_SCHEMA = Path("/app/schemas/order-placed.v1.schema.json")
@@ -14,6 +15,8 @@ EVENT_SCHEMA = Path("/app/schemas/order-placed.v1.schema.json")
 
 # librdkafka's default: a consumer that doesn't poll for this long loses its partitions.
 MAX_POLL_INTERVAL_MS = 300_000
+# A paused instance tries the message in hand again this often (ADR 0006).
+PAUSE_PROBE_INTERVAL_SECONDS = 30.0
 
 
 class ConfigurationError(Exception):
@@ -44,6 +47,10 @@ class Settings:
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     kafka_max_poll_interval_ms: int = MAX_POLL_INTERVAL_MS
     otlp_endpoint: str | None = None  # where spans are exported; without one they are discarded
+    pause_probe_interval_seconds: float = PAUSE_PROBE_INTERVAL_SECONDS
+    # Off by default: a paused instance keeps its partitions, right for shared causes (ADR 0006).
+    pause_exit_after_minutes: float | None = None
+    health_file: Path = HEALTH_FILE
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> "Settings":
@@ -53,7 +60,9 @@ class Settings:
                 raise ConfigurationError(f"{name} is not set")
             return value
 
-        def positive[N: (int, float)](name: str, parse: Callable[[str], N], default: N) -> N:
+        def positive[N: (int, float), D: (int, float, None)](
+            name: str, parse: Callable[[str], N], default: D
+        ) -> N | D:
             raw = env.get(name, "").strip()
             if not raw:
                 return default
@@ -102,6 +111,11 @@ class Settings:
                 "KAFKA_MAX_POLL_INTERVAL_MS", int, MAX_POLL_INTERVAL_MS
             ),
             otlp_endpoint=http_url_or_none("OTEL_EXPORTER_OTLP_ENDPOINT"),
+            pause_probe_interval_seconds=positive(
+                "PAUSE_PROBE_INTERVAL_SECONDS", float, PAUSE_PROBE_INTERVAL_SECONDS
+            ),
+            pause_exit_after_minutes=positive("PAUSE_EXIT_AFTER_MINUTES", float, None),
+            health_file=Path(env.get("HEALTH_FILE", str(HEALTH_FILE))),
         )
         if not settings.event_schema.is_file():
             raise ConfigurationError(f"ORDER_EVENT_SCHEMA {settings.event_schema} is not a file")

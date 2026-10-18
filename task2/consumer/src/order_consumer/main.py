@@ -9,22 +9,28 @@ from collections.abc import Callable
 import structlog
 
 from order_consumer import logs, tracing
-from order_consumer.adapters.inbound.poll_loop import PollLoop, create_consumer
+from order_consumer.adapters.inbound.poll_loop import PausedTooLong, PollLoop, create_consumer
 from order_consumer.adapters.outbound.fulfilment_http import HttpFulfilmentClient
-from order_consumer.adapters.outbound.kafka_dead_letters import KafkaDeadLetterSink, create_producer
+from order_consumer.adapters.outbound.kafka_dead_letters import (
+    FLUSH_TIMEOUT_S,
+    KafkaDeadLetterSink,
+    create_producer,
+)
 from order_consumer.adapters.outbound.postgres_store import PostgresOrderStore
 from order_consumer.adapters.outbound.system_clock import SystemClock
 from order_consumer.application.ports import FulfilmentClient, OrderStore
 from order_consumer.application.processing import OrderProcessor
-from order_consumer.application.retries import Jitter, SystemicFailure, full_jitter
+from order_consumer.application.retries import Jitter, full_jitter
 from order_consumer.config import ConfigurationError, Settings
 from order_consumer.domain.event import OrderPlacedReader
+from order_consumer.health import HeartbeatFile
 
 log = structlog.get_logger()
 
 EXIT_CLEAN = 0
 EXIT_CRASH = 1
 EXIT_CONFIGURATION = 2
+EXIT_PAUSED_TOO_LONG = 3
 
 
 def _as_is[T](adapter: T) -> T:
@@ -51,6 +57,8 @@ def build(
         consumer=f"{settings.kafka_group_id}/{socket.gethostname()}",
     )
     reader = OrderPlacedReader.from_file(settings.event_schema)
+    clock = SystemClock()
+    exit_after = settings.pause_exit_after_minutes
     return PollLoop(
         create_consumer(settings),
         settings.kafka_topic,
@@ -60,10 +68,19 @@ def build(
             dead_letters,
             reader,
             policy=settings.retry_policy,
-            clock=SystemClock(),
+            clock=clock,
             jitter=jitter or full_jitter(random.Random()),
         ),
         stop,
+        clock=clock,
+        probe_interval=settings.pause_probe_interval_seconds,
+        exit_after=None if exit_after is None else exit_after * 60,
+        heartbeat=HeartbeatFile(settings.health_file).write,
+        # A handover's retries at their longest, then waiting for its dead letter's confirmation.
+        processing_budget=settings.retry_policy.worst_case_seconds(
+            settings.fulfilment_timeouts.attempt_deadline
+        )
+        + FLUSH_TIMEOUT_S,
         on_close=(store.close, fulfilment.close, dead_letters.close),
         group=settings.kafka_group_id,
     )
@@ -85,11 +102,15 @@ def main() -> int:
 
     try:
         build(settings, stop).run()
-    except SystemicFailure as failure:
-        # A stopgap: nothing was committed, so the event waits in Kafka and is processed again
-        # after the restart. ADR 0006 decides to pause in place and probe instead (*Stopping*);
-        # exiting like this flaps during a long outage, as that ADR explains.
-        log.error("consumer.stopped", exit_code=EXIT_CRASH, reason=str(failure))
+    except PausedTooLong as paused:
+        # Nothing was committed: the message in hand waits for the instance that takes over.
+        log.error("consumer.stopped", exit_code=EXIT_PAUSED_TOO_LONG, reason=str(paused))
+        return EXIT_PAUSED_TOO_LONG
+    except Exception as crash:
+        # Without a stack trace: only processing.unexpected_error carries one (ADR 0008).
+        log.error(
+            "consumer.stopped", exit_code=EXIT_CRASH, reason=f"{type(crash).__name__}: {crash}"
+        )
         return EXIT_CRASH
     finally:
         tracer_provider.shutdown()  # exports the spans still waiting in their batch

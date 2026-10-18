@@ -43,8 +43,9 @@ Correctness never depends on a consumer finishing its work: anything not committ
 | still paused after N minutes (optional, ADR 0006) | `3` | restarted; its partitions move in the meantime |
 
 **Health**
-- **A heartbeat file** (`/tmp/consumer-health.json`) is rewritten on every loop turn. `poll()` returns at least once a second, even while paused, so the file stays fresh. It holds the state (`starting`, `running`, or `paused` with its reason, e.g. `circuit-open`, `bug-guard`, `systemic: postgres-unavailable`) and the assigned partitions.
-- **The Compose healthcheck** (`python -m order_consumer.health`) reports **unhealthy** when the file is older than 30 s (the loop is stuck) **or** the state is `paused`, and prints the reason, so a paused instance is visible in `docker compose ps`.
+- **A heartbeat file** (`/tmp/consumer-health.json`, `HEALTH_FILE`) is rewritten on every loop turn. `poll()` returns at least once a second, even while paused, so the file stays fresh. It holds the state (`starting`, `running`, or `paused` with its reason, e.g. `circuit-open`, `bug-guard`, `systemic: postgres-unavailable`, and the error behind it), the assigned partitions, and **by when the next beat is due**: 30 s after an ordinary turn, and 30 s plus the processing budget (a handover's worst-case retries and a dead letter's confirmation, ADR 0006) before a message is processed, since the loop doesn't poll until it is done.
+- **`starting` lasts until the instance holds partitions**, or until it has been given none for 5 s. A member that joins is first given nothing and its partitions a moment later (the cooperative protocol's second round), so only an empty assignment that lasts means the group has more members than partitions.
+- **The Compose healthcheck** (`python -m order_consumer.health`, every 5 s, every second during a 120 s start period) reports **unhealthy** when the heartbeat is overdue (the loop is stuck), the state is `paused`, or still `starting`, and prints why. So `make up` (`docker compose up --wait`) returns only once the consumers consume, a paused instance is unhealthy in `docker compose ps`, and `make ps` adds each consumer's last health check, with its reason.
 - **In production the two meanings are separated.** Liveness checks only that the heartbeat is fresh. Being paused must not fail liveness, or the orchestrator would turn every pause into a restart loop and defeat the flood guard. Paused is an alert (or a readiness signal) instead.
 - **Start-up order:** consumers start once Kafka is healthy, topic creation and migrations have completed, and the fulfilment stub is healthy.
 
@@ -79,6 +80,8 @@ Correctness never depends on a consumer finishing its work: anything not committ
 - **Health.**
   - *An HTTP health endpoint:* needs a second thread in a deliberately single-threaded consumer; a file says the same.
   - *Paused counted as healthy:* hides the most important state from `docker compose ps`.
+  - *A fixed limit, unhealthy when the file is older than 30 s:* simpler, but a handover's retries keep the loop from polling for up to 110 s by design (ADR 0006), so a busy instance would show as stuck, and a liveness probe built on it would restart it mid-retry. The heartbeat says itself how long its next turn may take.
+  - *Healthy as soon as the first assignment arrives, even an empty one:* `up --wait` could then return in the moment between the cooperative protocol's two rounds, before the instance holds its partitions.
 
 ## Consequences
 

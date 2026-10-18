@@ -4,6 +4,7 @@ The stack's consumers never take a test's messages, and no test sees another's e
 """
 
 from collections.abc import Iterator
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -61,7 +62,7 @@ def topic() -> str:
 
 
 @pytest.fixture
-def consumer_settings(topic: str) -> Settings:
+def consumer_settings(topic: str, tmp_path: Path) -> Settings:
     """One group per test; every consumer instance a test starts with these settings joins it."""
     return Settings(
         kafka_bootstrap_servers=KAFKA_BOOTSTRAP,
@@ -72,6 +73,7 @@ def consumer_settings(topic: str) -> Settings:
         fulfilment_token=FULFILMENT_TOKEN,
         kafka_dead_letter_topic=f"{topic}.dlt",
         event_schema=EVENT_SCHEMA,
+        health_file=tmp_path / "consumer-health.json",
     )
 
 

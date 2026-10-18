@@ -1,11 +1,12 @@
 """The order store on PostgreSQL, in plain SQL (ADR 0002).
 
 Each write is a span of its own, named and described by OpenTelemetry's database conventions, and
-never carries the connection string or a statement's values (ADR 0008).
+never carries the connection string or a statement's values (ADR 0008). Reconnects happen inside
+that span, so a write that needed one shows it.
 """
 
-from collections.abc import Iterator
-from contextlib import contextmanager
+import time
+from collections.abc import Callable
 from datetime import UTC
 from typing import Literal
 from uuid import UUID
@@ -20,14 +21,25 @@ from order_consumer.application.ports import (
     HandoverStatus,
     ReceivedEvent,
     Stored,
+    StoreUnavailable,
 )
 from order_consumer.domain.order import Order, OrderLine
 
 tracer = trace.get_tracer(__name__)
 
+# Three quick reconnects before the database counts as unavailable (ADR 0006): about 4 s when
+# connections are refused, about 12 s when they go unanswered.
+RECONNECT_DELAYS_SECONDS = (0.5, 1.0, 2.0)
+CONNECT_TIMEOUT_SECONDS = 2
+
 
 class PostgresOrderStore:
-    """One connection per consumer process: processing is one message at a time (ADR 0005)."""
+    """One connection per consumer process: processing is one message at a time (ADR 0005).
+
+    A step that fails because the database can't be reached, or the connection broke, is done
+    again on a new connection. Every step is safe to repeat, even after a commit whose answer was
+    lost (ADR 0002, 0004).
+    """
 
     def __init__(self, database_url: str) -> None:
         self._database_url = database_url
@@ -35,37 +47,67 @@ class PostgresOrderStore:
 
     def _connect(self) -> psycopg.Connection:
         if self._connection is None or self._connection.closed:
-            self._connection = psycopg.connect(self._database_url)
+            self._connection = psycopg.connect(
+                self._database_url,
+                connect_timeout=CONNECT_TIMEOUT_SECONDS,
+                # A connection whose server stopped answering breaks instead of hanging: data
+                # left unacknowledged fails it after 10 s, and an idle one is probed every 2 s
+                # after 5 s of silence (libpq parameters).
+                tcp_user_timeout=10_000,
+                keepalives=1,
+                keepalives_idle=5,
+                keepalives_interval=2,
+                keepalives_count=3,
+            )
             # Explicit, since storing relies on it: see `_stored_version`.
             self._connection.isolation_level = IsolationLevel.READ_COMMITTED
         return self._connection
 
-    @contextmanager
-    def _write(self, summary: str) -> Iterator[psycopg.Connection]:
-        """The connection, inside a span for one write: `summary` names the operation and the
-        tables it writes, e.g. `UPDATE orders`."""
+    def _write[T](self, summary: str, step: Callable[[psycopg.Connection], T]) -> T:
+        """One write in a span of its own: `summary` names the operation and the tables it writes,
+        e.g. `UPDATE orders`. A step that fails on the connection is done again on a new one, a few
+        times, before the database counts as unavailable (ADR 0006)."""
         with tracer.start_as_current_span(summary, kind=trace.SpanKind.CLIENT) as span:
-            connection = self._connect()
-            info = connection.info
-            span.set_attributes(
-                {
-                    "db.system.name": "postgresql",
-                    "db.namespace": info.dbname,
-                    "db.query.summary": summary,
-                    "server.address": info.host,
-                    "server.port": info.port,
-                }
-            )
-            yield connection
+            for delay in RECONNECT_DELAYS_SECONDS:
+                try:
+                    return step(self._described(span, summary, self._connect()))
+                except psycopg.OperationalError:
+                    self.close()
+                    time.sleep(delay)
+            try:
+                return step(self._described(span, summary, self._connect()))
+            except psycopg.OperationalError as error:
+                self.close()
+                raise StoreUnavailable(f"{type(error).__name__}: {error}") from error
+
+    @staticmethod
+    def _described(
+        span: trace.Span, summary: str, connection: psycopg.Connection
+    ) -> psycopg.Connection:
+        info = connection.info
+        span.set_attributes(
+            {
+                "db.system.name": "postgresql",
+                "db.namespace": info.dbname,
+                "db.query.summary": summary,
+                "server.address": info.host,
+                "server.port": info.port,
+            }
+        )
+        return connection
 
     def store_new(
         self, order: Order, event: ReceivedEvent
     ) -> Stored | AlreadyStored | EventIdTaken:
-        with (
-            self._write("INSERT orders order_lines processed_events") as connection,
-            connection.transaction() as transaction,
-            connection.cursor() as cursor,
-        ):
+        return self._write(
+            "INSERT orders order_lines processed_events",
+            lambda connection: self._store_new(connection, order, event),
+        )
+
+    def _store_new(
+        self, connection: psycopg.Connection, order: Order, event: ReceivedEvent
+    ) -> Stored | AlreadyStored | EventIdTaken:
+        with connection.transaction() as transaction, connection.cursor() as cursor:
             # The primary key is the final guard: of two consumers racing on one order, the second
             # waits for the first to commit, then stores nothing (ADR 0002).
             cursor.execute(
@@ -106,12 +148,11 @@ class PostgresOrderStore:
         return EventIdTaken()
 
     def record_duplicate(self, order_id: UUID, event: ReceivedEvent) -> None:
-        with (
-            self._write("INSERT processed_events") as connection,
-            connection.transaction(),
-            connection.cursor() as cursor,
-        ):
-            self._record(cursor, order_id, event, "duplicate")
+        def record(connection: psycopg.Connection) -> None:
+            with connection.transaction(), connection.cursor() as cursor:
+                self._record(cursor, order_id, event, "duplicate")
+
+        self._write("INSERT processed_events", record)
 
     @staticmethod
     def _record(
@@ -184,7 +225,16 @@ class PostgresOrderStore:
         )
 
     def record_handover(self, order_id: UUID, fulfilment_order_id: str) -> None:
-        with self._write("UPDATE orders") as connection, connection.transaction():
+        self._write(
+            "UPDATE orders",
+            lambda connection: self._record_handover(connection, order_id, fulfilment_order_id),
+        )
+
+    @staticmethod
+    def _record_handover(
+        connection: psycopg.Connection, order_id: UUID, fulfilment_order_id: str
+    ) -> None:
+        with connection.transaction():
             connection.execute(
                 """
                 UPDATE orders
@@ -197,7 +247,13 @@ class PostgresOrderStore:
             )
 
     def mark_handover_failed(self, order_id: UUID) -> None:
-        with self._write("UPDATE orders") as connection, connection.transaction():
+        self._write(
+            "UPDATE orders", lambda connection: self._mark_handover_failed(connection, order_id)
+        )
+
+    @staticmethod
+    def _mark_handover_failed(connection: psycopg.Connection, order_id: UUID) -> None:
+        with connection.transaction():
             # Never over a completed handover: of two consumers racing on one order, the one that
             # gave up must not undo the other's success.
             connection.execute(
@@ -212,3 +268,4 @@ class PostgresOrderStore:
     def close(self) -> None:
         if self._connection is not None:
             self._connection.close()
+            self._connection = None

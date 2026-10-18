@@ -92,7 +92,14 @@ class EventIdTaken:
     or not an order with the incoming id exists."""
 
 
+class StoreUnavailable(Exception):
+    """The database could not be reached, even after reconnecting (ADR 0006)."""
+
+
 class OrderStore(Protocol):
+    """Every step raises StoreUnavailable when the database can't be reached. Each is safe to
+    repeat, so a step whose outcome is unknown is simply done again."""
+
     def store_new(
         self, order: Order, event: ReceivedEvent
     ) -> Stored | AlreadyStored | EventIdTaken:
@@ -164,6 +171,7 @@ class DeadLetterReason(Enum):
     CONFLICT = "conflict"
     REJECTED = "rejected"
     RETRIES_EXHAUSTED = "retries-exhausted"
+    UNEXPECTED = "unexpected"
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +193,11 @@ class DeadLetter:
         return trace.traceparent if trace.started_here else None
 
 
+class DeadLetterUnwritable(Exception):
+    """The dead letter was not confirmed as written, so its offset can't be committed."""
+
+
 class DeadLetterSink(Protocol):
     def write(self, dead_letter: DeadLetter) -> None:
-        """Returns once the dead letter is durably written; raises if it can't be."""
+        """Returns once the dead letter is durably written; raises DeadLetterUnwritable if it
+        can't be."""

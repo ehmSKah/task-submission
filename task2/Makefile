@@ -51,8 +51,15 @@ down: ## Stop the stack, keeping its data
 clean: ## Stop the stack and delete its data
 	$(COMPOSE) --profile tracing down --volumes --remove-orphans
 
-ps: ## Show the stack's services and their health
+# Docker keeps each health check's output; the last one says why a consumer is unhealthy.
+ps: ## Show the stack's services, their health, and each consumer's last health check
 	$(COMPOSE) ps --all
+	@for id in $$($(COMPOSE) ps --quiet consumer); do \
+		name=$$(docker inspect --format '{{.Name}}' $$id); \
+		check=$$(docker inspect --format \
+			'{{with .State.Health}}{{range .Log}}{{.Output}}{{end}}{{end}}' $$id | grep . | tail -n 1); \
+		echo "$${name#/}: $${check:-no health check yet}"; \
+	done
 
 logs: ## Follow the logs of every service
 	$(COMPOSE) logs --follow
