@@ -241,7 +241,7 @@ class PollLoop:
             match self._processor.process(delivery):
                 case Outcome() as outcome:
                     span.set_attribute("outcome", outcome.value)
-                    self._consumer.commit(message=message, asynchronous=False)
+                    self._commit(message)
                     return None
                 case Stopped() as stopped:
                     span.set_attribute("outcome", f"stopped: {stopped.reason.value}")
@@ -249,6 +249,24 @@ class PollLoop:
                 case Interrupted() as interrupted:
                     span.set_attribute("outcome", "interrupted")
                     return interrupted
+
+    def _commit(self, message: Message) -> None:
+        """A commit refused because the group moved on (a zombie whose partition went to another
+        instance while it was busy) is logged and skipped: the new owner processes the message
+        from the committed offset, which is harmless (ADR 0004, 0007)."""
+        try:
+            self._consumer.commit(message=message, asynchronous=False)
+        except KafkaException as failure:
+            error: KafkaError = failure.args[0]
+            if error.fatal():
+                raise
+            log.error(
+                "commit.failed",
+                topic=message.topic() or self._topic,
+                partition=message.partition() or 0,
+                offset=message.offset() or 0,
+                reason=f"{error.name()}: {error.str()}",
+            )
 
     @staticmethod
     def _log_paused(stopped: Stopped) -> None:

@@ -84,6 +84,7 @@ class FakeKafkaConsumer:
     paused: set[int] = field(default_factory=set)
     callbacks: dict[str, Any] = field(default_factory=dict)
     strays_allowed: bool = False  # a record may arrive from a paused partition
+    commit_errors: dict[int, KafkaError] = field(default_factory=dict)  # by offset
 
     def subscribe(self, topics: list[str], **callbacks: Any) -> None:
         self.callbacks = callbacks
@@ -107,6 +108,9 @@ class FakeKafkaConsumer:
 
     def commit(self, message: FakeMessage, asynchronous: bool) -> None:
         assert asynchronous is False, "commits must be synchronous"
+        if message.offset() in self.commit_errors:
+            self.timeline.append(f"commit {message.offset()} failed")
+            raise KafkaException(self.commit_errors[message.offset()])
         self.timeline.append(f"commit {message.offset()}")
 
     def assignment(self) -> list[TopicPartition]:
@@ -240,6 +244,38 @@ def test_a_crash_while_processing_leaves_the_offset_uncommitted() -> None:
 
     assert timeline == ["processed 7 at 1", "commit 7"]
     assert kafka.closed, "the consumer must be closed even when processing fails"
+
+
+def no_longer_a_member(kafka: FakeKafkaConsumer) -> FakeMessage:
+    """The group moved on while the message was processed: its commit is refused."""
+    kafka.commit_errors[7] = KafkaError(KafkaError.UNKNOWN_MEMBER_ID)
+    return FakeMessage(7)
+
+
+def test_a_refused_commit_is_logged_and_the_loop_goes_on() -> None:
+    """A zombie: the new owner has processed the message too, harmlessly (ADR 0004, 0007)."""
+    with capture_logs() as lines:
+        result = run([no_longer_a_member, FakeMessage(8)])
+
+    assert result.timeline == [
+        "processed 7 at 1",
+        "commit 7 failed",
+        "processed 8 at 2",
+        "commit 8",
+    ]
+    [failed] = [line for line in lines if line["event"] == "commit.failed"]
+    assert failed["log_level"] == "error"
+    assert (failed["topic"], failed["partition"], failed["offset"]) == ("orders", 0, 7)
+    assert "UNKNOWN_MEMBER_ID" in failed["reason"]
+
+
+def test_a_fatal_commit_error_is_raised() -> None:
+    def fatal(kafka: FakeKafkaConsumer) -> FakeMessage:
+        kafka.commit_errors[7] = KafkaError(KafkaError._FATAL, fatal=True)
+        return FakeMessage(7)
+
+    with pytest.raises(KafkaException):
+        run([fatal])
 
 
 def test_the_end_of_a_partition_is_not_a_message() -> None:
