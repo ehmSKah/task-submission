@@ -21,7 +21,10 @@ install: ## Install the Python dependencies
 
 up: ## Build and start the stack, and wait until it is healthy
 	$(COMPOSE) up --build --detach --wait
-	@echo "kafka-ui: http://$(STACK_HOST):8080"
+	@echo "kafka-ui:         http://$(STACK_HOST):8080"
+	@echo "fulfilment stub:  http://$(STACK_HOST):8081/_control/fulfilment-orders"
+	@echo "Kafka (host):     $(STACK_HOST):9094"
+	@echo "PostgreSQL:       $(STACK_HOST):5432 (make psql)"
 
 down: ## Stop the stack, keeping its data
 	$(COMPOSE) down
