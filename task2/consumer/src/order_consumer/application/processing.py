@@ -1,5 +1,5 @@
 """Processing one delivery: read it, then store, hand over and record (ADR 0004), or set an invalid
-event aside as a dead letter (ADR 0006).
+event or a failed handover aside as a dead letter (ADR 0006).
 
 Returns an Outcome and never commits: only the poll loop commits, according to the outcome
 (ADR 0005).
@@ -7,10 +7,12 @@ Returns an Outcome and never commits: only the poll loop commits, according to t
 
 import json
 from enum import Enum
+from uuid import UUID
 
 import structlog
 
 from order_consumer.application.ports import (
+    Clock,
     DeadLetter,
     DeadLetterReason,
     DeadLetterSink,
@@ -18,6 +20,12 @@ from order_consumer.application.ports import (
     FulfilmentClient,
     HandoverStatus,
     OrderStore,
+)
+from order_consumer.application.retries import (
+    GaveUp,
+    HandoverRetries,
+    Jitter,
+    RetryPolicy,
 )
 from order_consumer.domain.downstream import to_downstream_request
 from order_consumer.domain.event import OrderPlacedReader
@@ -42,9 +50,13 @@ class OrderProcessor:
         fulfilment: FulfilmentClient,
         dead_letters: DeadLetterSink,
         reader: OrderPlacedReader,
+        *,
+        policy: RetryPolicy,
+        clock: Clock,
+        jitter: Jitter,
     ) -> None:
         self._store = store
-        self._fulfilment = fulfilment
+        self._handover = HandoverRetries(fulfilment, policy, clock, jitter)
         self._dead_letters = dead_letters
         self._reader = reader
 
@@ -73,9 +85,16 @@ class OrderProcessor:
                         return Outcome.DUPLICATE
                     log.info("handover.unfinished", handover_status=status.value)
 
-                result = self._fulfilment.hand_over(to_downstream_request(order))
-                self._store.record_handover(order.order_id, result.fulfilment_order_id)
-                log.info("handover.completed", fulfilment_order_id=result.fulfilment_order_id)
+                handover = self._handover.hand_over(to_downstream_request(order))
+                if isinstance(handover, GaveUp):
+                    return self._give_up(delivery, event.event_id, order.order_id, handover)
+                fulfilment_order_id = handover.result.fulfilment_order_id
+                self._store.record_handover(order.order_id, fulfilment_order_id)
+                log.info(
+                    "handover.completed",
+                    fulfilment_order_id=fulfilment_order_id,
+                    attempts=handover.attempts,
+                )
                 return Outcome.HANDED_OVER
 
     def _set_aside(self, delivery: Delivery, invalid: InvalidEvent) -> Outcome:
@@ -101,6 +120,43 @@ class OrderProcessor:
             )
             log.warning("dead_letter.written", reason=DeadLetterReason.INVALID.value)
             return Outcome.DEAD_LETTERED
+
+    def _give_up(
+        self, delivery: Delivery, event_id: UUID, order_id: UUID, gave_up: GaveUp
+    ) -> Outcome:
+        """A failed handover (ADR 0004): `handover_failed` is set before the dead letter is
+        written, so a crash in between only causes a redelivery and another attempt."""
+        self._store.mark_handover_failed(order_id)
+        log.warning("handover.failed", reason=gave_up.reason.value, attempts=gave_up.attempts)
+        self._dead_letters.write(
+            DeadLetter(
+                delivery=delivery,
+                reason=gave_up.reason,
+                detail=_handover_detail(gave_up),
+                attempts=gave_up.attempts,
+                event_id=event_id,
+                order_id=order_id,
+            )
+        )
+        log.warning("dead_letter.written", reason=gave_up.reason.value)
+        return Outcome.DEAD_LETTERED
+
+
+def _handover_detail(gave_up: GaveUp) -> str:
+    """The last attempt's status and error, a Retry-After too long to wait for, and for a rejection
+    the start of the problem body, cut until the detail fits in 4 KB."""
+    failure = gave_up.last_failure
+    detail: dict[str, object] = {"status": failure.status, "error": failure.error}
+    if gave_up.retry_after is not None:
+        detail["retryAfterSeconds"] = gave_up.retry_after
+    problem = failure.problem
+    while True:
+        if problem is not None:
+            detail["problem"] = problem
+        encoded = json.dumps(detail, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded.encode()) <= MAX_DETAIL_BYTES or not problem:
+            return encoded
+        problem = problem[: len(problem) * 3 // 4]
 
 
 def _invalid_detail(invalid: InvalidEvent) -> str:

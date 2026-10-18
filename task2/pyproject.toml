@@ -28,6 +28,7 @@ dev = [
     "import-linter>=2.5",
     "types-PyYAML",
     "types-jsonschema",
+    "respx>=0.22",  # mocks the consumer's HTTP client in unit tests (ADR 0003)
 ]
 
 [tool.pytest.ini_options]

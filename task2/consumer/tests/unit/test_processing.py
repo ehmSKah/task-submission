@@ -1,5 +1,5 @@
-"""Processing one delivery (ADR 0004, 0006): store, hand over, record, or dead-letter an invalid
-event, and report the outcome."""
+"""Processing one delivery (ADR 0004, 0006): store, hand over with bounded retries, record, or
+dead-letter an invalid event or a failed handover, and report the outcome."""
 
 import json
 from dataclasses import dataclass, field
@@ -13,10 +13,13 @@ from order_consumer.application.ports import (
     DeadLetter,
     DeadLetterReason,
     Delivery,
+    HandoverFailed,
     HandoverResult,
     HandoverStatus,
+    ResponseClass,
 )
 from order_consumer.application.processing import OrderProcessor, Outcome
+from order_consumer.application.retries import Jitter, RetryPolicy, SystemicFailure
 from order_consumer.domain.downstream import DownstreamRequest
 from order_consumer.domain.event import OrderPlacedReader
 from order_consumer.domain.order import Order
@@ -68,27 +71,66 @@ class FakeOrderStore:
         stored.handover_status = "handed_over"
         stored.fulfilment_order_id = fulfilment_order_id
 
+    def mark_handover_failed(self, order_id: UUID) -> None:
+        self.orders[order_id].handover_status = "handover_failed"
+
+
+def unavailable(retry_after: float | None = None) -> HandoverFailed:
+    return HandoverFailed(
+        ResponseClass.TRANSIENT, "503 Service Unavailable", status=503, retry_after=retry_after
+    )
+
 
 @dataclass
 class FakeFulfilment:
+    """Answers each attempt with the next scripted failure, and succeeds once they are used up."""
+
     store: FakeOrderStore
+    failures: list[HandoverFailed] = field(default_factory=list)
     requests: list[DownstreamRequest] = field(default_factory=list)
     stored_before_handover: list[bool] = field(default_factory=list)
 
     def hand_over(self, request: DownstreamRequest) -> HandoverResult:
         self.stored_before_handover.append(UUID(request.idempotency_key) in self.store.orders)
         self.requests.append(request)
+        if self.failures:
+            raise self.failures.pop(0)
         return HandoverResult(fulfilment_order_id="ful-1")
+
+
+@dataclass
+class FakeClock:
+    """Time passes only when the processor waits."""
+
+    now: float = 1000.0
+    sleeps: list[float] = field(default_factory=list)
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def longest(cap: float) -> float:
+    """Jitter pinned to the longest wait allowed."""
+    return cap
 
 
 @dataclass
 class FakeDeadLetterSink:
     fails: bool = False
     written: list[DeadLetter] = field(default_factory=list)
+    store: FakeOrderStore | None = None
+    # The order's handover status at the moment each dead letter was written.
+    handover_status_when_written: list[str | None] = field(default_factory=list)
 
     def write(self, dead_letter: DeadLetter) -> None:
         if self.fails:
             raise RuntimeError("the dead-letter topic can't be written")
+        stored = self.store.orders.get(ORDER_ID) if self.store is not None else None
+        self.handover_status_when_written.append(stored.handover_status if stored else None)
         self.written.append(dead_letter)
 
 
@@ -98,12 +140,25 @@ class ProcessorWithFakes:
 
     store: FakeOrderStore = field(default_factory=FakeOrderStore)
     dead_letters: FakeDeadLetterSink = field(default_factory=FakeDeadLetterSink)
+    failures: list[HandoverFailed] = field(default_factory=list)
+    policy: RetryPolicy = field(default_factory=RetryPolicy)
+    jitter: Jitter = longest
+    clock: FakeClock = field(default_factory=FakeClock)
     fulfilment: FakeFulfilment = field(init=False)
     processor: OrderProcessor = field(init=False)
 
     def __post_init__(self) -> None:
-        self.fulfilment = FakeFulfilment(self.store)
-        self.processor = OrderProcessor(self.store, self.fulfilment, self.dead_letters, reader)
+        self.dead_letters.store = self.store
+        self.fulfilment = FakeFulfilment(self.store, self.failures)
+        self.processor = OrderProcessor(
+            self.store,
+            self.fulfilment,
+            self.dead_letters,
+            reader,
+            policy=self.policy,
+            clock=self.clock,
+            jitter=self.jitter,
+        )
 
     def process(self, value: bytes | None = None) -> Outcome:
         return self.processor.process(delivery(value))
@@ -218,3 +273,126 @@ def test_an_invalid_event_has_no_outcome_while_its_dead_letter_cant_be_written()
 
     with pytest.raises(RuntimeError):
         harness.process(order_placed_event(ORDER_ID, EVENT_ID, total=1))
+
+
+def test_two_transient_failures_then_success_end_handed_over_after_three_attempts() -> None:
+    harness = ProcessorWithFakes(failures=[unavailable(), unavailable()])
+
+    outcome = harness.process()
+
+    assert outcome is Outcome.HANDED_OVER
+    assert len(harness.fulfilment.requests) == 3
+    assert harness.clock.sleeps == [1.0, 2.0], "full-jitter backoff, pinned to its caps"
+    assert harness.store.orders[ORDER_ID].handover_status == "handed_over"
+    assert harness.dead_letters.written == []
+
+
+def test_a_handover_that_keeps_failing_ends_failed_and_dead_lettered() -> None:
+    timeout = HandoverFailed(ResponseClass.TRANSIENT, "ReadTimeout")
+    harness = ProcessorWithFakes(failures=[*(unavailable() for _ in range(4)), timeout])
+
+    outcome = harness.process()
+
+    assert outcome is Outcome.DEAD_LETTERED
+    assert len(harness.fulfilment.requests) == 5
+    assert harness.clock.sleeps == [1.0, 2.0, 4.0, 8.0]
+    assert harness.store.orders[ORDER_ID].handover_status == "handover_failed"
+    [dead_letter] = harness.dead_letters.written
+    assert harness.dead_letters.handover_status_when_written == ["handover_failed"]
+    assert dead_letter.delivery == delivery()
+    assert dead_letter.reason is DeadLetterReason.RETRIES_EXHAUSTED
+    assert dead_letter.attempts == 5
+    assert (dead_letter.event_id, dead_letter.order_id) == (EVENT_ID, ORDER_ID)
+    assert json.loads(dead_letter.detail) == {"status": None, "error": "ReadTimeout"}
+
+
+@pytest.mark.parametrize(
+    ("status", "error"), [(400, "400 Bad Request"), (422, "422 Unprocessable Content")]
+)
+def test_a_rejected_handover_is_dead_lettered_without_retries(status: int, error: str) -> None:
+    problem = '{"title":"Unprocessable Content","status":422}'
+    rejected = HandoverFailed(ResponseClass.REJECTED, error, status=status, problem=problem)
+    harness = ProcessorWithFakes(failures=[rejected])
+
+    outcome = harness.process()
+
+    assert outcome is Outcome.DEAD_LETTERED
+    assert len(harness.fulfilment.requests) == 1
+    assert harness.clock.sleeps == []
+    assert harness.store.orders[ORDER_ID].handover_status == "handover_failed"
+    assert harness.dead_letters.handover_status_when_written == ["handover_failed"]
+    [dead_letter] = harness.dead_letters.written
+    assert dead_letter.reason is DeadLetterReason.REJECTED
+    assert dead_letter.attempts == 1
+    assert json.loads(dead_letter.detail) == {"status": status, "error": error, "problem": problem}
+
+
+def test_a_long_problem_body_is_cut_so_the_detail_fits_in_4_kb() -> None:
+    problem = '{"detail":"' + "€" * 3000 + '"}'
+    rejected = HandoverFailed(
+        ResponseClass.REJECTED, "400 Bad Request", status=400, problem=problem
+    )
+    harness = ProcessorWithFakes(failures=[rejected])
+
+    harness.process()
+
+    [dead_letter] = harness.dead_letters.written
+    assert len(dead_letter.detail.encode()) <= 4096
+    detail = json.loads(dead_letter.detail)
+    assert len(detail["problem"]) > 1000
+    assert problem.startswith(detail["problem"])
+
+
+def test_a_retry_after_up_to_15_seconds_is_waited_for_instead_of_the_backoff() -> None:
+    harness = ProcessorWithFakes(failures=[unavailable(retry_after=12.0), unavailable(0.0)])
+
+    outcome = harness.process()
+
+    assert outcome is Outcome.HANDED_OVER
+    assert harness.clock.sleeps == [12.0, 0.0]
+
+
+def test_a_retry_after_longer_than_15_seconds_ends_the_retries_at_once() -> None:
+    harness = ProcessorWithFakes(failures=[unavailable(retry_after=120.0)])
+
+    outcome = harness.process()
+
+    assert outcome is Outcome.DEAD_LETTERED
+    assert len(harness.fulfilment.requests) == 1
+    assert harness.clock.sleeps == []
+    assert harness.store.orders[ORDER_ID].handover_status == "handover_failed"
+    [dead_letter] = harness.dead_letters.written
+    assert dead_letter.reason is DeadLetterReason.RETRIES_EXHAUSTED
+    assert dead_letter.attempts == 1
+    assert json.loads(dead_letter.detail) == {
+        "status": 503,
+        "error": "503 Service Unavailable",
+        "retryAfterSeconds": 120.0,
+    }
+
+
+@pytest.mark.parametrize("status", [401, 404, 302, 200])
+def test_a_systemic_answer_stops_processing_with_nothing_written(status: int) -> None:
+    """Stopping consumption on it is the poll loop's business; until it pauses, the failure
+    propagates, so nothing is committed and the event is redelivered (ADR 0003, 0006)."""
+    systemic = HandoverFailed(ResponseClass.SYSTEMIC, f"{status}", status=status)
+    harness = ProcessorWithFakes(failures=[unavailable(), systemic])
+
+    with pytest.raises(SystemicFailure) as stopped:
+        harness.process()
+
+    assert stopped.value.attempts == 2, "no attempt after the systemic answer"
+    assert stopped.value.failure is systemic
+    assert harness.store.orders[ORDER_ID].handover_status == "awaiting_handover"
+    assert harness.dead_letters.written == []
+
+
+def test_a_redelivery_completes_a_failed_handover() -> None:
+    harness = ProcessorWithFakes(failures=[unavailable(retry_after=60.0)])
+    harness.process()
+
+    outcome = harness.process()
+
+    assert outcome is Outcome.HANDED_OVER
+    assert harness.store.orders[ORDER_ID].handover_status == "handed_over"
+    assert harness.store.stored == [ORDER_ID]

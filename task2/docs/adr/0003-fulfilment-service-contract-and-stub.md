@@ -65,7 +65,9 @@ traceparent: 00-…               # W3C Trace Context, the correlation id (ADR 0
 
 - **Only one layer retries: the consumer's retry policy.** If the HTTP client retried as well, the bound would multiply (3 × 3 = 9 attempts instead of 3). Many clients retry by default, so this is set explicitly.
 - **Kafka sets the outer limit.** A consumer that doesn't poll for longer than `max.poll.interval.ms` (300 s by default) loses its partitions and the message is redelivered. With at most 10 s per attempt, the retry strategy can work out how many attempts and how much backoff fit between polls, or pause the partition instead.
-- **Every value is configuration** with these defaults, so tests can shorten them.
+- **Every value is configuration** with these defaults, so tests can shorten them (`FULFILMENT_CONNECT_TIMEOUT_SECONDS`, `FULFILMENT_READ_TIMEOUT_SECONDS`, which also bounds writing the request, and `FULFILMENT_ATTEMPT_DEADLINE_SECONDS`).
+- **The deadline covers the whole attempt.** `httpx`'s timeouts bound each phase, not their sum, so the attempt runs in a thread of its own and is abandoned when its deadline passes. An abandoned request still ends within its phase timeouts; whatever it achieved, the idempotency key makes the next attempt safe.
+- **The HTTP adapter sorts every answer into its class**, including timeouts and dropped connections; the core sees only the class, the status and a short error. A different contract changes the adapter, not the retry policy.
 - **Library:** `httpx`, which has sync and async APIs and timeouts per phase; `respx` mocks it in unit tests.
 
 **Authentication**

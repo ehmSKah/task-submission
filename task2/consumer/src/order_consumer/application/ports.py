@@ -49,14 +49,60 @@ class OrderStore(Protocol):
     def record_handover(self, order_id: UUID, fulfilment_order_id: str) -> None:
         """Marks the order as handed over to the fulfilment service."""
 
+    def mark_handover_failed(self, order_id: UUID) -> None:
+        """Marks the order's handover as given up on; a later delivery can still complete it."""
+
+
+class ResponseClass(Enum):
+    """What one handover attempt's answer means (ADR 0003); the class alone decides what happens
+    next (ADR 0006)."""
+
+    SUCCESS = "success"
+    TRANSIENT = "transient"  # may succeed later: retried
+    REJECTED = "rejected"  # this order will never be accepted as sent: dead-lettered at once
+    SYSTEMIC = "systemic"  # wrong for every order: consumption stops
+
+
+class HandoverFailed(Exception):
+    """One handover attempt that did not end in success."""
+
+    def __init__(
+        self,
+        response_class: ResponseClass,
+        error: str,
+        *,
+        status: int | None = None,
+        retry_after: float | None = None,
+        problem: str | None = None,
+    ) -> None:
+        super().__init__(error)
+        self.response_class = response_class
+        self.error = error  # what happened, e.g. "503 Service Unavailable" or "ReadTimeout"
+        self.status = status  # None when there was no answer
+        self.retry_after = retry_after  # seconds, when the answer asked for a wait
+        self.problem = problem  # the start of a rejection's response body
+
 
 class FulfilmentClient(Protocol):
     def hand_over(self, request: DownstreamRequest) -> HandoverResult:
-        """Creates the fulfilment order, keyed by the request's idempotency key."""
+        """Makes one attempt to create the fulfilment order, keyed by the request's idempotency
+        key. Raises HandoverFailed, classified, for anything but a `201`."""
+
+
+class Clock(Protocol):
+    """Time for retry backoff (ADR 0005), so it is tested without sleeping."""
+
+    def monotonic(self) -> float:
+        """Seconds from an arbitrary start, never going backwards."""
+
+    def sleep(self, seconds: float) -> None:
+        """Returns once the time has passed."""
 
 
 class DeadLetterReason(Enum):
     INVALID = "invalid"
+    REJECTED = "rejected"
+    RETRIES_EXHAUSTED = "retries-exhausted"
 
 
 @dataclass(frozen=True, slots=True)

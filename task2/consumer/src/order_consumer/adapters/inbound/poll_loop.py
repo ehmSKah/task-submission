@@ -38,6 +38,9 @@ def create_consumer(settings: Settings) -> Consumer:
             "enable.auto.commit": False,
             "enable.auto.offset.store": False,
             "auto.offset.reset": "earliest",
+            # A handover's retries keep the message in hand without polling; the start-up check
+            # keeps them within half of this (ADR 0006).
+            "max.poll.interval.ms": settings.kafka_max_poll_interval_ms,
             "partition.assignment.strategy": "cooperative-sticky",
             "logger": logging.getLogger("librdkafka"),
         }
