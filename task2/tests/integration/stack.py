@@ -167,6 +167,18 @@ def processed_events(order_id: UUID) -> list[dict[str, Any]]:
         ).fetchall()
 
 
+def handed_over_count(order_ids: Collection[UUID]) -> int:
+    """How many of these orders are handed over so far."""
+    with psycopg.connect(CONSUMER_DATABASE_URL) as connection:
+        row = connection.execute(
+            "SELECT count(*) FROM orders "
+            "WHERE order_id = ANY(%s) AND handover_status = 'handed_over'",
+            (list(order_ids),),
+        ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
 def order_row_count(order_id: UUID) -> int:
     with psycopg.connect(CONSUMER_DATABASE_URL) as connection:
         row = connection.execute(
@@ -211,6 +223,13 @@ def statuses_by_idempotency_key(order_id: UUID) -> list[int | None]:
     ]
 
 
+def describe_group(consumers: ConsumerGroup) -> ConsumerGroupDescription:
+    admin = AdminClient({"bootstrap.servers": KAFKA_BOOTSTRAP})
+    [future] = admin.describe_consumer_groups([consumers.group]).values()
+    description: ConsumerGroupDescription = future.result(timeout=10)
+    return description
+
+
 def wait_until_stable(
     consumers: ConsumerGroup,
     members: int,
@@ -219,15 +238,8 @@ def wait_until_stable(
 ) -> frozenset[str]:
     """Waits until the group has settled with exactly `members` members, each holding partitions
     and none of them among the `replacing` member ids; returns the members' ids."""
-    admin = AdminClient({"bootstrap.servers": KAFKA_BOOTSTRAP})
-
-    def describe() -> ConsumerGroupDescription:
-        [future] = admin.describe_consumer_groups([consumers.group]).values()
-        description: ConsumerGroupDescription = future.result(timeout=10)
-        return description
-
     settled = eventually(
-        describe,
+        lambda: describe_group(consumers),
         until=lambda group: (
             group.state == ConsumerGroupState.STABLE
             and len(group.members) == members
