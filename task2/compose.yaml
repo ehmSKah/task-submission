@@ -111,6 +111,16 @@ services:
       DATABASE_URL: *consumer-database-url
       FULFILMENT_BASE_URL: http://fulfilment-stub:8081
       FULFILMENT_TOKEN: local-dev-token
+    # Healthy once the instance holds its partitions (or knows it was given none), so
+    # `up --wait` returns only when the consumers consume; unhealthy while paused or stuck,
+    # printing why (ADR 0007).
+    healthcheck:
+      test: ["CMD", "python", "-m", "order_consumer.health"]
+      interval: 5s
+      timeout: 5s
+      retries: 2
+      start_period: 120s
+      start_interval: 1s
     restart: unless-stopped
 
   kafka-ui:
