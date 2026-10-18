@@ -11,8 +11,9 @@ import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from http import HTTPStatus
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import structlog
 from fastapi import FastAPI, Request, Response
@@ -20,7 +21,8 @@ from fastapi.responses import JSONResponse
 from openapi_core import OpenAPI
 from openapi_core.contrib.starlette import StarletteOpenAPIRequest
 from openapi_core.exceptions import OpenAPIError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from starlette.types import Receive, Scope, Send
 
 log = structlog.get_logger()
 
@@ -38,19 +40,72 @@ class IdempotencyRecord:
 
 @dataclass
 class FaultRule:
-    """A fault for one order, applied to its next `times` requests (ADR 0003)."""
+    """A fault for one order, applied to its next `times` requests (ADR 0003).
+
+    The request claims its key, waits `delay_seconds`, then either answers with `status` or drops
+    the connection, creating nothing, or, with neither, is processed as usual. A delay on its own
+    therefore creates the order but answers late: a client that timed out meanwhile gets `409`
+    on its repeat, and the `201` replay once the delay is over.
+    """
 
     external_reference: str
     times: int
-    delay_seconds: float
+    delay_seconds: float = 0.0
+    status: int | None = None
+    retry_after: str | None = None
+    drop_connection: bool = False
+
+    @property
+    def fails(self) -> bool:
+        return self.status is not None or self.drop_connection
+
+    def describe(self) -> dict[str, Any]:
+        """The rule as the journal shows it: only what it changes."""
+        fields = {
+            "delaySeconds": self.delay_seconds or None,
+            "status": self.status,
+            "retryAfter": self.retry_after,
+            "dropConnection": self.drop_connection or None,
+        }
+        return {name: value for name, value in fields.items() if value is not None}
 
 
 class FaultRuleRequest(BaseModel):
-    """`POST /_control/fault-rules`. Only a delay so far; further faults are added as fields."""
+    """`POST /_control/fault-rules`."""
 
     externalReference: str
     times: int = Field(default=1, ge=1)
     delaySeconds: float = Field(default=0.0, ge=0.0, le=60.0)
+    status: int | None = Field(default=None, ge=200, le=599)
+    retryAfter: str | None = Field(default=None, min_length=1, max_length=64)
+    dropConnection: bool = False
+
+    @model_validator(mode="after")
+    def one_fault(self) -> Self:
+        if self.status == HTTPStatus.CREATED:
+            raise ValueError("a 201 is the stub's own answer; omit status to create the order")
+        if self.status is not None and self.dropConnection:
+            raise ValueError("answer with a status or drop the connection, not both")
+        if self.retryAfter is not None and self.status is None:
+            raise ValueError("retryAfter needs a status to send it with")
+        return self
+
+
+class DroppedConnection(Response):
+    """Starts the answer and never completes it: the server closes the connection, and the
+    client sees it dropped mid-answer. Nothing it receives is a usable response."""
+
+    def __init__(self) -> None:
+        super().__init__(status_code=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": self.status_code,
+                "headers": [(b"content-length", b"1")],
+            }
+        )
 
 
 @dataclass
@@ -90,12 +145,24 @@ def fingerprint(body: bytes) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def problem(status: int, title: str, **extra: Any) -> JSONResponse:
+def problem(
+    status: int, title: str, headers: dict[str, str] | None = None, **extra: Any
+) -> JSONResponse:
     return JSONResponse(
         {"title": title, "status": status, **extra},
         status_code=status,
+        headers=headers,
         media_type="application/problem+json",
     )
+
+
+def injected(rule: FaultRule) -> Response:
+    """The answer a status rule asks for. Some statuses must not carry a body."""
+    assert rule.status is not None
+    headers = {"Retry-After": rule.retry_after} if rule.retry_after is not None else None
+    if rule.status in (HTTPStatus.NO_CONTENT, HTTPStatus.NOT_MODIFIED):
+        return Response(status_code=rule.status, headers=headers)
+    return problem(rule.status, HTTPStatus(rule.status).phrase, headers, detail="Injected fault.")
 
 
 def contract_violations(error: OpenAPIError) -> dict[str, Any]:
@@ -140,7 +207,8 @@ def create_app(
             "receivedAt": datetime.now(UTC).isoformat(),
             "idempotencyKey": request.headers.get("idempotency-key"),
             "externalReference": None,
-            "status": None,  # until the request is answered
+            "status": None,  # until the request is answered; never if its connection is dropped
+            "fault": None,  # the rule applied to it
         }
         journal.requests.append(entry)
 
@@ -158,6 +226,8 @@ def create_app(
         external_reference = json.loads(body)["externalReference"]
         entry["externalReference"] = external_reference
         rule = fault_rules.take(external_reference)
+        if rule is not None:
+            entry["fault"] = rule.describe()
         key = request.headers["idempotency-key"]
         body_fingerprint = fingerprint(body)
         record = idempotency_records.get(key)
@@ -172,6 +242,13 @@ def create_app(
             if claimed:
                 idempotency_records.pop(key, None)
             raise
+        if rule is not None and rule.fails:
+            if claimed:
+                del idempotency_records[key]  # nothing was created, so nothing is remembered
+            if rule.drop_connection:
+                return DroppedConnection()
+            entry["status"] = rule.status
+            return injected(rule)
         if not claimed:
             return answer_repeat(record, body_fingerprint, entry)
 
@@ -206,7 +283,16 @@ def create_app(
 
     @app.post("/_control/fault-rules", status_code=201)
     def add_fault_rule(rule: FaultRuleRequest) -> FaultRuleRequest:
-        fault_rules.add(FaultRule(rule.externalReference, rule.times, rule.delaySeconds))
+        fault_rules.add(
+            FaultRule(
+                rule.externalReference,
+                rule.times,
+                delay_seconds=rule.delaySeconds,
+                status=rule.status,
+                retry_after=rule.retryAfter,
+                drop_connection=rule.dropConnection,
+            )
+        )
         return rule
 
     @app.get("/_control/requests")
