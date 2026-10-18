@@ -130,7 +130,7 @@ Consumption is at-least-once, effects are idempotent, so business operations are
 4. **Systemic failures delay; they don't lose.**
 
 **Ordering:** one order's events share a partition and are processed in order; nothing depends
-on order across partitions, since the only repeat for an order is a harmless duplicate.
+on order across partitions, since an order's only second event is a harmless duplicate.
 
 **Restarts and rebalances** ([ADR 0007](adr/0007-rebalances-restarts-and-shutdown.md)): on
 SIGTERM the consumer finishes the current step, then leaves the group at once. Rebalances use
@@ -227,7 +227,7 @@ and conflicting dead letters are skipped unless `--force`.
 | [0004](adr/0004-inline-handover-and-delivery-guarantee.md) | The dual write | Inline: store, hand over, record, commit; the uncommitted offset is the to-do list | Transactional outbox | Correct without a second loop, because every repeat is harmless; retries and dead letters stay in Kafka |
 | [0005](adr/0005-python-stack-and-code-structure.md) | Stack and code | Python 3.13, `confluent-kafka`, our own synchronous poll loop, hexagonal | Spring Kafka; FastStream, faust | The reliability mechanics stay in our code; Python's frameworks hide commit timing |
 | [0006](adr/0006-failures-retries-and-dead-letters.md) | Failures, retries, dead letters | Four classes; 5 blocking attempts with full jitter, checked at start-up; flood guard; one `orders.dlt`; `make replay` | Retry topics; no flood guard | Bounded within the poll budget; an outage waits in Kafka instead of filling the dead-letter topic |
-| [0007](adr/0007-rebalances-restarts-and-shutdown.md) | Rebalances, restarts, shutdown | Finish the step, then leave; `cooperative-sticky`; no commits in callbacks; a heartbeat healthcheck | Finishing the whole message; static membership; KIP-848 | Prompt hand-overs; correctness never depends on finishing |
+| [0007](adr/0007-rebalances-restarts-and-shutdown.md) | Rebalances, restarts, shutdown | Finish the step, then leave; `cooperative-sticky`; no commits in callbacks; a heartbeat healthcheck | Finishing the whole message; static membership; KIP-848 | Partitions move promptly; correctness never depends on finishing |
 | [0008](adr/0008-observability-tracing-and-logs.md) | Observability | `traceparent` as the correlation id; OpenTelemetry traces, Jaeger optional; JSON logs with fixed event names | Our own correlation header; metrics and a collector now | A standard id any system joins; one terminal line per message counts outcomes |
 | [0009](adr/0009-local-stack-and-testing.md) | Local stack and testing | The Compose stack as the harness; in-process and container tests; one file per test category; no sleeps | Testcontainers | Tests run against the broker image that ships |
 | [0010](adr/0010-production-evolution.md) | Production evolution | Simplifications grouped by what triggers them | A flat backlog; a platform sketch | Says what changes when, and why |

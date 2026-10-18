@@ -5,8 +5,8 @@ A reviewer gets this folder and nothing else: no issue tracker, no working branc
 coding assistants. The repository's README and its workflows ship beside the folder, so they are
 scanned for such links too. Relative links in the Markdown documents must point at files that
 exist (and at headings that exist, where they name one): that is what proves every path in the
-README's requirement-to-files table. The design document summarises every ADR, and every `make`
-target the README names exists.
+README's "Deliverables at a glance" table. The design document summarises every ADR, and every
+`make` target the README and the design document name exists.
 """
 
 import re
@@ -162,12 +162,13 @@ def test_the_design_document_links_every_adr() -> None:
     assert adrs <= linked
 
 
-def test_every_make_target_the_readme_names_exists() -> None:
+@pytest.mark.parametrize("document", [README, DESIGN], ids=label)
+def test_every_make_target_the_document_names_exists(document: Path) -> None:
     makefile = (TASK2 / "Makefile").read_text()
     targets = set(re.findall(r"^([a-z][a-z-]*):", makefile, flags=re.MULTILINE))
-    named = set(re.findall(r"\bmake (?:-s )?([a-z][a-z-]*)", README.read_text()))
+    named = set(re.findall(r"\bmake (?:-s )?([a-z][a-z-]*)", document.read_text()))
 
-    assert named, "the README names no make target"
+    assert named, f"{document.name} names no make target"
     assert named - targets == set()
 
 
@@ -179,9 +180,10 @@ def test_every_make_target_the_readme_names_exists() -> None:
         ("Publishing and replaying", "publishing-and-replaying"),
         ("`make demo`: the scenario", "make-demo-the-scenario"),
         (
-            "Assumptions, and how task1 and task2 would connect",
-            "assumptions-and-how-task1-and-task2-would-connect",
+            "Known limitations and deliberate omissions",
+            "known-limitations-and-deliberate-omissions",
         ),
+        ("Order event consumer: design", "order-event-consumer-design"),
     ],
 )
 def test_anchors_follow_githubs_rules(heading: str, expected: str) -> None:

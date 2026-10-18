@@ -190,7 +190,8 @@ $ make replay ARGS="--reason retries-exhausted --since 2026-10-18T09:00Z --execu
   dead letters older than a real fulfilment service's idempotency-key window (about a day). Use
   `--since` to stay inside it ([ADR 0004](docs/adr/0004-inline-handover-and-delivery-guarantee.md),
   [ADR 0006](docs/adr/0006-failures-retries-and-dead-letters.md)).
-- **Replaying twice is harmless:** an order already handed over is skipped.
+- **Replaying twice is harmless:** the replay republishes the copy, and the consumer skips an
+  order already handed over as a duplicate.
 
 **Trying the failure handling by hand.** The circuit breaker and restarts are proven by tests and
 stay out of the demo:
@@ -264,10 +265,10 @@ it automatically) and run `make up`.
 | `LOG_LEVEL` | `INFO` | `DEBUG` for more |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | where spans go; `make up-tracing` sets it to Jaeger |
 
-**Host ports and the Compose project** are variables of the `Makefile`, for when a port is taken
-or several stacks share one Docker daemon: `KAFKA_PORT` (9094), `POSTGRES_PORT` (5432),
-`STUB_PORT` (8081), `UI_PORT` (8080), `JAEGER_UI_PORT` (16686) and `COMPOSE_PROJECT_NAME`
-(`task2`). `STACK_HOST` is the host the published ports are reached on: `localhost`, or the
+**Host ports** are variables of the `Makefile`, for when a port is taken or several stacks share
+one Docker daemon: `KAFKA_PORT` (9094), `POSTGRES_PORT` (5432), `STUB_PORT` (8081), `UI_PORT`
+(8080) and `JAEGER_UI_PORT` (16686). Compose's own `COMPOSE_PROJECT_NAME` overrides the project
+name, `task2`. `STACK_HOST` is the host the published ports are reached on: `localhost`, or the
 daemon's host when `DOCKER_HOST` points at a remote one.
 
 ## Assumptions
@@ -275,8 +276,8 @@ daemon's host when `DOCKER_HOST` points at a remote one.
 - **Order events are order placements.** The consumer handles one event type, `order.placed`,
   carrying the complete order; there are no updates or cancellations
   ([ADR 0001](docs/adr/0001-order-placed-event-contract.md)).
-- **The fulfilment service is a stand-in designed for this assignment.** The assignment leaves
-  the downstream API open, so its contract ([`openapi/fulfilment.yaml`](openapi/fulfilment.yaml))
+- **The fulfilment service is a stand-in designed for this assignment.** The assignment names
+  only "a downstream REST API", so its contract ([`openapi/fulfilment.yaml`](openapi/fulfilment.yaml))
   is ours, and so is the stub that plays it, with fault rules and a journal for the tests
   ([ADR 0003](docs/adr/0003-fulfilment-service-contract-and-stub.md)).
 - **The producer is not designed.** `make publish` and the tests play it.
