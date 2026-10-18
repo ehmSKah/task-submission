@@ -2,7 +2,8 @@
 
 The stub's fault rules make the fulfilment service fail for one order at a time. Transient failures
 are retried until the handover completes or the retries run out; a refused handover is
-dead-lettered at once; a systemic answer stops the consumer with nothing committed.
+dead-lettered at once; a systemic answer pauses the consumer with nothing committed, until a probe
+succeeds.
 """
 
 import dataclasses
@@ -12,9 +13,9 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from order_consumer.application.retries import RetryPolicy, SystemicFailure
+from order_consumer.application.retries import RetryPolicy
 from order_consumer.config import FulfilmentTimeouts, Settings
-from tests.integration.in_process import group_of, run_until_it_fails, running
+from tests.integration.in_process import group_of, heartbeat, running
 from tests.integration.stack import (
     Record,
     add_fault_rule,
@@ -27,6 +28,7 @@ from tests.integration.stack import (
     lag,
     publish,
     records,
+    statuses_by_idempotency_key,
     stored_order,
     wait_for_dead_letters,
 )
@@ -176,25 +178,75 @@ def test_a_timeout_then_409_in_progress_then_the_replay_end_with_one_fulfilment_
     assert stored is not None and stored["fulfilment_order_id"] == created["id"]
 
 
-def test_a_systemic_answer_stops_the_consumer_with_nothing_committed(settings: Settings) -> None:
-    """Until the consumer pauses on systemic failures, it stops; the event waits in Kafka and a
-    restarted consumer completes it (ADR 0006)."""
+def wait_until_paused(settings: Settings, reason: str) -> dict[str, Any]:
+    return eventually(
+        lambda: heartbeat(settings) or {},
+        until=lambda beat: beat.get("state") == "paused",
+        what=f"the consumer to pause ({reason})",
+    )
+
+
+def test_a_wrong_token_pauses_the_consumer_without_dead_letters_or_commits(
+    settings: Settings,
+) -> None:
+    """Wrong for every order, so no order is dead-lettered for it (ADR 0006)."""
+    settings = dataclasses.replace(
+        settings, fulfilment_token="not-the-token", pause_probe_interval_seconds=1.0
+    )
     order_id = uuid4()
-    add_fault_rule(order_id, status=404)
     publish_order(settings, order_id)
 
-    failure = run_until_it_fails(settings)
+    with running(settings):
+        paused = wait_until_paused(settings, "wrong token")
+        eventually(
+            lambda: statuses_by_idempotency_key(order_id),
+            until=lambda statuses: len(statuses) >= 3,
+            what="the paused consumer to probe the order twice",
+        )
+        assert sum(lag(group_of(settings)).values()) == 1, "nothing committed"
 
-    assert isinstance(failure, SystemicFailure)
-    assert failure.attempts == 1, "a systemic answer is not retried"
+    assert paused["reason"] == "systemic: fulfilment"
+    assert paused["error"] == "401 Unauthorized"
+    assert set(statuses_by_idempotency_key(order_id)) == {401}
     assert handover_status(order_id) == "awaiting_handover"
-    assert handover_statuses(order_id) == [404]
-    assert sum(lag(group_of(settings)).values()) == 1, "nothing committed"
     assert records(settings.kafka_dead_letter_topic) == [], "nothing dead-lettered"
 
+
+def test_a_paused_consumer_resumes_by_itself_and_hands_over_the_waiting_orders_in_order(
+    settings: Settings,
+) -> None:
+    """The first order meets a systemic answer three times, then the cause is gone. While paused,
+    every partition waits, not just the first order's; the next probe resumes them."""
+    settings = dataclasses.replace(settings, pause_probe_interval_seconds=2.0)
+    first, second, third, elsewhere = uuid4(), uuid4(), uuid4(), uuid4()
+    add_fault_rule(first, times=3, status=401)
+    publish(
+        settings.kafka_topic,
+        [(order_id, order_placed_event(order_id)) for order_id in (first, second, third)],
+        partition=0,
+    )
+
     with running(settings):
-        assert_handed_over_without_dead_letters(settings, order_id)
-    assert handover_statuses(order_id) == [404, 201]
+        wait_until_paused(settings, "systemic answers for the first order")
+        publish(settings.kafka_topic, [(elsewhere, order_placed_event(elsewhere))], partition=1)
+        eventually(
+            lambda: handover_statuses(first),
+            until=lambda statuses: statuses == [401, 401],
+            what="a probe that still meets the systemic answer",
+        )
+        assert [stored_order(order_id) for order_id in (second, third, elsewhere)] == [None] * 3
+
+        orders = [first, second, third, elsewhere]
+        assert_nothing_lost(orders, group_of(settings))
+
+    assert_nothing_duplicated(orders)
+    assert records(settings.kafka_dead_letter_topic) == []
+    assert handover_statuses(first) == [401, 401, 401, 201]
+    handed_over = [stored_order(order_id) for order_id in (first, second, third)]
+    times = [row["handed_over_at"] for row in handed_over if row is not None]
+    assert times == sorted(times), "handed over in the order they were published"
+    beat = heartbeat(settings)
+    assert beat is not None and beat["state"] == "running"
 
 
 def test_a_failed_handover_is_completed_when_its_event_comes_again(settings: Settings) -> None:

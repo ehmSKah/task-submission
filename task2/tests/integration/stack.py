@@ -29,6 +29,8 @@ CONSUMER_DATABASE_URL = (
     "postgresql://order_consumer:local-dev-consumer"
     f"@{HOST}:{os.environ.get('POSTGRES_PORT', '5432')}/orders"
 )
+# librdkafka's "no partition chosen": the partitioner picks one by key.
+UNASSIGNED_PARTITION = -1
 STUB_URL = f"http://{HOST}:{os.environ.get('STUB_PORT', '8081')}"
 FULFILMENT_TOKEN = "local-dev-token"
 
@@ -78,18 +80,28 @@ def create_topic(name: str, partitions: int = 3) -> None:
         future.result(timeout=30)
 
 
-def publish(topic: str, events: Iterable[tuple[UUID, bytes]]) -> None:
-    publish_records(topic, [(str(order_id).encode(), value, []) for order_id, value in events])
+def publish(topic: str, events: Iterable[tuple[UUID, bytes]], partition: int | None = None) -> None:
+    """Keyed by order id; `partition` puts them all on one partition, in this order."""
+    publish_records(
+        topic, [(str(order_id).encode(), value, []) for order_id, value in events], partition
+    )
 
 
 def publish_records(
     topic: str,
     records: Iterable[tuple[bytes | None, bytes | None, Sequence[tuple[str, bytes]]]],
+    partition: int | None = None,
 ) -> None:
     """Records as they are: any key, any bytes or none, any headers."""
     producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP, "enable.idempotence": True})
     for key, value, headers in records:
-        producer.produce(topic, key=key, value=value, headers=list(headers))
+        producer.produce(
+            topic,
+            key=key,
+            value=value,
+            headers=list(headers),
+            partition=UNASSIGNED_PARTITION if partition is None else partition,
+        )
     assert producer.flush(30) == 0, "not every record was delivered to Kafka"
 
 
@@ -138,7 +150,8 @@ def wait_for_dead_letters(consumers: ConsumerGroup, count: int = 1) -> list[Reco
 def stored_order(order_id: UUID) -> dict[str, Any] | None:
     with psycopg.connect(CONSUMER_DATABASE_URL, row_factory=dict_row) as connection:
         return connection.execute(
-            "SELECT handover_status, fulfilment_order_id, placed_at, total, item_count "
+            "SELECT handover_status, fulfilment_order_id, handed_over_at, placed_at, total, "
+            "item_count "
             "FROM orders WHERE order_id = %s",
             (order_id,),
         ).fetchone()
@@ -180,6 +193,16 @@ def handover_statuses(order_id: UUID) -> list[int | None]:
     )
     response.raise_for_status()
     return [entry["status"] for entry in response.json()]
+
+
+def statuses_by_idempotency_key(order_id: UUID) -> list[int | None]:
+    """Like `handover_statuses`, but also counting requests the stub refused before reading their
+    body (a wrong token), which it journals under their `Idempotency-Key` only."""
+    response = httpx.get(f"{STUB_URL}/_control/requests")
+    response.raise_for_status()
+    return [
+        entry["status"] for entry in response.json() if entry["idempotencyKey"] == str(order_id)
+    ]
 
 
 def wait_until_stable(

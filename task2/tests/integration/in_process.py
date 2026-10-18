@@ -6,6 +6,7 @@ consumer dies before the next step, exactly where a kill can't reliably be timed
 the consumer at the same place instead, until the test lets it go on.
 """
 
+import json
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -111,18 +112,13 @@ def run_until_crash(
     raise AssertionError(f"the crash point was not reached within {timeout:.0f} s")
 
 
-def run_until_it_fails(settings: Settings, timeout: float = 30.0) -> BaseException:
-    """Runs a consumer instance until it stops with an error, and returns the error."""
-    stop = threading.Event()
-    deadline = threading.Timer(timeout, stop.set)
-    deadline.start()
+def heartbeat(settings: Settings) -> dict[str, Any] | None:
+    """What the instance's heartbeat file says, if it has been written."""
     try:
-        build(settings, stop).run()
-    except Exception as error:
-        return error
-    finally:
-        deadline.cancel()
-    raise AssertionError(f"the consumer did not fail within {timeout:.0f} s")
+        content: dict[str, Any] = json.loads(settings.health_file.read_text())
+    except FileNotFoundError:
+        return None
+    return content
 
 
 @contextmanager
@@ -130,6 +126,7 @@ def running(
     settings: Settings,
     wrap_store: Callable[[OrderStore], OrderStore] = lambda store: store,
     jitter: Jitter | None = None,
+    wrap_fulfilment: Callable[[FulfilmentClient], FulfilmentClient] = lambda client: client,
 ) -> Iterator[None]:
     """A consumer instance running in a thread for the duration of the block. `jitter` pins the
     retry backoff where a test depends on when attempts happen (ADR 0009)."""
@@ -138,7 +135,7 @@ def running(
 
     def run() -> None:
         try:
-            build(settings, stop, wrap_store, jitter=jitter).run()
+            build(settings, stop, wrap_store, wrap_fulfilment, jitter).run()
         except BaseException as error:
             failures.append(error)
             raise
