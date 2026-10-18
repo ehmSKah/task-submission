@@ -59,13 +59,13 @@ extend-exclude = ["build"]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["order_consumer", "fulfilment_stub", "tests"]
+known-first-party = ["order_consumer", "fulfilment_stub", "tests", "demo"]
 
 [tool.mypy]
 python_version = "3.13"
 strict = true
 mypy_path = ["consumer/src", "fulfilment-stub/src", "."]
-packages = ["order_consumer", "fulfilment_stub"]
+packages = ["order_consumer", "fulfilment_stub", "demo"]
 
 [[tool.mypy.overrides]]
 module = ["confluent_kafka.*", "openapi_core.*"]

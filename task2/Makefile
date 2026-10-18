@@ -85,9 +85,9 @@ lint-workflows: ## Check the task2 CI workflow with actionlint
 
 test: test-unit test-integration test-reliability ## Every suite
 
-test-unit: ## Unit tests of the consumer and the stub, with the core coverage gate (no stack needed)
+test-unit: ## Unit tests of the consumer, the stub and the demo, with the core coverage gate (no stack needed)
 	@mkdir -p build
-	$(PYTEST) consumer/tests fulfilment-stub/tests --cov --cov-report=term $(PYTEST_ARGS)
+	$(PYTEST) consumer/tests fulfilment-stub/tests demo/tests --cov --cov-report=term $(PYTEST_ARGS)
 
 test-integration: ## Integration tests against the running stack (`make up` first)
 	$(PYTEST) tests/integration $(PYTEST_ARGS)
