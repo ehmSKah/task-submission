@@ -69,7 +69,7 @@ The correlation id is the **trace id of a W3C Trace Context `traceparent` header
 - **Tested:** a handover with a known token, asserting that it appears in no log line and no span attribute. The stub follows the same rules. The stub's health check and control side are not traced, and its journal records the `traceparent` each request carried, so tests can prove every attempt sent one.
 
 **Following one failure end to end**, given an order id:
-1. **PostgreSQL:** `orders` shows `handover_status`, `trace_id` and the Kafka position; `processed_events` lists every event that arrived for the order.
+1. **PostgreSQL:** `orders` shows `handover_status`, the fulfilment order id and `trace_id`; `processed_events` lists every event that arrived for the order, with its Kafka position.
 2. **Jaeger** (with the profile): the trace shows each attempt with its status and duration, the stub's span inside it, and a replay as a later span in the same trace.
 3. **Logs:** filtering consumer and stub logs by the trace id gives every line in order, from `event.received` to the terminal line.
 4. **kafka-ui:** if the order was dead-lettered, `orders.dlt` shows the original record with `dlt.reason`, `dlt.detail` and `dlt.attempts`.
