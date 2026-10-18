@@ -18,7 +18,8 @@ PYTEST_ARGS ?=
 ACTIONLINT_IMAGE ?= rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
 
 .DEFAULT_GOAL := help
-.PHONY: help install up down clean ps logs psql lint lint-workflows test test-unit test-integration
+.PHONY: help install up down clean ps logs psql lint lint-workflows test test-unit test-integration \
+	test-reliability
 
 help: ## List the targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
@@ -60,7 +61,7 @@ lint-workflows: ## Check the task2 CI workflow with actionlint
 	@docker run --rm -i $(ACTIONLINT_IMAGE) -stdin-filename .github/workflows/task2-ci.yml - \
 		< ../.github/workflows/task2-ci.yml
 
-test: test-unit test-integration ## Every suite
+test: test-unit test-integration test-reliability ## Every suite
 
 test-unit: ## Unit tests of the consumer and the stub, with the core coverage gate (no stack needed)
 	@mkdir -p build
@@ -68,3 +69,6 @@ test-unit: ## Unit tests of the consumer and the stub, with the core coverage ga
 
 test-integration: ## Integration tests against the running stack (`make up` first)
 	$(PYTEST) tests/integration $(PYTEST_ARGS)
+
+test-reliability: ## Kill and restart the stack's consumer containers (`make up` first)
+	$(PYTEST) tests/reliability $(PYTEST_ARGS)

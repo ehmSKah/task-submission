@@ -103,6 +103,15 @@ def handover_requests(order_id: UUID) -> list[int | None]:
     return [entry["status"] for entry in response.json()]
 
 
+def add_fault_rule(order_id: UUID, times: int = 1, delay_seconds: float = 0.0) -> None:
+    """A stub fault for this order only, so tests side by side don't interfere (ADR 0003)."""
+    response = httpx.post(
+        f"{STUB_URL}/_control/fault-rules",
+        json={"externalReference": str(order_id), "times": times, "delaySeconds": delay_seconds},
+    )
+    response.raise_for_status()
+
+
 def lag(consumers: ConsumerGroup) -> dict[int, int]:
     """Per partition: how many records the group has not yet committed."""
     topic = consumers.topic
@@ -121,22 +130,26 @@ def lag(consumers: ConsumerGroup) -> dict[int, int]:
         probe.close()
 
 
-def assert_nothing_lost(order_ids: Iterable[UUID], consumers: ConsumerGroup) -> None:
+def assert_nothing_lost(
+    order_ids: Iterable[UUID], consumers: ConsumerGroup, timeout: float = 30.0
+) -> None:
     """Every order ends handed over, and the group's committed offsets reach the end (ADR 0007)."""
     for order_id in order_ids:
-        wait_until_handed_over(order_id)
+        wait_until_handed_over(order_id, timeout)
     eventually(
         lambda: lag(consumers),
         until=lambda lags: all(behind == 0 for behind in lags.values()),
         what=f"group {consumers.group} to commit to the end of {consumers.topic}",
+        timeout=timeout,
     )
 
 
-def wait_until_handed_over(order_id: UUID) -> None:
+def wait_until_handed_over(order_id: UUID, timeout: float = 30.0) -> None:
     eventually(
         lambda: stored_order(order_id),
         until=lambda row: row is not None and row["handover_status"] == "handed_over",
         what=f"order {order_id} to be handed over",
+        timeout=timeout,
     )
 
 

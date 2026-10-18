@@ -52,7 +52,7 @@ class OrderProcessor:
                 if self._store.store_new(order, event.event_id):
                     log.info("order.accepted")
                 else:
-                    # Already stored, e.g. redelivered after a crash (ADR 0004): finish what is unfinished.
+                    # Already stored (ADR 0004): complete an unfinished handover, nothing more.
                     status = self._store.handover_status(order.order_id)
                     if status is HandoverStatus.HANDED_OVER:
                         log.info("order.duplicate")

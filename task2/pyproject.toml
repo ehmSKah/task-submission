@@ -34,6 +34,7 @@ addopts = "-ra --strict-markers --import-mode=importlib"
 pythonpath = ["."]
 markers = [
     "integration: needs the Compose stack (`make up`)",
+    "reliability: kills, stops or scales the stack's consumer containers (`make up`)",
 ]
 
 # The coverage gate covers the core only (ADR 0009): adapters are proven by the integration tests.
