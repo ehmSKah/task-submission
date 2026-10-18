@@ -8,7 +8,8 @@ import pytest
 from confluent_kafka import KafkaError
 
 from order_consumer.adapters.inbound.poll_loop import PollLoop
-from order_consumer.application.processing import Delivery, Outcome
+from order_consumer.application.ports import Delivery
+from order_consumer.application.processing import Outcome
 
 
 @dataclass
@@ -33,6 +34,12 @@ class FakeMessage:
 
     def offset(self) -> int:
         return self.offset_
+
+    def headers(self) -> list[tuple[str, bytes]] | None:
+        return None
+
+    def timestamp(self) -> tuple[int, int]:
+        return (1, 1_792_228_324_000)
 
 
 @dataclass
@@ -65,6 +72,7 @@ class FakeKafkaConsumer:
 class FakeProcessor:
     timeline: list[str]
     fail_at_offset: int | None = None
+    outcome: Outcome = Outcome.HANDED_OVER
     seen: list[Delivery] = field(default_factory=list)
 
     def process(self, delivery: Delivery) -> Outcome:
@@ -72,14 +80,18 @@ class FakeProcessor:
         if delivery.offset == self.fail_at_offset:
             raise RuntimeError("the handover failed")
         self.timeline.append(f"processed {delivery.offset}")
-        return Outcome.HANDED_OVER
+        return self.outcome
 
 
-def run(messages: list[FakeMessage], fail_at_offset: int | None = None) -> dict[str, Any]:
+def run(
+    messages: list[FakeMessage],
+    fail_at_offset: int | None = None,
+    outcome: Outcome = Outcome.HANDED_OVER,
+) -> dict[str, Any]:
     stop = threading.Event()
     timeline: list[str] = []
     kafka = FakeKafkaConsumer(messages, stop, timeline)
-    processor = FakeProcessor(timeline, fail_at_offset)
+    processor = FakeProcessor(timeline, fail_at_offset, outcome)
     PollLoop(kafka, "orders", processor, stop).run()  # type: ignore[arg-type]
     return {"timeline": timeline, "seen": processor.seen}
 
@@ -88,6 +100,12 @@ def test_each_offset_is_committed_after_its_message_was_handed_over() -> None:
     result = run([FakeMessage(7), FakeMessage(8)])
 
     assert result["timeline"] == ["processed 7", "commit 7", "processed 8", "commit 8"]
+
+
+def test_the_offset_of_a_dead_lettered_message_is_committed() -> None:
+    result = run([FakeMessage(7)], outcome=Outcome.DEAD_LETTERED)
+
+    assert result["timeline"] == ["processed 7", "commit 7"]
 
 
 def test_a_failure_while_processing_leaves_the_offset_uncommitted() -> None:

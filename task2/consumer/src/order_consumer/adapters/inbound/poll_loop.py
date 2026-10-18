@@ -7,17 +7,26 @@ a terminal outcome, so anything unfinished is redelivered after a crash.
 import logging
 import threading
 from collections.abc import Callable, Iterable
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from confluent_kafka import Consumer, KafkaError, KafkaException, Message, TopicPartition
+from confluent_kafka import (
+    TIMESTAMP_NOT_AVAILABLE,
+    Consumer,
+    KafkaError,
+    KafkaException,
+    Message,
+    TopicPartition,
+)
 
-from order_consumer.application.processing import Delivery, OrderProcessor, Outcome
+from order_consumer.application.ports import Delivery
+from order_consumer.application.processing import OrderProcessor, Outcome
 from order_consumer.config import Settings
 
 log = structlog.get_logger()
 
-TERMINAL = frozenset({Outcome.HANDED_OVER})
+TERMINAL = frozenset({Outcome.HANDED_OVER, Outcome.DEAD_LETTERED})
 
 
 def create_consumer(settings: Settings) -> Consumer:
@@ -32,6 +41,30 @@ def create_consumer(settings: Settings) -> Consumer:
             "partition.assignment.strategy": "cooperative-sticky",
             "logger": logging.getLogger("librdkafka"),
         }
+    )
+
+
+def _delivery(message: Message, topic: str) -> Delivery:
+    timestamp_type, timestamp_ms = message.timestamp()
+    return Delivery(
+        key=message.key(),
+        value=message.value() or b"",
+        topic=message.topic() or topic,
+        partition=message.partition() or 0,
+        offset=message.offset() or 0,
+        headers=_headers(message),
+        timestamp=None
+        if timestamp_type == TIMESTAMP_NOT_AVAILABLE
+        else datetime.fromtimestamp(timestamp_ms / 1000, UTC),
+    )
+
+
+def _headers(message: Message) -> tuple[tuple[str, bytes | None], ...]:
+    """Kept in their order and with repeated keys; a consumed record's values are bytes."""
+    headers = message.headers() or []
+    pairs = headers.items() if isinstance(headers, dict) else headers
+    return tuple(
+        (name, value.encode() if isinstance(value, str) else value) for name, value in pairs
     )
 
 
@@ -81,15 +114,7 @@ class PollLoop:
                 log.warning("kafka.error", reason=error.str())
             return
 
-        outcome = self._processor.process(
-            Delivery(
-                key=message.key(),
-                value=message.value() or b"",
-                topic=message.topic() or self._topic,
-                partition=message.partition() or 0,
-                offset=message.offset() or 0,
-            )
-        )
+        outcome = self._processor.process(_delivery(message, self._topic))
         if outcome in TERMINAL:
             self._consumer.commit(message=message, asynchronous=False)
 

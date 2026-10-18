@@ -1,6 +1,7 @@
 """The consumer's entry point: settings, logging, wiring, signals."""
 
 import signal
+import socket
 import threading
 
 import structlog
@@ -8,9 +9,11 @@ import structlog
 from order_consumer import logs
 from order_consumer.adapters.inbound.poll_loop import PollLoop, create_consumer
 from order_consumer.adapters.outbound.fulfilment_http import HttpFulfilmentClient
+from order_consumer.adapters.outbound.kafka_dead_letters import KafkaDeadLetterSink, create_producer
 from order_consumer.adapters.outbound.postgres_store import PostgresOrderStore
 from order_consumer.application.processing import OrderProcessor
 from order_consumer.config import ConfigurationError, Settings
+from order_consumer.domain.event import OrderPlacedReader
 
 log = structlog.get_logger()
 
@@ -22,12 +25,18 @@ def build(settings: Settings, stop: threading.Event) -> PollLoop:
     """Wires the real adapters; the in-process integration tests use this too."""
     store = PostgresOrderStore(settings.database_url)
     fulfilment = HttpFulfilmentClient(settings.fulfilment_base_url, settings.fulfilment_token)
+    dead_letters = KafkaDeadLetterSink(
+        create_producer(settings),
+        settings.kafka_dead_letter_topic,
+        consumer=f"{settings.kafka_group_id}/{socket.gethostname()}",
+    )
+    reader = OrderPlacedReader.from_file(settings.event_schema)
     return PollLoop(
         create_consumer(settings),
         settings.kafka_topic,
-        OrderProcessor(store, fulfilment),
+        OrderProcessor(store, fulfilment, dead_letters, reader),
         stop,
-        on_close=(store.close, fulfilment.close),
+        on_close=(store.close, fulfilment.close, dead_letters.close),
     )
 
 

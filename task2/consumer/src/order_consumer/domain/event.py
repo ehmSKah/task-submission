@@ -144,9 +144,3 @@ def _parse(value: bytes) -> Any:
     except ValueError as error:
         message = f"not JSON: {error}"
     raise InvalidEvent(Layer.UNREADABLE, [FieldError(pointer="", message=message)])
-
-
-def parse_order_placed(value: bytes) -> OrderPlacedEvent:
-    """Reads the envelope. Validation of every layer is added in front of this (ADR 0001)."""
-    envelope = json.loads(value)
-    return OrderPlacedEvent(event_id=UUID(envelope["id"]), data=envelope["data"])
