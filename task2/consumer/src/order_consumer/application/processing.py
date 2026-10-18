@@ -1,7 +1,7 @@
 """Processing one delivery: read it, then store, hand over and record (ADR 0004), skip a duplicate
 (ADR 0002), set an invalid or conflicting event, a failed handover or an unexpected exception aside
-as a dead letter, or ask for consumption to stop when the failure is not about this message
-(ADR 0006).
+as a dead letter, or ask for consumption to stop when the failure is not about this message,
+including when the flood guard sees failures repeat from message to message (ADR 0006).
 
 Returns an Outcome and never commits: only the poll loop commits, according to the outcome
 (ADR 0005).
@@ -14,6 +14,7 @@ from uuid import UUID
 
 import structlog
 
+from order_consumer.application.flood_guard import FloodGuard, FloodGuardThresholds
 from order_consumer.application.ports import (
     AlreadyStored,
     Clock,
@@ -62,6 +63,8 @@ class StopReason(Enum):
     FULFILMENT = "systemic: fulfilment"  # a systemic answer, e.g. to a wrong token
     POSTGRES_UNAVAILABLE = "systemic: postgres-unavailable"
     DEAD_LETTER_TOPIC_UNWRITABLE = "systemic: dead-letter-topic-unwritable"
+    CIRCUIT_OPEN = "circuit-open"  # orders keep running out of retries: an outage
+    BUG_GUARD = "bug-guard"  # messages keep meeting unexpected exceptions: a bug
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,12 +107,14 @@ class OrderProcessor:
         policy: RetryPolicy,
         clock: Clock,
         jitter: Jitter,
+        thresholds: FloodGuardThresholds | None = None,
     ) -> None:
         self._store = store
         self._fulfilment = _CountingAttempts(fulfilment)
         self._handover = HandoverRetries(self._fulfilment, policy, clock, jitter)
         self._dead_letters = dead_letters
         self._reader = reader
+        self._guard = FloodGuard(thresholds or FloodGuardThresholds())
 
     def process(self, delivery: Delivery) -> Outcome | Stopped:
         with structlog.contextvars.bound_contextvars(
@@ -166,6 +171,7 @@ class OrderProcessor:
                         self._store.record_duplicate(order.order_id, received)
                     # Skip, or complete an unfinished handover, nothing more (ADR 0004).
                     if accepted.handover_status is HandoverStatus.HANDED_OVER:
+                        self._guard.processed()
                         log.info("order.duplicate", duplicate=duplicate)
                         return Outcome.DUPLICATE
                     log.info(
@@ -183,13 +189,17 @@ class OrderProcessor:
                         ["/data/orderId"],
                     )
 
-            handover = self._handover.hand_over(to_downstream_request(order))
+            # While the circuit is open, a single attempt probes the service (ADR 0006).
+            probe = 1 if self._guard.circuit_open else None
+            handover = self._handover.hand_over(to_downstream_request(order), probe)
             if isinstance(handover, SystemicAnswer):
                 return Stopped(StopReason.FULFILMENT, handover.failure.error)
             if isinstance(handover, GaveUp):
                 return self._give_up(delivery, event.event_id, order.order_id, handover)
+            self._guard.answered()
             fulfilment_order_id = handover.result.fulfilment_order_id
             self._store.record_handover(order.order_id, fulfilment_order_id)
+            self._guard.processed()
             log.info(
                 "handover.completed",
                 fulfilment_order_id=fulfilment_order_id,
@@ -249,7 +259,8 @@ class OrderProcessor:
     ) -> Outcome | Stopped:
         """A bug for this message (ADR 0006): dead-lettered at once with the exception's type and
         message. Crashing instead would restart onto the same message forever. The stack trace
-        goes to the error log only, never into the dead letter."""
+        goes to the error log only, never into the dead letter. A message that trips the bug guard
+        is held instead (ADR 0006)."""
         ids = {
             name: str(value)
             for name, value in (("event_id", progress.event_id), ("order_id", progress.order_id))
@@ -257,7 +268,10 @@ class OrderProcessor:
         }
         with structlog.contextvars.bound_contextvars(**ids):
             log.error("processing.unexpected_error", error=type(error).__name__, exc_info=True)
-            return self._write(
+            described = f"{type(error).__name__}: {error}"
+            if self._guard.holds_unexpected(described):
+                return Stopped(StopReason.BUG_GUARD, described)
+            outcome = self._write(
                 DeadLetter(
                     delivery=delivery,
                     reason=DeadLetterReason.UNEXPECTED,
@@ -267,6 +281,9 @@ class OrderProcessor:
                     order_id=progress.order_id,
                 )
             )
+            if outcome is Outcome.DEAD_LETTERED:
+                self._guard.unexpected_dead_lettered()
+            return outcome
 
     def _write(self, dead_letter: DeadLetter) -> Outcome | Stopped:
         """Without the dead letter nothing can be committed, so an unwritable one stops
@@ -282,10 +299,16 @@ class OrderProcessor:
         self, delivery: Delivery, event_id: UUID, order_id: UUID, gave_up: GaveUp
     ) -> Outcome | Stopped:
         """A failed handover (ADR 0004): `handover_failed` is set before the dead letter is
-        written, so a crash in between only causes a redelivery and another attempt."""
+        written, so a crash in between only causes a redelivery and another attempt. An order that
+        opens the circuit is held instead: neither marked failed nor dead-lettered (ADR 0006)."""
+        exhausted = gave_up.reason is DeadLetterReason.RETRIES_EXHAUSTED
+        if not exhausted:
+            self._guard.answered()
+        elif self._guard.holds_exhausted(gave_up.last_failure.error):
+            return Stopped(StopReason.CIRCUIT_OPEN, gave_up.last_failure.error)
         self._store.mark_handover_failed(order_id)
         log.warning("handover.failed", reason=gave_up.reason.value, attempts=gave_up.attempts)
-        return self._write(
+        outcome = self._write(
             DeadLetter(
                 delivery=delivery,
                 reason=gave_up.reason,
@@ -295,6 +318,11 @@ class OrderProcessor:
                 order_id=order_id,
             )
         )
+        if outcome is Outcome.DEAD_LETTERED:
+            if exhausted:
+                self._guard.exhausted_dead_lettered()
+            self._guard.processed()
+        return outcome
 
 
 def _handover_detail(gave_up: GaveUp) -> str:

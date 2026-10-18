@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from order_consumer.application.flood_guard import FloodGuardThresholds
 from order_consumer.application.retries import RetryBudgetExceeded, RetryPolicy
 from order_consumer.health import HEALTH_FILE
 
@@ -50,6 +51,7 @@ class Settings:
     pause_probe_interval_seconds: float = PAUSE_PROBE_INTERVAL_SECONDS
     # Off by default: a paused instance keeps its partitions, right for shared causes (ADR 0006).
     pause_exit_after_minutes: float | None = None
+    flood_guard: FloodGuardThresholds = field(default_factory=FloodGuardThresholds)
     health_file: Path = HEALTH_FILE
 
     @classmethod
@@ -80,7 +82,7 @@ class Settings:
                 raise ConfigurationError(f"{name} is not an http or https URL: {value[:64]!r}")
             return value or None
 
-        timeouts, policy = FulfilmentTimeouts(), RetryPolicy()
+        timeouts, policy, guard = FulfilmentTimeouts(), RetryPolicy(), FloodGuardThresholds()
 
         settings = cls(
             kafka_bootstrap_servers=required("KAFKA_BOOTSTRAP_SERVERS"),
@@ -115,6 +117,10 @@ class Settings:
                 "PAUSE_PROBE_INTERVAL_SECONDS", float, PAUSE_PROBE_INTERVAL_SECONDS
             ),
             pause_exit_after_minutes=positive("PAUSE_EXIT_AFTER_MINUTES", float, None),
+            flood_guard=FloodGuardThresholds(
+                circuit_breaker=positive("CIRCUIT_BREAKER_THRESHOLD", int, guard.circuit_breaker),
+                bug_guard=positive("BUG_GUARD_THRESHOLD", int, guard.bug_guard),
+            ),
             health_file=Path(env.get("HEALTH_FILE", str(HEALTH_FILE))),
         )
         if not settings.event_schema.is_file():
