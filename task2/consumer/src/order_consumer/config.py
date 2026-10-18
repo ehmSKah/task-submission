@@ -17,11 +17,11 @@ class ConfigurationError(Exception):
 class Settings:
     kafka_bootstrap_servers: str
     kafka_topic: str
+    kafka_dead_letter_topic: str
     kafka_group_id: str
     database_url: str
     fulfilment_base_url: str
     fulfilment_token: str
-    kafka_dead_letter_topic: str = "orders.dlt"
     event_schema: Path = EVENT_SCHEMA
     log_level: str = "INFO"
 
