@@ -86,3 +86,27 @@ def test_a_repeated_traceparent_is_replaced() -> None:
 
     assert source_of(headers) is TraceSource.REPLACED
     assert parent_ids(headers) is None
+
+
+def test_a_traceparent_of_exactly_128_characters_is_continued() -> None:
+    value = f"01-{TRACE_ID}-{SPAN_ID}-01-".ljust(128, "x")
+
+    assert source_of((("traceparent", value.encode()),)) is TraceSource.HEADER
+    assert source_of((("traceparent", (value + "x").encode()),)) is TraceSource.REPLACED
+
+
+def test_the_header_name_is_matched_whatever_its_case() -> None:
+    """As in HTTP, where W3C Trace Context comes from."""
+    headers = (("Traceparent", TRACEPARENT.encode()),)
+
+    assert source_of(headers) is TraceSource.HEADER
+    assert parent_ids(headers) == (TRACE_ID, SPAN_ID)
+
+
+def test_a_valid_traceparents_tracestate_is_continued_with_it() -> None:
+    headers = (("traceparent", TRACEPARENT.encode()), ("tracestate", b"vendor=abc"))
+
+    context, _source = incoming_trace(headers)
+
+    state = trace.get_current_span(context).get_span_context().trace_state
+    assert state.to_header() == "vendor=abc"

@@ -12,7 +12,7 @@ The correlation id is the **trace id of a W3C Trace Context `traceparent` header
 
 | Stage | Rule |
 |---|---|
-| Source | the trace id of the record's `traceparent` header |
+| Source | the trace id of the record's `traceparent` header, continued with its `tracestate`; header names match whatever their case, as in HTTP |
 | Missing or invalid header | a new trace is started; a header longer than 128 characters or not in the W3C format is replaced, never logged as it is (it could be crafted to inject log lines); `trace_source` records `header`, `new` or `replaced`; the event id is logged next to it |
 | Within the consumer | bound once per message, so every log line and span for that message carries it |
 | Handover | sent as `traceparent` on every attempt; the stub continues the trace and logs the same trace id |
@@ -24,6 +24,7 @@ The correlation id is the **trace id of a W3C Trace Context `traceparent` header
 - **One span per message** (`process orders`), with child spans for each database write and **each handover attempt** (`handover attempt`). Retries appear as sibling attempt spans with their status and duration. Inside each attempt sits the `httpx` instrumentation's span for the request, and inside that the stub's span.
 - **An attempt span carries what the attempt's log line says:** `handover.attempt`, `handover.max_attempts`, `handover.response_class`, `handover.status` and `handover.error`, with an error status when the attempt failed. The retry loop opens it through the OpenTelemetry API, which is vendor-neutral and does nothing without the SDK: the HTTP adapter doesn't know the attempt number, and an attempt abandoned at its deadline ends before its request does.
 - **Span names and attributes follow OpenTelemetry's messaging, database and HTTP conventions** (topic, partition, offset, consumer group; the database and the tables written; method, status code). The HTTP instrumentations use the stable conventions (`OTEL_SEMCONV_STABILITY_OPT_IN=http`, set in both images). The message span also carries its `outcome`.
+- **Every trace is sampled**, whatever the producer's sampling flag, so each order's trace can be followed; sampling at volume is a production evolution.
 - **The exporter is configuration** (`OTEL_EXPORTER_OTLP_ENDPOINT`, OTLP over HTTP). With none configured, spans are created and discarded at negligible cost. Only W3C Trace Context is propagated, no baggage.
 - **Jaeger runs in an optional Compose profile** (`make up-tracing`); it accepts OTLP directly, so no collector is needed locally.
 

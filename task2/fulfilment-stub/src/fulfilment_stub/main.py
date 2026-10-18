@@ -10,11 +10,12 @@ from typing import Any, TextIO
 
 import structlog
 from fastapi import FastAPI
-from opentelemetry import trace
+from opentelemetry import propagate, trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from fulfilment_stub.app import create_app
 
@@ -105,6 +106,8 @@ def configure_tracing(otlp_endpoint: str | None) -> TracerProvider:
         exporter = OTLPSpanExporter(endpoint=f"{otlp_endpoint.rstrip('/')}/v1/traces")
         provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
+    # The consumer sends W3C Trace Context only; baggage is not read.
+    propagate.set_global_textmap(TraceContextTextMapPropagator())
     return provider
 
 

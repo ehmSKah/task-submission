@@ -168,6 +168,20 @@ def test_each_message_is_processed_in_a_span_continuing_its_trace(
     assert delivery.trace.traceparent == f"00-{TRACE_ID}-{span.context.span_id:016x}-01"
 
 
+def test_a_trace_the_producer_did_not_sample_is_still_recorded(
+    spans: InMemorySpanExporter,
+) -> None:
+    """Locally every order's trace is kept, whatever the producer decided (ADR 0008)."""
+    unsampled = TRACEPARENT.removesuffix("01") + "00"
+
+    result = run([FakeMessage(7, headers_=[("traceparent", unsampled.encode())])])
+
+    [span] = spans.get_finished_spans()
+    assert trace.format_trace_id(span.context.trace_id) == TRACE_ID
+    [delivery] = result["seen"]
+    assert delivery.trace.traceparent.endswith("-01"), "sampled from here on"
+
+
 def test_a_message_without_a_traceparent_starts_a_new_trace(spans: InMemorySpanExporter) -> None:
     result = run([FakeMessage(7)])
 

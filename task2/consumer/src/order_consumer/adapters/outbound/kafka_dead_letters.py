@@ -47,7 +47,8 @@ def _original_headers(dead_letter: DeadLetter) -> list[tuple[str, bytes | None]]
     traceparent = dead_letter.traceparent
     if traceparent is None:
         return headers
-    kept = [(name, value) for name, value in headers if name not in (TRACEPARENT, TRACESTATE)]
+    replaced = (TRACEPARENT, TRACESTATE)
+    kept = [(name, value) for name, value in headers if name.lower() not in replaced]
     return [*kept, (TRACEPARENT, traceparent.encode())]
 
 
