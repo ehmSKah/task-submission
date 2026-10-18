@@ -15,7 +15,7 @@ from demo.stack import DeadLetter, StoredOrder
 # Each currency's exponent decides the decimal amount handed over (ADR 0001).
 AMOUNTS = (("EUR", "44.98"), ("JPY", "4498"), ("KWD", "4.498"))
 FAULT_STATUS = 503
-MAX_ATTEMPTS = 5  # the stack's HANDOVER_MAX_ATTEMPTS (ADR 0006)
+ALWAYS = 100  # more answers than any retry policy asks for
 
 
 def short(order_id: UUID) -> str:
@@ -142,17 +142,22 @@ def downstream_failures(demo: Demo) -> None:
 
     failing = sample(Kind.VALID)
     [message] = failing.messages
-    demo.stack.add_fault(failing.order_id, FAULT_STATUS, times=2 * MAX_ATTEMPTS)
+    demo.stack.add_fault(failing.order_id, FAULT_STATUS, times=ALWAYS)
     demo.publish(failing)
     demo.outcomes(failing.messages, ["dead_letter.written (retries-exhausted)"])
     stored_as(demo, failing.order_id, "handover_failed")
     letter, _ = dead_letter_of(demo, message.trace_id)
-    attempts = letter.headers.get("dlt.attempts")
-    demo.check(attempts == str(MAX_ATTEMPTS), f"{MAX_ATTEMPTS} attempts", attempts)
     requests = demo.stack.handover_requests(failing.order_id)
+    statuses = [request.status for request in requests]
+    attempts = letter.headers.get("dlt.attempts")
+    demo.check(
+        attempts == str(len(requests)) and set(statuses) == {FAULT_STATUS},
+        f"dlt.attempts counting the {len(requests)} requests the stub answered with 503",
+        (attempts, statuses),
+    )
     took = (requests[-1].received_at - requests[0].received_at).total_seconds()
-    nothing_handed_over = demo.stack.fulfilment_orders(failing.order_id)
-    demo.check(not nothing_handed_over, "no fulfilment order", nothing_handed_over)
+    created_meanwhile = demo.stack.fulfilment_orders(failing.order_id)
+    demo.check(not created_meanwhile, "no fulfilment order", created_meanwhile)
     demo.ok(
         f"always 503: {attempts} attempts over {took:.1f} s (backoff with full jitter), "
         "then handover_failed and a retries-exhausted dead letter"
@@ -166,7 +171,7 @@ def downstream_failures(demo: Demo) -> None:
     for line in output:
         demo.show(f"  {line}")
     demo.check(code == 0, "the replay command to succeed", code)
-    demo.replayed(message)
+    demo.replayed()
     demo.outcomes(
         failing.messages, ["dead_letter.written (retries-exhausted)", "handover.completed"]
     )
@@ -174,6 +179,7 @@ def downstream_failures(demo: Demo) -> None:
     created = one_fulfilment_order(demo, failing.order_id)
     demo.check(stored.trace_id == message.trace_id, "the original trace", stored.trace_id)
     demo.ok(f"replayed and handed over as {created}, in the same trace {message.trace_id}")
+    demo.show("the replay command on its own: tests/integration/test_replay.py")
     demo.follow(failing.order_id, message.trace_id)
 
 

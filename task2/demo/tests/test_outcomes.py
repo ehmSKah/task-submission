@@ -48,10 +48,10 @@ def test_lines_that_are_not_json_objects_are_skipped() -> None:
 
 def test_outcomes_are_counted_by_event_with_the_duplicate_kind_or_dead_letter_reason() -> None:
     lines = [
-        TerminalLine("handover.completed", OURS, "o-1", None),
-        TerminalLine("handover.completed", OURS, "o-2", None),
-        TerminalLine("order.duplicate", OURS, "o-2", "redelivery"),
         TerminalLine("dead_letter.written", OURS, None, "invalid"),
+        TerminalLine("handover.completed", OURS, "o-1", None),
+        TerminalLine("order.duplicate", OURS, "o-2", "redelivery"),
+        TerminalLine("handover.completed", OURS, "o-2", None),
         TerminalLine("dead_letter.written", OURS, "o-3", "invalid"),
         TerminalLine("dead_letter.written", OURS, "o-4", "conflict"),
     ]
@@ -62,3 +62,19 @@ def test_outcomes_are_counted_by_event_with_the_duplicate_kind_or_dead_letter_re
         "dead_letter.written (invalid)": 2,
         "dead_letter.written (conflict)": 1,
     }
+
+
+def test_outcomes_are_listed_in_the_order_of_the_event_catalogue() -> None:
+    lines = [
+        TerminalLine("dead_letter.written", OURS, "o-3", "invalid"),
+        TerminalLine("order.duplicate", OURS, "o-2", "redelivery"),
+        TerminalLine("dead_letter.written", OURS, "o-4", "conflict"),
+        TerminalLine("handover.completed", OURS, "o-1", None),
+    ]
+
+    assert list(outcome_counts(lines)) == [
+        "handover.completed",
+        "order.duplicate (redelivery)",
+        "dead_letter.written (conflict)",
+        "dead_letter.written (invalid)",
+    ]

@@ -2,8 +2,8 @@
 
 Each section publishes new orders, prints a ✓ line for each outcome it checks and ends with the
 integration test file that proves the same; a summary follows. The run stops and fails at the
-first outcome that isn't the one the design promises. It takes about a minute and can run again
-on the same stack without `make clean`.
+first outcome that isn't the one the design promises. It takes under half a minute and can run
+again on the same stack without `make clean`.
 
 Usage: python -m demo  (the Makefile sets the stack's host and ports)
 """

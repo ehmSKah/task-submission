@@ -94,11 +94,14 @@ class Stack:
     def send(self, messages: Sequence[samples.Message]) -> list[str]:
         """Publishes in this order, keyed by order id; returns each record's position."""
         positions: dict[int, str] = {}
+        errors: list[str] = []
 
         def delivered(index: int) -> Any:
             def report(error: Any, message: Message) -> None:
                 if error is None:
                     positions[index] = f"{message.topic()}/{message.partition()}/{message.offset()}"
+                else:
+                    errors.append(str(error))
 
             return report
 
@@ -111,8 +114,12 @@ class Stack:
                 headers=list(message.headers),
                 on_delivery=delivered(index),
             )
-        if producer.flush(30) != 0 or len(positions) != len(messages):
-            raise RuntimeError("not every record was delivered to Kafka")
+        undelivered = producer.flush(30)
+        if undelivered or errors:
+            raise RuntimeError(
+                f"{undelivered + len(errors)} of {len(messages)} records not delivered to Kafka "
+                f"at {self.endpoints.kafka}: {', '.join(errors) or 'no answer in 30 s'}"
+            )
         return [positions[index] for index in range(len(messages))]
 
     def log_lines(self) -> list[str]:
@@ -141,7 +148,11 @@ class Stack:
             reader.assign(partitions)
             found: list[DeadLetter] = []
             deadline = time.monotonic() + 10
-            while len(found) < expected and time.monotonic() < deadline:
+            while len(found) < expected:
+                if time.monotonic() > deadline:
+                    raise RuntimeError(
+                        f"read {len(found)} of the {expected} records on {DEAD_LETTER_TOPIC}"
+                    )
                 message = reader.poll(0.5)
                 if message is None or message.error() is not None:
                     continue
@@ -206,20 +217,9 @@ class Stack:
         ).raise_for_status()
 
     def replay(self, arguments: Sequence[str]) -> tuple[int, list[str]]:
-        """The replay command as `make replay` runs it: its exit code and output lines."""
+        """`make replay`: its exit code and output lines."""
         done = subprocess.run(
-            [
-                "docker",
-                "compose",
-                "run",
-                "--rm",
-                "--no-deps",
-                "consumer",
-                "python",
-                "-m",
-                "order_consumer.replay",
-                *arguments,
-            ],
+            ["make", "--silent", "--no-print-directory", "replay", f"ARGS={' '.join(arguments)}"],
             cwd=TASK2,
             capture_output=True,
             text=True,
@@ -230,9 +230,30 @@ class Stack:
         return done.returncode, output.splitlines()
 
     def tracing(self) -> bool:
-        """Whether Jaeger runs, i.e. the stack was started with `make up-tracing`."""
-        running = self._compose("--profile", "tracing", "ps", "--status", "running", "-q", "jaeger")
-        return bool(running.strip())
+        """Whether the consumers export their spans to a running Jaeger, as after
+        `make up-tracing`; a later `make up` leaves Jaeger running but stops the export."""
+        jaeger = self._compose("--profile", "tracing", "ps", "--status", "running", "-q", "jaeger")
+        consumers = self._compose("ps", "--status", "running", "-q", "consumer").split()
+        if not jaeger.strip() or not consumers:
+            return False
+        environment = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "--format",
+                "{{range .Config.Env}}{{println .}}{{end}}",
+                *consumers,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.splitlines()
+        exporting = [
+            line for line in environment if line.startswith("OTEL_EXPORTER_OTLP_ENDPOINT=")
+        ]
+        return len(exporting) == len(consumers) and all(
+            line.partition("=")[2] for line in exporting
+        )
 
     def _compose(self, *arguments: str) -> str:
         return subprocess.run(

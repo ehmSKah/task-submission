@@ -20,6 +20,11 @@ class TerminalLine:
     order_id: str | None
     detail: str | None  # the duplicate's kind or the dead letter's reason
 
+    @property
+    def label(self) -> str:
+        """The outcome as the demo shows it, e.g. `dead_letter.written (invalid)`."""
+        return self.event if self.detail is None else f"{self.event} ({self.detail})"
+
 
 def terminal_lines(lines: Iterable[str], trace_ids: Collection[str]) -> list[TerminalLine]:
     """The terminal lines of these traces, in the order they were logged; anything that isn't a
@@ -45,7 +50,7 @@ def terminal_lines(lines: Iterable[str], trace_ids: Collection[str]) -> list[Ter
 
 
 def outcome_counts(lines: Iterable[TerminalLine]) -> Counter[str]:
-    """Per terminal event, with the duplicate's kind or the dead letter's reason."""
-    return Counter(
-        line.event if line.detail is None else f"{line.event} ({line.detail})" for line in lines
-    )
+    """Per terminal event, with the duplicate's kind or the dead letter's reason, in the order of
+    the event catalogue: handed over, duplicates, dead letters (ADR 0008)."""
+    ordered = sorted(lines, key=lambda line: (TERMINAL_EVENTS.index(line.event), line.label))
+    return Counter(line.label for line in ordered)

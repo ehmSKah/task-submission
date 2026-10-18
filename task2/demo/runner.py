@@ -1,9 +1,9 @@
 """Runs the demo's sections against the stack, then sums up what happened (ADR 0009).
 
 Each section publishes its samples, waits for the states that prove them and prints one ✓ line per
-check, ending with the test file that proves the same automatically. Nothing sleeps: every wait is
-for a state, and a wait that times out says what it last observed. The first expectation not met
-prints ✗, stops the run and fails it.
+check, ending with the test file that proves the same automatically. It never sleeps for a fixed
+time: every wait is for a state, and a wait that times out says what it last observed. The first
+expectation not met prints ✗, stops the run and fails it.
 """
 
 import time
@@ -13,14 +13,14 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
-from demo.outcomes import TERMINAL_EVENTS, TerminalLine, outcome_counts, terminal_lines
+from demo.outcomes import TerminalLine, outcome_counts, terminal_lines
 from demo.samples import Message, Sample
 from demo.stack import DeadLetter, Endpoints, HandoverRequest, StoredOrder
 
 DEAD_LETTERS_IN_KAFKA_UI = "/ui/clusters/task2/all-topics/orders.dlt/messages"
 
 
-class Stack(Protocol):
+class StackPort(Protocol):
     """What the demo needs of the running stack (`demo.stack.Stack`)."""
 
     @property
@@ -52,7 +52,7 @@ class Demo:
     """What a section works with: the stack, the checks, and the run's own traces."""
 
     def __init__(
-        self, stack: Stack, out: Callable[[str], None], timeout: float, interval: float
+        self, stack: StackPort, out: Callable[[str], None], timeout: float, interval: float
     ) -> None:
         self.stack = stack
         self._out = out
@@ -69,8 +69,8 @@ class Demo:
         self.published += len(published.messages)
         return published
 
-    def replayed(self, message: Message) -> None:
-        """The message was fed back into the order topic by the replay command."""
+    def replayed(self) -> None:
+        """A message was fed back into the order topic by the replay command."""
         self.replays += 1
 
     def follow(self, order_id: UUID, trace_id: str) -> None:
@@ -107,7 +107,7 @@ class Demo:
             lambda found: len(found) >= len(expected),
             f"{len(expected)} terminal log line(s)",
         )
-        logged = [label for line in lines for label in outcome_counts([line])]
+        logged = [line.label for line in lines]
         if logged != list(expected):
             raise Unmet(f"expected {', '.join(expected)}, the consumers logged {', '.join(logged)}")
         return lines
@@ -120,7 +120,7 @@ def _pause(seconds: float) -> None:
 
 def run(
     sections: Sequence[Section],
-    stack: Stack,
+    stack: StackPort,
     out: Callable[[str], None] = print,
     timeout: float = 60.0,
     interval: float = 0.5,
@@ -139,11 +139,6 @@ def run(
         out(f"   ✗ {unmet}")
         return False
     return True
-
-
-def _catalogue_order(label: str) -> tuple[int, str]:
-    event = label.split(" ")[0]
-    return TERMINAL_EVENTS.index(event) if event in TERMINAL_EVENTS else len(TERMINAL_EVENTS), label
 
 
 def _summary(demo: Demo, out: Callable[[str], None]) -> None:
@@ -167,8 +162,7 @@ def _summary(demo: Demo, out: Callable[[str], None]) -> None:
     )
     counts = outcome_counts(lines)
     width = max(map(len, counts), default=0)
-    # In the order of the event catalogue: handed over, duplicates, dead letters (ADR 0008).
-    for label, count in sorted(counts.items(), key=lambda item: _catalogue_order(item[0])):
+    for label, count in counts.items():
         out(f"     {label:<{width}}  {count:>2}")
 
     reasons = Counter(
@@ -189,8 +183,8 @@ def _summary(demo: Demo, out: Callable[[str], None]) -> None:
             out(f"     Jaeger     {endpoints.jaeger_ui}/trace/{trace_id}")
             out(f"                order {order_id}: each attempt, the stub's spans, the replay")
         else:
-            out("     Jaeger     not running: `make up-tracing`, then `make demo`, to see the")
-            out("                trace of each attempt, the stub's spans and the replay")
+            out("     Jaeger     receives no traces: `make up-tracing`, then `make demo`, to see")
+            out("                the trace of each attempt, the stub's spans and the replay")
         out(
             "     make psql  SELECT handover_status, fulfilment_order_id, trace_id FROM orders "
             f"WHERE order_id = '{order_id}';"

@@ -13,11 +13,12 @@ from collections.abc import Callable, Sequence
 from typing import TextIO
 
 from demo.samples import Kind, Message, sample
+from order_consumer.domain.money import CURRENCY_EXPONENTS
 
 Send = Callable[[Sequence[Message]], list[str]]
 """Publishes the messages in order and returns each one's position, e.g. orders/1/42."""
 
-CURRENCIES = ("EUR", "USD", "GBP", "JPY", "KWD")  # the consumer's allow-list (ADR 0001)
+CURRENCIES = sorted(CURRENCY_EXPONENTS)  # the consumer's allow-list (ADR 0001)
 
 
 def _parser() -> argparse.ArgumentParser:

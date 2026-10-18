@@ -220,7 +220,7 @@ def test_replayed_messages_count_as_messages() -> None:
         published = demo.publish(sample(Kind.VALID))
         demo.outcomes(published.messages, ["handover.completed"])
         stack.end(published.messages[0])  # fed back by the replay command
-        demo.replayed(published.messages[0])
+        demo.replayed()
         demo.outcomes(published.messages, ["handover.completed", "handover.completed"])
 
     passed, out = lines_of(stack, [Section("1. Again", "tests/integration/test_one.py", replayed)])

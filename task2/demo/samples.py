@@ -100,8 +100,9 @@ def sample(kind: Kind, currency: str = "EUR") -> Sample:
     """A new order of this kind; `currency` applies to valid ones."""
     order_id, event_id = uuid4(), uuid4()
 
-    def event(**changes: Any) -> Message:
-        return _message(order_id, envelope(order_id, event_id, **changes), event_id)
+    def event(under: UUID = event_id, **changes: Any) -> Message:
+        """The order's event under this event id; keyword arguments change its data."""
+        return _message(order_id, envelope(order_id, under, **changes), under)
 
     match kind:
         case Kind.VALID:
@@ -129,11 +130,8 @@ def sample(kind: Kind, currency: str = "EUR") -> Sample:
             messages = [event()] * 2
         case Kind.RE_EMITTED:
             # The producer sending the order again as a new event.
-            again = uuid4()
-            messages = [event(), _message(order_id, envelope(order_id, again), again)]
+            messages = [event(), event(uuid4())]
         case Kind.CONFLICTING:
             # The same order again, with other content: a line missing.
-            other = uuid4()
-            changed = envelope(order_id, other, lines=LINES[:1], total=2 * 1999)
-            messages = [event(), _message(order_id, changed, other)]
+            messages = [event(), event(uuid4(), lines=LINES[:1], total=2 * 1999)]
     return Sample(kind, order_id, tuple(messages))
