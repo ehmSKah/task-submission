@@ -127,6 +127,9 @@ services:
       start_period: 120s
       start_interval: 1s
     restart: unless-stopped
+    # SIGTERM finishes the handover attempt in progress (at most 10 s, ADR 0003), then leaves
+    # the group; the rest is headroom (ADR 0007).
+    stop_grace_period: 20s
 
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:v1.5.0
