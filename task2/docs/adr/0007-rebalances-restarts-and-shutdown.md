@@ -9,7 +9,7 @@ Correctness never depends on a consumer finishing its work: anything not committ
 ## Decision
 
 **Shutdown (SIGTERM, SIGINT)**
-- **The signal handler only sets a flag.** The single-threaded loop checks it between steps, so nothing is interrupted halfway through a database transaction.
+- **The signal only sets a flag.** The single-threaded loop checks it between steps, so nothing is interrupted halfway through a database transaction. The signals are blocked in every thread and one thread waits for them and sets the flag: a Python signal handler would run on the main thread, which may be waiting on that flag during a backoff, holding its lock.
 - **Finish the current step, then stop.** The handover attempt in progress (at most 10 s, ADR 0003) completes; no further retry or message is started. A backoff wait waits on the flag itself, so a stop ends it at once, and a message fetched by the poll the signal arrived in is left to the next owner.
   - If the message has reached a terminal outcome, its offset is committed.
   - Otherwise it stays uncommitted and is redelivered; the crash table of ADR 0004 makes that safe.
@@ -28,8 +28,8 @@ Correctness never depends on a consumer finishing its work: anything not committ
 | While paused (ADR 0006) | one uncommitted message, possibly from a revoked partition | if its partition was revoked, it is **dropped** without committing (`message.dropped`); the new owner processes it from the committed offset |
 
 - **`on_lost`** (membership gone, e.g. after exceeding `max.poll.interval.ms`): anything in hand is dropped and **nothing is committed**. Such a commit would fail anyway (`UNKNOWN_MEMBER_ID`).
-- **The circuit state survives a revocation.** It describes the fulfilment service, not the partition; a paused instance keeps probing with the next message on its remaining partitions. Having dropped the message in hand, it stays paused until its next probe is due, then resumes its remaining partitions: the next message is the probe, and pauses it again if the cause is still there. With nothing left to process it would otherwise stay paused, and unhealthy, with no way to find out the cause is gone.
-- **A refused commit is logged and skipped** (`commit.failed`, with the broker's error, e.g. `UNKNOWN_MEMBER_ID`): a zombie's partition already belongs to another instance, which processes the message from the committed offset. A fatal client error still ends the process.
+- **The circuit state survives a revocation.** It describes the fulfilment service, not the partition; a paused instance keeps probing with the next message on its remaining partitions. Having dropped the message in hand, it stays paused until its next probe is due, then resumes its remaining partitions: the next message is the probe, and pauses it again if the cause is still there. With nothing left to process it would otherwise stay paused, and unhealthy, with no way to find out the cause is gone. A pause that starts again this way counts its time anew towards the optional exit after N minutes.
+- **A refused commit is logged and skipped** (`commit.failed`, with the error, raised or reported for the partition, e.g. `UNKNOWN_MEMBER_ID`): a zombie's partition already belongs to another instance, which processes the message from the committed offset. A fatal client error still ends the process.
 
 **Membership**
 - **Dynamic:** no `group.instance.id`; `session.timeout.ms` stays at its 45 s default (`KAFKA_SESSION_TIMEOUT_MS`, shortened only by the reliability suite, ADR 0009; one above `max.poll.interval.ms` is refused at start-up).

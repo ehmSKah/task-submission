@@ -32,6 +32,8 @@ EXIT_CRASH = 1
 EXIT_CONFIGURATION = 2
 EXIT_PAUSED_TOO_LONG = 3
 
+SHUTDOWN_SIGNALS = {signal.SIGTERM, signal.SIGINT}
+
 
 def _as_is[T](adapter: T) -> T:
     return adapter
@@ -87,6 +89,19 @@ def build(
     )
 
 
+def _stop_on_signal(stop: threading.Event) -> None:
+    """SIGTERM and SIGINT only set the flag (ADR 0007), from a thread of their own that waits for
+    them; `main` blocks them before any other thread starts, so no thread is interrupted by them.
+    A Python signal handler would run on the main thread, which may be inside `stop.wait()` during
+    a backoff, holding the event's lock: setting the event there could deadlock."""
+
+    def wait_for_signal() -> None:
+        signal.sigwait(SHUTDOWN_SIGNALS)
+        stop.set()
+
+    threading.Thread(target=wait_for_signal, name="shutdown-signals", daemon=True).start()
+
+
 def main() -> int:
     try:
         settings = Settings.from_env()
@@ -94,12 +109,13 @@ def main() -> int:
         logs.configure("order-consumer")
         log.error("consumer.configuration_invalid", reason=str(error))
         return EXIT_CONFIGURATION
+    # Before the span exporter's thread and any other start, so that every thread inherits it.
+    signal.pthread_sigmask(signal.SIG_BLOCK, SHUTDOWN_SIGNALS)
     logs.configure("order-consumer", settings.log_level)
     tracer_provider = tracing.configure("order-consumer", settings.otlp_endpoint)
 
     stop = threading.Event()
-    for signum in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(signum, lambda *_: stop.set())
+    _stop_on_signal(stop)
 
     try:
         build(settings, stop).run()
