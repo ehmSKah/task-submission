@@ -5,6 +5,13 @@
 STACK_HOST ?= $(or $(shell printf '%s' "$$DOCKER_HOST" | sed -n 's|^tcp://\([^:/]*\).*|\1|p'),localhost)
 export STACK_HOST
 
+# Host ports and the Compose project, overridable so several stacks can share one Docker daemon.
+KAFKA_PORT ?= 9094
+POSTGRES_PORT ?= 5432
+STUB_PORT ?= 8081
+UI_PORT ?= 8080
+export KAFKA_PORT POSTGRES_PORT STUB_PORT UI_PORT
+
 COMPOSE := docker compose
 PYTEST := uv run pytest
 PYTEST_ARGS ?=
@@ -21,10 +28,10 @@ install: ## Install the Python dependencies
 
 up: ## Build and start the stack, and wait until it is healthy
 	$(COMPOSE) up --build --detach --wait
-	@echo "kafka-ui:         http://$(STACK_HOST):8080"
-	@echo "fulfilment stub:  http://$(STACK_HOST):8081/_control/fulfilment-orders"
-	@echo "Kafka (host):     $(STACK_HOST):9094"
-	@echo "PostgreSQL:       $(STACK_HOST):5432 (make psql)"
+	@echo "kafka-ui:         http://$(STACK_HOST):$(UI_PORT)"
+	@echo "fulfilment stub:  http://$(STACK_HOST):$(STUB_PORT)/_control/fulfilment-orders"
+	@echo "Kafka (host):     $(STACK_HOST):$(KAFKA_PORT)"
+	@echo "PostgreSQL:       $(STACK_HOST):$(POSTGRES_PORT) (make psql)"
 
 down: ## Stop the stack, keeping its data
 	$(COMPOSE) down

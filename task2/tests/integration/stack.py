@@ -18,9 +18,12 @@ from confluent_kafka.admin import AdminClient, NewTopic
 from psycopg.rows import dict_row
 
 HOST = os.environ.get("STACK_HOST", "localhost")
-KAFKA_BOOTSTRAP = f"{HOST}:9094"
-CONSUMER_DATABASE_URL = f"postgresql://order_consumer:local-dev-consumer@{HOST}:5432/orders"
-STUB_URL = f"http://{HOST}:8081"
+KAFKA_BOOTSTRAP = f"{HOST}:{os.environ.get('KAFKA_PORT', '9094')}"
+CONSUMER_DATABASE_URL = (
+    "postgresql://order_consumer:local-dev-consumer"
+    f"@{HOST}:{os.environ.get('POSTGRES_PORT', '5432')}/orders"
+)
+STUB_URL = f"http://{HOST}:{os.environ.get('STUB_PORT', '8081')}"
 FULFILMENT_TOKEN = "local-dev-token"
 
 
