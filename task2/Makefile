@@ -16,6 +16,8 @@ export KAFKA_PORT POSTGRES_PORT STUB_PORT UI_PORT JAEGER_UI_PORT
 COMPOSE := docker compose
 PYTEST := uv run pytest
 PYTEST_ARGS ?=
+# The assignment's four test categories: the files `make demo`'s sections name, in their order.
+DEMO_TESTS := tests/integration/test_successful_processing.py tests/integration/test_invalid_messages.py tests/integration/test_duplicate_events.py tests/integration/test_downstream_failures.py
 ACTIONLINT_IMAGE ?= rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
 
 .DEFAULT_GOAL := help
@@ -71,9 +73,16 @@ psql: ## Open a SQL shell on the orders database (as the migration owner)
 publish: ## Publish sample events with a traceparent; ARGS="--help" lists the kinds (default: one valid)
 	uv run python -m demo.publish $(ARGS)
 
+# New orders every run, so it repeats on the same stack without `make clean`.
+demo: ## The assignment's four test categories, live against the running stack (`make up` first)
+	uv run python -m demo
+
 # In a one-off consumer container, so it reaches Kafka as the consumers do, with a remote daemon too.
 replay: ## Replay dead letters (ADR 0006), a dry run unless ARGS contains --execute; ARGS="--help" lists the filters
 	$(COMPOSE) run --rm --no-deps consumer python -m order_consumer.replay $(ARGS)
+
+demo-tests: ## The four test files proving the demo's sections (`make up` first)
+	$(PYTEST) $(DEMO_TESTS) $(PYTEST_ARGS)
 
 lint: lint-workflows ## Ruff, mypy (strict), the import rules and the CI workflow
 	uv run ruff check .
