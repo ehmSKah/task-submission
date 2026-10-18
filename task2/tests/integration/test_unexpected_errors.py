@@ -14,11 +14,10 @@ import pytest
 from order_consumer.application.ports import FulfilmentClient, HandoverResult
 from order_consumer.config import Settings
 from order_consumer.domain.downstream import DownstreamRequest
-from tests.integration.in_process import group_of, heartbeat, running
+from tests.integration.in_process import group_of, heartbeat, running, wait_until_paused
 from tests.integration.stack import (
     assert_nothing_duplicated,
     assert_nothing_lost,
-    eventually,
     fulfilment_orders,
     lag,
     publish,
@@ -32,31 +31,17 @@ pytestmark = pytest.mark.integration
 
 
 class BugFor:
-    """The real fulfilment client, except for one order, where a stand-in bug raises."""
+    """The real fulfilment client, except for one order, or every order, where a stand-in bug
+    raises until it is fixed."""
 
-    def __init__(self, order_id: UUID, client: FulfilmentClient) -> None:
+    def __init__(self, client: FulfilmentClient, order_id: UUID | None = None) -> None:
+        self._client = client
         self._order_id = order_id
-        self._client = client
-
-    def hand_over(self, request: DownstreamRequest) -> HandoverResult:
-        if request.idempotency_key == str(self._order_id):
-            raise RuntimeError("a stand-in bug")
-        return self._client.hand_over(request)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._client, name)
-
-
-class BugForEvery:
-    """The real fulfilment client behind a stand-in bug that every order meets, until it is
-    fixed."""
-
-    def __init__(self, client: FulfilmentClient) -> None:
-        self._client = client
         self.fixed = threading.Event()
 
     def hand_over(self, request: DownstreamRequest) -> HandoverResult:
-        if not self.fixed.is_set():
+        meets_it = self._order_id is None or request.idempotency_key == str(self._order_id)
+        if meets_it and not self.fixed.is_set():
             raise RuntimeError("a stand-in bug")
         return self._client.hand_over(request)
 
@@ -76,7 +61,7 @@ def test_an_unexpected_exception_is_dead_lettered_and_processing_goes_on(
 
     with running(
         consumer_settings,
-        wrap_fulfilment=lambda client: cast(FulfilmentClient, BugFor(buggy, client)),
+        wrap_fulfilment=lambda client: cast(FulfilmentClient, BugFor(client, buggy)),
     ):
         [dead_letter] = wait_for_dead_letters(group_of(consumer_settings))
         assert_nothing_lost([before, after], group_of(consumer_settings))
@@ -106,18 +91,14 @@ def test_five_unexpected_exceptions_in_a_row_trip_the_bug_guard_until_one_is_pro
         [(order_id, order_placed_event(order_id)) for order_id in orders],
         partition=0,
     )
-    bugs: list[BugForEvery] = []
+    bugs: list[BugFor] = []
 
     def with_the_bug(client: FulfilmentClient) -> FulfilmentClient:
-        bugs.append(BugForEvery(client))
+        bugs.append(BugFor(client))
         return cast(FulfilmentClient, bugs[-1])
 
     with running(settings, wrap_fulfilment=with_the_bug):
-        paused = eventually(
-            lambda: heartbeat(settings) or {},
-            until=lambda beat: beat.get("state") == "paused",
-            what="the bug guard to trip",
-        )
+        paused = wait_until_paused(settings, "the bug guard tripping")
         assert sum(lag(group_of(settings)).values()) == 2, "the fifth is held, the sixth waits"
         dead_letters = records(settings.kafka_dead_letter_topic)
 

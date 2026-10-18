@@ -112,7 +112,8 @@ class HandoverRetries:
         """Ends at the first systemic answer, without further attempts. `max_attempts` overrides
         the policy's, e.g. a single attempt to probe a service thought to be down."""
         policy = self._policy
-        max_attempts = max_attempts or policy.max_attempts
+        if max_attempts is None:
+            max_attempts = policy.max_attempts
         attempt = 0
         while True:
             attempt += 1

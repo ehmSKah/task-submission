@@ -16,7 +16,7 @@ from order_consumer.application.ports import FulfilmentClient, OrderStore
 from order_consumer.application.retries import Jitter
 from order_consumer.config import Settings
 from order_consumer.main import build
-from tests.integration.stack import ConsumerGroup
+from tests.integration.stack import ConsumerGroup, eventually
 
 
 class SimulatedCrash(BaseException):
@@ -119,6 +119,15 @@ def heartbeat(settings: Settings) -> dict[str, Any] | None:
     except FileNotFoundError:
         return None
     return content
+
+
+def wait_until_paused(settings: Settings, reason: str) -> dict[str, Any]:
+    """The heartbeat of the paused instance; `reason` says what the test expects it paused on."""
+    return eventually(
+        lambda: heartbeat(settings) or {},
+        until=lambda beat: beat.get("state") == "paused",
+        what=f"the consumer to pause ({reason})",
+    )
 
 
 @contextmanager

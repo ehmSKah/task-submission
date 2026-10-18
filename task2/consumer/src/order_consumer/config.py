@@ -82,7 +82,7 @@ class Settings:
                 raise ConfigurationError(f"{name} is not an http or https URL: {value[:64]!r}")
             return value or None
 
-        timeouts, policy, guard = FulfilmentTimeouts(), RetryPolicy(), FloodGuardThresholds()
+        timeouts, policy, thresholds = FulfilmentTimeouts(), RetryPolicy(), FloodGuardThresholds()
 
         settings = cls(
             kafka_bootstrap_servers=required("KAFKA_BOOTSTRAP_SERVERS"),
@@ -118,8 +118,10 @@ class Settings:
             ),
             pause_exit_after_minutes=positive("PAUSE_EXIT_AFTER_MINUTES", float, None),
             flood_guard=FloodGuardThresholds(
-                circuit_breaker=positive("CIRCUIT_BREAKER_THRESHOLD", int, guard.circuit_breaker),
-                bug_guard=positive("BUG_GUARD_THRESHOLD", int, guard.bug_guard),
+                circuit_breaker=positive(
+                    "CIRCUIT_BREAKER_THRESHOLD", int, thresholds.circuit_breaker
+                ),
+                bug_guard=positive("BUG_GUARD_THRESHOLD", int, thresholds.bug_guard),
             ),
             health_file=Path(env.get("HEALTH_FILE", str(HEALTH_FILE))),
         )

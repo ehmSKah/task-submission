@@ -189,9 +189,9 @@ class OrderProcessor:
                         ["/data/orderId"],
                     )
 
-            # While the circuit is open, a single attempt probes the service (ADR 0006).
-            probe = 1 if self._guard.circuit_open else None
-            handover = self._handover.hand_over(to_downstream_request(order), probe)
+            handover = self._handover.hand_over(
+                to_downstream_request(order), self._guard.attempt_limit()
+            )
             if isinstance(handover, SystemicAnswer):
                 return Stopped(StopReason.FULFILMENT, handover.failure.error)
             if isinstance(handover, GaveUp):

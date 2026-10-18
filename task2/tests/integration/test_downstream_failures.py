@@ -17,7 +17,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from order_consumer.application.retries import RetryPolicy
 from order_consumer.config import FulfilmentTimeouts, Settings
-from tests.integration.in_process import group_of, heartbeat, running
+from tests.integration.in_process import group_of, heartbeat, running, wait_until_paused
 from tests.integration.stack import (
     Record,
     add_fault_rule,
@@ -212,14 +212,6 @@ def test_a_timeout_then_409_in_progress_then_the_replay_end_with_one_fulfilment_
     [created] = fulfilment_orders(order_id)
     stored = stored_order(order_id)
     assert stored is not None and stored["fulfilment_order_id"] == created["id"]
-
-
-def wait_until_paused(settings: Settings, reason: str) -> dict[str, Any]:
-    return eventually(
-        lambda: heartbeat(settings) or {},
-        until=lambda beat: beat.get("state") == "paused",
-        what=f"the consumer to pause ({reason})",
-    )
 
 
 def test_a_wrong_token_pauses_the_consumer_without_dead_letters_or_commits(
