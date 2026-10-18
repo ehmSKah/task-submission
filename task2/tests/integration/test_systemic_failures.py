@@ -6,6 +6,9 @@ own consumers, in the reliability suite.
 """
 
 import dataclasses
+import os
+import signal
+import threading
 from pathlib import Path
 from uuid import uuid4
 
@@ -87,7 +90,19 @@ def test_an_instance_paused_longer_than_its_limit_exits_with_code_3(
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
 
-    assert main() == EXIT_PAUSED_TOO_LONG
+    # A deadline: should it never give up, SIGTERM stops it cleanly, with exit code 0. `main`
+    # installs its own signal handlers; the test process gets its own back afterwards.
+    handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGINT)}
+    deadline = threading.Timer(30.0, os.kill, (os.getpid(), signal.SIGTERM))
+    deadline.start()
+    try:
+        exit_code = main()
+    finally:
+        deadline.cancel()
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
+
+    assert exit_code == EXIT_PAUSED_TOO_LONG
 
     assert sum(lag(group_of(settings)).values()) == 1, "nothing committed"
     assert records(settings.kafka_dead_letter_topic) == []

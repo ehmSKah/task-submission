@@ -6,16 +6,19 @@ Stops and starts the stack's own PostgreSQL, so it runs on its own, after the in
 
 import subprocess
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from tests.integration.stack import (
     STACK_CONSUMERS,
+    Record,
     assert_nothing_duplicated,
     assert_nothing_lost,
     eventually,
+    lag,
     publish,
+    records,
     wait_until_stable,
 )
 from tests.support.events import order_placed_event
@@ -41,6 +44,14 @@ def make_ps() -> str:
         capture_output=True,
         text=True,
     ).stdout
+
+
+def dead_letters_for(order_id: UUID) -> list[Record]:
+    return [
+        record
+        for record in records(STACK_CONSUMERS.dead_letter_topic)
+        if record.header("dlt.order-id") == str(order_id)
+    ]
 
 
 def consumer_lines(ps: str) -> list[str]:
@@ -78,9 +89,12 @@ def test_a_consumer_pauses_while_postgres_is_down_and_resumes_when_it_is_back() 
         )
         [unhealthy] = [line for line in consumer_lines(paused) if "(unhealthy)" in line]
         assert "Up " in unhealthy, "paused in place, not restarted"
+        assert sum(lag(STACK_CONSUMERS).values()) >= 1, "nothing committed"
+        assert dead_letters_for(order_id) == [], "nothing dead-lettered"
     finally:
         compose("up", "--detach", "--wait", "--no-deps", "--no-recreate", "postgres")
 
     assert_nothing_lost([order_id], STACK_CONSUMERS, timeout=RECOVERY_TIMEOUT)
     assert_nothing_duplicated([order_id])
+    assert dead_letters_for(order_id) == []
     wait_until_healthy()
