@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from order_consumer.application.ports import HandoverResult
+from order_consumer.application.ports import HandoverResult, HandoverStatus
 from order_consumer.application.processing import Delivery, OrderProcessor, Outcome
 from order_consumer.domain.downstream import DownstreamRequest
 from order_consumer.domain.order import Order
@@ -34,9 +34,17 @@ class StoredOrder:
 @dataclass
 class FakeOrderStore:
     orders: dict[UUID, StoredOrder] = field(default_factory=dict)
+    stored: list[UUID] = field(default_factory=list)
 
-    def store_new(self, order: Order, event_id: UUID) -> None:
+    def store_new(self, order: Order, event_id: UUID) -> bool:
+        if order.order_id in self.orders:
+            return False
         self.orders[order.order_id] = StoredOrder(order=order, first_event_id=event_id)
+        self.stored.append(order.order_id)
+        return True
+
+    def handover_status(self, order_id: UUID) -> HandoverStatus:
+        return HandoverStatus(self.orders[order_id].handover_status)
 
     def record_handover(self, order_id: UUID, fulfilment_order_id: str) -> None:
         stored = self.orders[order_id]
@@ -87,3 +95,32 @@ def test_the_handover_carries_the_order_id_as_idempotency_key() -> None:
     [request] = fulfilment.requests
     assert request.idempotency_key == str(ORDER_ID)
     assert request.payload["externalReference"] == str(ORDER_ID)
+
+
+def test_a_redelivery_completes_an_unfinished_handover() -> None:
+    store = FakeOrderStore()
+    fulfilment = FakeFulfilment(store)
+    processor = OrderProcessor(store, fulfilment)
+    processor.process(delivery())
+    store.orders[ORDER_ID].handover_status = "awaiting_handover"
+    store.orders[ORDER_ID].fulfilment_order_id = None
+
+    outcome = processor.process(delivery())
+
+    assert outcome is Outcome.HANDED_OVER
+    assert len(fulfilment.requests) == 2
+    assert store.orders[ORDER_ID].handover_status == "handed_over"
+    assert store.stored == [ORDER_ID], "the order must be stored only once"
+
+
+def test_a_redelivery_of_an_order_already_handed_over_is_skipped() -> None:
+    store = FakeOrderStore()
+    fulfilment = FakeFulfilment(store)
+    processor = OrderProcessor(store, fulfilment)
+    processor.process(delivery())
+
+    outcome = processor.process(delivery())
+
+    assert outcome is Outcome.DUPLICATE
+    assert len(fulfilment.requests) == 1, "no second handover"
+    assert store.orders[ORDER_ID].fulfilment_order_id == "ful-1"

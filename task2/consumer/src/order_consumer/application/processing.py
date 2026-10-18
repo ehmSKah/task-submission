@@ -9,7 +9,7 @@ from enum import Enum
 
 import structlog
 
-from order_consumer.application.ports import FulfilmentClient, OrderStore
+from order_consumer.application.ports import FulfilmentClient, HandoverStatus, OrderStore
 from order_consumer.domain.downstream import to_downstream_request
 from order_consumer.domain.event import parse_order_placed
 from order_consumer.domain.order import to_order
@@ -19,6 +19,7 @@ log = structlog.get_logger()
 
 class Outcome(Enum):
     HANDED_OVER = "handed_over"
+    DUPLICATE = "duplicate"  # already handed over: no new effects
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,8 +49,15 @@ class OrderProcessor:
             ):
                 log.info("event.received")
 
-                self._store.store_new(order, event.event_id)
-                log.info("order.accepted")
+                if self._store.store_new(order, event.event_id):
+                    log.info("order.accepted")
+                else:
+                    # Already stored, e.g. redelivered after a crash (ADR 0004): finish what is unfinished.
+                    status = self._store.handover_status(order.order_id)
+                    if status is HandoverStatus.HANDED_OVER:
+                        log.info("order.duplicate")
+                        return Outcome.DUPLICATE
+                    log.info("handover.unfinished", handover_status=status.value)
 
                 result = self._fulfilment.hand_over(to_downstream_request(order))
                 self._store.record_handover(order.order_id, result.fulfilment_order_id)

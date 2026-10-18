@@ -65,6 +65,7 @@ class FakeKafkaConsumer:
 class FakeProcessor:
     timeline: list[str]
     fail_at_offset: int | None = None
+    outcomes: dict[int, Outcome] = field(default_factory=dict)
     seen: list[Delivery] = field(default_factory=list)
 
     def process(self, delivery: Delivery) -> Outcome:
@@ -72,14 +73,18 @@ class FakeProcessor:
         if delivery.offset == self.fail_at_offset:
             raise RuntimeError("the handover failed")
         self.timeline.append(f"processed {delivery.offset}")
-        return Outcome.HANDED_OVER
+        return self.outcomes.get(delivery.offset, Outcome.HANDED_OVER)
 
 
-def run(messages: list[FakeMessage], fail_at_offset: int | None = None) -> dict[str, Any]:
+def run(
+    messages: list[FakeMessage],
+    fail_at_offset: int | None = None,
+    outcomes: dict[int, Outcome] | None = None,
+) -> dict[str, Any]:
     stop = threading.Event()
     timeline: list[str] = []
     kafka = FakeKafkaConsumer(messages, stop, timeline)
-    processor = FakeProcessor(timeline, fail_at_offset)
+    processor = FakeProcessor(timeline, fail_at_offset, outcomes or {})
     PollLoop(kafka, "orders", processor, stop).run()  # type: ignore[arg-type]
     return {"timeline": timeline, "seen": processor.seen}
 
@@ -88,6 +93,12 @@ def test_each_offset_is_committed_after_its_message_was_handed_over() -> None:
     result = run([FakeMessage(7), FakeMessage(8)])
 
     assert result["timeline"] == ["processed 7", "commit 7", "processed 8", "commit 8"]
+
+
+def test_a_duplicate_with_nothing_unfinished_is_committed() -> None:
+    result = run([FakeMessage(7)], outcomes={7: Outcome.DUPLICATE})
+
+    assert result["timeline"] == ["processed 7", "commit 7"]
 
 
 def test_a_failure_while_processing_leaves_the_offset_uncommitted() -> None:

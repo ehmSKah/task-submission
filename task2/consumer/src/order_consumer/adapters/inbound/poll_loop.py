@@ -17,7 +17,7 @@ from order_consumer.config import Settings
 
 log = structlog.get_logger()
 
-TERMINAL = frozenset({Outcome.HANDED_OVER})
+TERMINAL = frozenset({Outcome.HANDED_OVER, Outcome.DUPLICATE})
 
 
 def create_consumer(settings: Settings) -> Consumer:

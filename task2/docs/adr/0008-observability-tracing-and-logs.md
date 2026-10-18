@@ -43,7 +43,7 @@ The correlation id is the **trace id of a W3C Trace Context `traceparent` header
 |---|---|
 | Lifecycle | `consumer.started`, `consumer.configuration_invalid` (reason), `consumer.stopping`, `consumer.stopped` (exit code), `partitions.assigned`, `partitions.revoked`, `partitions.lost`, `message.dropped`, `commit.failed`, `kafka.error` (a non-fatal client error, with its reason) |
 | Processing | `event.received`, `event.invalid` (layer, error count), `order.accepted`, `order.duplicate` (redelivery or re-emission), `order.conflict` |
-| Handover | `handover.attempt_failed`, `handover.completed`, `handover.failed` (retries exhausted or rejected) |
+| Handover | `handover.unfinished` (the order was already stored but not handed over; this event completes it), `handover.attempt_failed`, `handover.completed`, `handover.failed` (retries exhausted or rejected) |
 | Dead letters | `dead_letter.written` (reason), `dead_letter.write_failed` |
 | Flood guard | `circuit.opened`, `circuit.probe_failed`, `circuit.closed`, `bug_guard.tripped`, `consumer.paused`, `consumer.resumed` (with the systemic reason) |
 | Errors | `processing.unexpected_error`, the only line with a stack trace |

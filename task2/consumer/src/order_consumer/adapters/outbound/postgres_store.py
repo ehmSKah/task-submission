@@ -4,6 +4,7 @@ from uuid import UUID
 
 import psycopg
 
+from order_consumer.application.ports import HandoverStatus
 from order_consumer.domain.order import Order
 
 
@@ -19,15 +20,18 @@ class PostgresOrderStore:
             self._connection = psycopg.connect(self._database_url)
         return self._connection
 
-    def store_new(self, order: Order, event_id: UUID) -> None:
+    def store_new(self, order: Order, event_id: UUID) -> bool:
         connection = self._connect()
         with connection.transaction(), connection.cursor() as cursor:
+            # The primary key is the final guard: of two consumers racing on one order, the second
+            # waits for the first to commit, then stores nothing (ADR 0002).
             cursor.execute(
                 """
                 INSERT INTO orders
                     (order_id, customer_id, placed_at, currency, total, item_count,
                      first_event_id, handover_status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, 'awaiting_handover')
+                ON CONFLICT (order_id) DO NOTHING
                 """,
                 (
                     order.order_id,
@@ -39,6 +43,8 @@ class PostgresOrderStore:
                     event_id,
                 ),
             )
+            if cursor.rowcount == 0:
+                return False
             cursor.executemany(
                 """
                 INSERT INTO order_lines (order_id, sku, quantity, unit_price, line_total)
@@ -49,6 +55,17 @@ class PostgresOrderStore:
                     for line in order.lines
                 ],
             )
+        return True
+
+    def handover_status(self, order_id: UUID) -> HandoverStatus:
+        connection = self._connect()
+        with connection.transaction():
+            row = connection.execute(
+                "SELECT handover_status FROM orders WHERE order_id = %s", (order_id,)
+            ).fetchone()
+        if row is None:
+            raise LookupError(f"order {order_id} is not stored")
+        return HandoverStatus(row[0])
 
     def record_handover(self, order_id: UUID, fulfilment_order_id: str) -> None:
         connection = self._connect()
