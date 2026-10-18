@@ -87,3 +87,19 @@ def test_the_consumer_refuses_to_start_with_exit_code_2(monkeypatch: pytest.Monk
     [refused] = logged
     assert refused["event"] == "consumer.configuration_invalid"
     assert "half of max.poll.interval.ms" in refused["reason"]
+
+
+def test_without_an_otlp_endpoint_spans_are_not_exported() -> None:
+    assert Settings.from_env(REQUIRED).otlp_endpoint is None
+    assert Settings.from_env(REQUIRED | {"OTEL_EXPORTER_OTLP_ENDPOINT": " "}).otlp_endpoint is None
+
+
+def test_the_otlp_endpoint_is_read_from_the_standard_variable() -> None:
+    settings = Settings.from_env(REQUIRED | {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://jaeger:4318"})
+
+    assert settings.otlp_endpoint == "http://jaeger:4318"
+
+
+def test_an_otlp_endpoint_that_is_not_an_http_url_is_refused() -> None:
+    with pytest.raises(ConfigurationError, match="OTEL_EXPORTER_OTLP_ENDPOINT"):
+        Settings.from_env(REQUIRED | {"OTEL_EXPORTER_OTLP_ENDPOINT": "jaeger:4318"})

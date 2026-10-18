@@ -1,7 +1,8 @@
 """The dead-letter topic, written by an idempotent Kafka producer (ADR 0006).
 
-A dead letter is the original record, unchanged, plus `dlt.*` headers saying what went wrong.
-`write` returns only once the broker has confirmed it, so the poll loop can commit after it.
+A dead letter is the original record, unchanged, plus `dlt.*` headers saying what went wrong, and
+the trace's traceparent when the consumer started the trace. `write` returns only once the broker
+has confirmed it, so the poll loop can commit after it.
 """
 
 import logging
@@ -12,6 +13,7 @@ from confluent_kafka import KafkaError, KafkaException, Message, Producer
 
 from order_consumer.application.ports import DeadLetter
 from order_consumer.config import Settings
+from order_consumer.tracing import TRACEPARENT, TRACESTATE
 
 log = structlog.get_logger()
 
@@ -36,6 +38,17 @@ def create_producer(settings: Settings) -> Producer:
             "logger": logging.getLogger("librdkafka"),
         }
     )
+
+
+def _original_headers(dead_letter: DeadLetter) -> list[tuple[str, bytes | None]]:
+    """Copied unchanged, unless the consumer started the trace: then its traceparent replaces the
+    record's, and any tracestate, which belonged to the replaced trace, is left out (ADR 0008)."""
+    headers = list(dead_letter.delivery.headers)
+    traceparent = dead_letter.traceparent
+    if traceparent is None:
+        return headers
+    kept = [(name, value) for name, value in headers if name not in (TRACEPARENT, TRACESTATE)]
+    return [*kept, (TRACEPARENT, traceparent.encode())]
 
 
 def _utc(moment: datetime) -> str:
@@ -79,7 +92,7 @@ class KafkaDeadLetterSink:
                 self._topic,
                 key=delivery.key,
                 value=delivery.value,
-                headers=[*delivery.headers, *failure.items()],
+                headers=[*_original_headers(dead_letter), *failure.items()],
                 on_delivery=delivered,
             )
             self._producer.flush(FLUSH_TIMEOUT_S)

@@ -1,14 +1,18 @@
 """Processing one delivery (ADR 0002, 0004, 0006): store, hand over with bounded retries, record,
 skip a duplicate, or dead-letter an invalid or conflicting event or a failed handover, and report
-the outcome."""
+the outcome. Every message is followed by its trace id (ADR 0008)."""
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from structlog.contextvars import merge_contextvars
 from structlog.testing import capture_logs
 
 from order_consumer.application.ports import (
@@ -20,9 +24,11 @@ from order_consumer.application.ports import (
     HandoverFailed,
     HandoverResult,
     HandoverStatus,
+    MessageTrace,
     ReceivedEvent,
     ResponseClass,
     Stored,
+    TraceSource,
 )
 from order_consumer.application.processing import OrderProcessor, Outcome
 from order_consumer.application.retries import Jitter, RetryPolicy, SystemicFailure
@@ -35,18 +41,26 @@ ORDER_ID = UUID("3f1c2a9e-8b4d-4c1e-9f2a-6d7e8f9a0b1c")
 EVENT_ID = UUID("7d2e1f3a-4b5c-4d6e-8f9a-0b1c2d3e4f5a")
 RE_EMITTED_EVENT_ID = UUID("9b04c6d8-2e1f-4a3b-8c5d-6e7f8a9b0c1d")
 
+TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
+# The record's traceparent, and the one naming the message's own span in the same trace.
+RECORD_TRACEPARENT = f"00-{TRACE_ID}-b7ad6b7169203331-01"
+CONTINUED = MessageTrace(TRACE_ID, f"00-{TRACE_ID}-53995c3f42cd8ad8-01", TraceSource.HEADER)
+STARTED_HERE_TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
+STARTED_HERE = f"00-{STARTED_HERE_TRACE_ID}-00f067aa0ba902b7-01"
+
 reader = OrderPlacedReader.from_file(EVENT_SCHEMA)
 
 
-def delivery(value: bytes | None = None) -> Delivery:
+def delivery(value: bytes | None = None, message_trace: MessageTrace = CONTINUED) -> Delivery:
     return Delivery(
         key=str(ORDER_ID).encode(),
         value=order_placed_event(ORDER_ID, EVENT_ID) if value is None else value,
         topic="orders",
         partition=1,
         offset=42,
-        headers=(("traceparent", b"00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"),),
+        headers=(("traceparent", RECORD_TRACEPARENT.encode()),),
         timestamp=datetime(2026, 10, 17, 9, 12, 4, tzinfo=UTC),
+        trace=message_trace,
     )
 
 
@@ -187,8 +201,10 @@ class ProcessorWithFakes:
             jitter=self.jitter,
         )
 
-    def process(self, value: bytes | None = None) -> Outcome:
-        return self.processor.process(delivery(value))
+    def process(
+        self, value: bytes | None = None, message_trace: MessageTrace = CONTINUED
+    ) -> Outcome:
+        return self.processor.process(delivery(value, message_trace))
 
 
 def test_a_valid_event_is_stored_handed_over_and_recorded() -> None:
@@ -203,7 +219,7 @@ def test_a_valid_event_is_stored_handed_over_and_recorded() -> None:
     assert stored.handover_status == "handed_over"
     assert stored.fulfilment_order_id == "ful-1"
     assert harness.store.processed[EVENT_ID] == ProcessedEvent(
-        ORDER_ID, "accepted", ReceivedEvent(EVENT_ID, "orders", 1, 42)
+        ORDER_ID, "accepted", ReceivedEvent(EVENT_ID, "orders", 1, 42, TRACE_ID)
     )
 
 
@@ -328,7 +344,7 @@ def test_a_conflicting_event_is_not_handed_over_while_the_first_handover_is_unfi
     harness = ProcessorWithFakes()
     harness.store.store_new(
         to_order(order_placed_envelope(ORDER_ID, EVENT_ID)["data"]),
-        ReceivedEvent(EVENT_ID, "orders", 1, 41),
+        ReceivedEvent(EVENT_ID, "orders", 1, 41, TRACE_ID),
     )
 
     outcome = harness.process(
@@ -552,3 +568,196 @@ def test_a_redelivery_completes_a_failed_handover() -> None:
     assert outcome is Outcome.HANDED_OVER
     assert harness.store.orders[ORDER_ID].handover_status == "handed_over"
     assert harness.store.stored == [ORDER_ID]
+
+
+def test_a_re_emission_is_recorded_with_its_own_trace_id() -> None:
+    harness = ProcessorWithFakes()
+    harness.process()
+    own_trace = MessageTrace(STARTED_HERE_TRACE_ID, STARTED_HERE, TraceSource.NEW)
+
+    harness.process(order_placed_event(ORDER_ID, RE_EMITTED_EVENT_ID), own_trace)
+
+    assert harness.store.processed[EVENT_ID].received.trace_id == TRACE_ID
+    assert harness.store.processed[RE_EMITTED_EVENT_ID].received.trace_id == STARTED_HERE_TRACE_ID
+
+
+@pytest.mark.parametrize("source", list(TraceSource))
+def test_every_line_of_a_message_says_where_its_trace_came_from(source: TraceSource) -> None:
+    harness = ProcessorWithFakes(failures=[unavailable()])
+
+    with capture_logs(processors=[merge_contextvars]) as logs:
+        harness.process(message_trace=MessageTrace(TRACE_ID, STARTED_HERE, source))
+
+    assert {entry["trace_source"] for entry in logs} == {source.value}
+    [received] = [entry for entry in logs if entry["event"] == "event.received"]
+    assert received["event_id"] == str(EVENT_ID)
+
+
+@pytest.mark.parametrize(
+    ("source", "traceparent"),
+    [
+        (TraceSource.HEADER, None),
+        (TraceSource.NEW, STARTED_HERE),
+        (TraceSource.REPLACED, STARTED_HERE),
+    ],
+)
+def test_a_dead_letter_carries_the_trace_the_consumer_started(
+    source: TraceSource, traceparent: str | None
+) -> None:
+    """With a valid traceparent, the copied headers already carry the trace."""
+    harness = ProcessorWithFakes()
+    message_trace = MessageTrace(STARTED_HERE_TRACE_ID, STARTED_HERE, source)
+
+    harness.process(order_placed_event(ORDER_ID, EVENT_ID, total=1), message_trace)
+
+    [dead_letter] = harness.dead_letters.written
+    assert dead_letter.traceparent == traceparent
+
+
+def test_each_handover_attempt_is_a_span_with_its_outcome(spans: InMemorySpanExporter) -> None:
+    timeout = HandoverFailed(ResponseClass.TRANSIENT, "ReadTimeout")
+    harness = ProcessorWithFakes(failures=[unavailable(), timeout])
+
+    harness.process()
+
+    attempts = [span for span in spans.get_finished_spans() if span.name == "handover attempt"]
+    assert [dict(span.attributes or {}) for span in attempts] == [
+        {
+            "handover.attempt": 1,
+            "handover.max_attempts": 5,
+            "handover.response_class": "transient",
+            "handover.status": 503,
+            "handover.error": "503 Service Unavailable",
+        },
+        {
+            "handover.attempt": 2,
+            "handover.max_attempts": 5,
+            "handover.response_class": "transient",
+            "handover.error": "ReadTimeout",
+        },
+        {"handover.attempt": 3, "handover.max_attempts": 5, "handover.response_class": "success"},
+    ]
+    assert [span.status.status_code for span in attempts] == [
+        trace.StatusCode.ERROR,
+        trace.StatusCode.ERROR,
+        trace.StatusCode.UNSET,
+    ]
+    assert attempts[0].status.description == "503 Service Unavailable"
+
+
+def test_a_failed_attempt_is_logged_inside_its_span(spans: InMemorySpanExporter) -> None:
+    harness = ProcessorWithFakes(failures=[unavailable()])
+    span_ids: list[int] = []
+
+    def current_span_id(
+        _logger: object, _method: str, event_dict: dict[str, Any]
+    ) -> dict[str, Any]:
+        if event_dict["event"] == "handover.attempt_failed":
+            span_ids.append(trace.get_current_span().get_span_context().span_id)
+        return event_dict
+
+    with capture_logs(processors=[current_span_id]):
+        harness.process()
+
+    first_attempt = next(
+        span for span in spans.get_finished_spans() if span.name == "handover attempt"
+    )
+    assert span_ids == [first_attempt.context.span_id]
+
+
+TERMINAL_EVENTS = {
+    Outcome.HANDED_OVER: "handover.completed",
+    Outcome.DUPLICATE: "order.duplicate",
+    Outcome.DEAD_LETTERED: "dead_letter.written",
+}
+
+
+def _handed_over_once(harness: ProcessorWithFakes) -> None:
+    harness.process()
+
+
+def _unfinished(harness: ProcessorWithFakes) -> None:
+    harness.process()
+    harness.store.orders[ORDER_ID].handover_status = "awaiting_handover"
+    harness.store.orders[ORDER_ID].fulfilment_order_id = None
+
+
+def _nothing(_harness: ProcessorWithFakes) -> None:
+    pass
+
+
+@pytest.mark.parametrize(
+    ("before", "value", "failures", "outcome"),
+    [
+        (_nothing, None, [], Outcome.HANDED_OVER),
+        (_nothing, None, [unavailable(), unavailable()], Outcome.HANDED_OVER),
+        (_unfinished, None, [], Outcome.HANDED_OVER),
+        (_handed_over_once, None, [], Outcome.DUPLICATE),
+        (
+            _handed_over_once,
+            order_placed_event(ORDER_ID, RE_EMITTED_EVENT_ID),
+            [],
+            Outcome.DUPLICATE,
+        ),
+        (_nothing, b"\xff", [], Outcome.DEAD_LETTERED),
+        (_nothing, order_placed_event(ORDER_ID, EVENT_ID, total=1), [], Outcome.DEAD_LETTERED),
+        (
+            _handed_over_once,
+            order_placed_event(ORDER_ID, EVENT_ID, currency="GBP"),
+            [],
+            Outcome.DEAD_LETTERED,
+        ),
+        (_nothing, None, [unavailable(retry_after=60.0)], Outcome.DEAD_LETTERED),
+        (_nothing, None, [unavailable() for _ in range(5)], Outcome.DEAD_LETTERED),
+        (
+            _nothing,
+            None,
+            [HandoverFailed(ResponseClass.REJECTED, "422", status=422)],
+            Outcome.DEAD_LETTERED,
+        ),
+    ],
+    ids=[
+        "handed over",
+        "handed over after retries",
+        "unfinished handover completed",
+        "redelivery",
+        "re-emission",
+        "unreadable",
+        "invalid",
+        "conflicting",
+        "long retry-after",
+        "retries exhausted",
+        "rejected",
+    ],
+)
+def test_every_message_with_an_outcome_logs_exactly_one_terminal_line(
+    before: Callable[[ProcessorWithFakes], None],
+    value: bytes | None,
+    failures: list[HandoverFailed],
+    outcome: Outcome,
+) -> None:
+    harness = ProcessorWithFakes()
+    before(harness)
+    harness.failures.extend(failures)
+
+    with capture_logs() as logs:
+        assert harness.process(value) is outcome
+
+    terminal = [entry["event"] for entry in logs if entry["event"] in TERMINAL_EVENTS.values()]
+    assert terminal == [TERMINAL_EVENTS[outcome]]
+
+
+def test_a_message_without_an_outcome_logs_no_terminal_line() -> None:
+    """Its offset isn't committed, so it is processed again and ends with its one terminal line
+    then."""
+    systemic = HandoverFailed(ResponseClass.SYSTEMIC, "401 Unauthorized", status=401)
+    harness = ProcessorWithFakes(failures=[systemic])
+    failing_sink = ProcessorWithFakes(dead_letters=FakeDeadLetterSink(fails=True))
+
+    with capture_logs() as logs:
+        with pytest.raises(SystemicFailure):
+            harness.process()
+        with pytest.raises(RuntimeError):
+            failing_sink.process(b"\xff")
+
+    assert [entry for entry in logs if entry["event"] in TERMINAL_EVENTS.values()] == []

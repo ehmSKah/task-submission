@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import structlog
+from opentelemetry import trace
 
 from order_consumer.application.ports import (
     Clock,
@@ -22,6 +23,7 @@ from order_consumer.application.ports import (
 from order_consumer.domain.downstream import DownstreamRequest
 
 log = structlog.get_logger()
+tracer = trace.get_tracer(__name__)
 
 # Given the longest wait allowed, returns how long to wait: anything from 0 up to it.
 type Jitter = Callable[[float], float]
@@ -111,31 +113,56 @@ class HandoverRetries:
         attempt = 0
         while True:
             attempt += 1
+            outcome = self._attempt(request, attempt)
+            if isinstance(outcome, HandedOver):
+                return outcome
+            failure = outcome
+            match failure.response_class:
+                case ResponseClass.SYSTEMIC:
+                    raise SystemicFailure(failure, attempt) from failure
+                case ResponseClass.REJECTED:
+                    return GaveUp(DeadLetterReason.REJECTED, attempt, failure)
+            retry_after = failure.retry_after
+            if retry_after is not None and retry_after > policy.retry_after_cap:
+                # The service is unavailable for a while: that is the flood guard's business,
+                # not a reason to retry against it sooner (ADR 0006).
+                return GaveUp(DeadLetterReason.RETRIES_EXHAUSTED, attempt, failure, retry_after)
+            if attempt == policy.max_attempts:
+                return GaveUp(DeadLetterReason.RETRIES_EXHAUSTED, attempt, failure)
+            if retry_after is None:
+                retry_after = policy.backoff(attempt, self._jitter)
+            self._clock.sleep(retry_after)
+
+    def _attempt(self, request: DownstreamRequest, attempt: int) -> HandedOver | HandoverFailed:
+        """One attempt in a span of its own, carrying what its log line says (ADR 0008); the
+        HTTP request's span, and the fulfilment service's, sit inside it."""
+        max_attempts = self._policy.max_attempts
+        with tracer.start_as_current_span(
+            "handover attempt",
+            attributes={"handover.attempt": attempt, "handover.max_attempts": max_attempts},
+        ) as span:
             started = self._clock.monotonic()
             try:
-                return HandedOver(self._fulfilment.hand_over(request), attempt)
+                result = self._fulfilment.hand_over(request)
             except HandoverFailed as failure:
+                span.set_attributes(
+                    {
+                        "handover.response_class": failure.response_class.value,
+                        "handover.error": failure.error,
+                    }
+                )
+                if failure.status is not None:
+                    span.set_attribute("handover.status", failure.status)
+                span.set_status(trace.StatusCode.ERROR, failure.error)
                 log.warning(
                     "handover.attempt_failed",
                     attempt=attempt,
-                    max_attempts=policy.max_attempts,
+                    max_attempts=max_attempts,
                     response_class=failure.response_class.value,
                     status=failure.status,
                     error=failure.error,
                     duration_ms=round((self._clock.monotonic() - started) * 1000),
                 )
-                match failure.response_class:
-                    case ResponseClass.SYSTEMIC:
-                        raise SystemicFailure(failure, attempt) from failure
-                    case ResponseClass.REJECTED:
-                        return GaveUp(DeadLetterReason.REJECTED, attempt, failure)
-                retry_after = failure.retry_after
-                if retry_after is not None and retry_after > policy.retry_after_cap:
-                    # The service is unavailable for a while: that is the flood guard's business,
-                    # not a reason to retry against it sooner (ADR 0006).
-                    return GaveUp(DeadLetterReason.RETRIES_EXHAUSTED, attempt, failure, retry_after)
-                if attempt == policy.max_attempts:
-                    return GaveUp(DeadLetterReason.RETRIES_EXHAUSTED, attempt, failure)
-                if retry_after is None:
-                    retry_after = policy.backoff(attempt, self._jitter)
-                self._clock.sleep(retry_after)
+                return failure
+            span.set_attribute("handover.response_class", ResponseClass.SUCCESS.value)
+            return HandedOver(result, attempt)

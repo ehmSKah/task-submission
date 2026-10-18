@@ -67,7 +67,10 @@ class OrderProcessor:
 
     def process(self, delivery: Delivery) -> Outcome:
         with structlog.contextvars.bound_contextvars(
-            topic=delivery.topic, partition=delivery.partition, offset=delivery.offset
+            topic=delivery.topic,
+            partition=delivery.partition,
+            offset=delivery.offset,
+            trace_source=delivery.trace.source.value,
         ):
             try:
                 event = self._reader.read(delivery.key, delivery.value)
@@ -81,7 +84,11 @@ class OrderProcessor:
                 log.info("event.received")
 
                 received = ReceivedEvent(
-                    event.event_id, delivery.topic, delivery.partition, delivery.offset
+                    event.event_id,
+                    delivery.topic,
+                    delivery.partition,
+                    delivery.offset,
+                    delivery.trace.trace_id,
                 )
                 match self._store.store_new(order, received):
                     case Stored():

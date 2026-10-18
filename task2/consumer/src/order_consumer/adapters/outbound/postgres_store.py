@@ -1,10 +1,17 @@
-"""The order store on PostgreSQL, in plain SQL (ADR 0002)."""
+"""The order store on PostgreSQL, in plain SQL (ADR 0002).
 
+Each write is a span of its own, named and described by OpenTelemetry's database conventions, and
+never carries the connection string or a statement's values (ADR 0008).
+"""
+
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC
 from typing import Literal
 from uuid import UUID
 
 import psycopg
+from opentelemetry import trace
 from psycopg import IsolationLevel
 
 from order_consumer.application.ports import (
@@ -15,6 +22,8 @@ from order_consumer.application.ports import (
     Stored,
 )
 from order_consumer.domain.order import Order, OrderLine
+
+tracer = trace.get_tracer(__name__)
 
 
 class PostgresOrderStore:
@@ -31,19 +40,40 @@ class PostgresOrderStore:
             self._connection.isolation_level = IsolationLevel.READ_COMMITTED
         return self._connection
 
+    @contextmanager
+    def _write(self, summary: str) -> Iterator[psycopg.Connection]:
+        """The connection, inside a span for one write: `summary` names the operation and the
+        tables it writes, e.g. `UPDATE orders`."""
+        with tracer.start_as_current_span(summary, kind=trace.SpanKind.CLIENT) as span:
+            connection = self._connect()
+            info = connection.info
+            span.set_attributes(
+                {
+                    "db.system.name": "postgresql",
+                    "db.namespace": info.dbname,
+                    "db.query.summary": summary,
+                    "server.address": info.host,
+                    "server.port": info.port,
+                }
+            )
+            yield connection
+
     def store_new(
         self, order: Order, event: ReceivedEvent
     ) -> Stored | AlreadyStored | EventIdTaken:
-        connection = self._connect()
-        with connection.transaction() as transaction, connection.cursor() as cursor:
+        with (
+            self._write("INSERT orders order_lines processed_events") as connection,
+            connection.transaction() as transaction,
+            connection.cursor() as cursor,
+        ):
             # The primary key is the final guard: of two consumers racing on one order, the second
             # waits for the first to commit, then stores nothing (ADR 0002).
             cursor.execute(
                 """
                 INSERT INTO orders
                     (order_id, customer_id, placed_at, currency, total, item_count,
-                     first_event_id, handover_status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'awaiting_handover')
+                     first_event_id, trace_id, handover_status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'awaiting_handover')
                 ON CONFLICT (order_id) DO NOTHING
                 """,
                 (
@@ -54,6 +84,7 @@ class PostgresOrderStore:
                     order.total,
                     order.item_count,
                     event.event_id,
+                    event.trace_id,
                 ),
             )
             if cursor.rowcount == 0:
@@ -75,8 +106,11 @@ class PostgresOrderStore:
         return EventIdTaken()
 
     def record_duplicate(self, order_id: UUID, event: ReceivedEvent) -> None:
-        connection = self._connect()
-        with connection.transaction(), connection.cursor() as cursor:
+        with (
+            self._write("INSERT processed_events") as connection,
+            connection.transaction(),
+            connection.cursor() as cursor,
+        ):
             self._record(cursor, order_id, event, "duplicate")
 
     @staticmethod
@@ -89,11 +123,20 @@ class PostgresOrderStore:
         """Records the event; False, writing nothing, when its id is already recorded."""
         cursor.execute(
             """
-            INSERT INTO processed_events (event_id, order_id, outcome, topic, partition, "offset")
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO processed_events
+                (event_id, order_id, outcome, topic, partition, "offset", trace_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (event_id) DO NOTHING
             """,
-            (event.event_id, order_id, outcome, event.topic, event.partition, event.offset),
+            (
+                event.event_id,
+                order_id,
+                outcome,
+                event.topic,
+                event.partition,
+                event.offset,
+                event.trace_id,
+            ),
         )
         return cursor.rowcount == 1
 
@@ -141,8 +184,7 @@ class PostgresOrderStore:
         )
 
     def record_handover(self, order_id: UUID, fulfilment_order_id: str) -> None:
-        connection = self._connect()
-        with connection.transaction():
+        with self._write("UPDATE orders") as connection, connection.transaction():
             connection.execute(
                 """
                 UPDATE orders
@@ -155,8 +197,7 @@ class PostgresOrderStore:
             )
 
     def mark_handover_failed(self, order_id: UUID) -> None:
-        connection = self._connect()
-        with connection.transaction():
+        with self._write("UPDATE orders") as connection, connection.transaction():
             # Never over a completed handover: of two consumers racing on one order, the one that
             # gave up must not undo the other's success.
             connection.execute(

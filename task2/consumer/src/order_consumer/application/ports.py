@@ -1,6 +1,6 @@
 """The ports the processing use case depends on (ADR 0005)."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Protocol
@@ -10,9 +10,31 @@ from order_consumer.domain.downstream import DownstreamRequest
 from order_consumer.domain.order import Order
 
 
+class TraceSource(Enum):
+    """Where a message's trace came from (ADR 0008)."""
+
+    HEADER = "header"  # the record's traceparent, continued
+    NEW = "new"  # the record had none
+    REPLACED = "replaced"  # the record's was invalid, and is never logged as it is
+
+
+@dataclass(frozen=True, slots=True)
+class MessageTrace:
+    """The trace a delivery is processed in: its trace id is the correlation id (ADR 0008)."""
+
+    trace_id: str  # 32 lower-case hex digits
+    traceparent: str  # the W3C header naming the message's own span
+    source: TraceSource
+
+    @property
+    def started_here(self) -> bool:
+        """The consumer started the trace, so the record's headers don't carry it."""
+        return self.source is not TraceSource.HEADER
+
+
 @dataclass(frozen=True, slots=True)
 class Delivery:
-    """One Kafka record, without anything Kafka-specific."""
+    """One Kafka record, without anything Kafka-specific, and the trace it is processed in."""
 
     key: bytes | None
     value: bytes | None  # None for a tombstone
@@ -21,6 +43,7 @@ class Delivery:
     offset: int
     headers: tuple[tuple[str, bytes | None], ...] = ()
     timestamp: datetime | None = None  # the record's time, UTC
+    trace: MessageTrace = field(kw_only=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,12 +61,14 @@ class HandoverStatus(Enum):
 
 @dataclass(frozen=True, slots=True)
 class ReceivedEvent:
-    """An event id and where the event was read: what `processed_events` records (ADR 0002)."""
+    """An event id, where the event was read and the trace it was processed in: what
+    `processed_events` records (ADR 0002, 0008)."""
 
     event_id: UUID
     topic: str
     partition: int
     offset: int
+    trace_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +176,13 @@ class DeadLetter:
     attempts: int  # handover attempts made
     event_id: UUID | None  # when it could be read
     order_id: UUID | None  # when it could be read
+
+    @property
+    def traceparent(self) -> str | None:
+        """The traceparent to set, replacing the record's, when the consumer started the trace;
+        otherwise the copied headers already carry it (ADR 0006, 0008)."""
+        trace = self.delivery.trace
+        return trace.traceparent if trace.started_here else None
 
 
 class DeadLetterSink(Protocol):

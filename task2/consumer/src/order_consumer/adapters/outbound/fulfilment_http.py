@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
 import httpx
+from opentelemetry.instrumentation.httpx import SyncOpenTelemetryTransport
 
 from order_consumer.application.ports import HandoverFailed, HandoverResult, ResponseClass
 from order_consumer.config import FulfilmentTimeouts
@@ -64,7 +65,8 @@ class HttpFulfilmentClient:
             # No redirects, and no retries inside the client: the consumer's retry policy is the
             # only layer that retries.
             follow_redirects=False,
-            transport=httpx.HTTPTransport(retries=0),
+            # A span per request, sending its traceparent (ADR 0008). Headers are not recorded.
+            transport=SyncOpenTelemetryTransport(httpx.HTTPTransport(retries=0)),
         )
 
     def hand_over(self, request: DownstreamRequest) -> HandoverResult:
@@ -95,7 +97,7 @@ class HttpFulfilmentClient:
         its own thread and is abandoned at its deadline. An abandoned request ends within its own
         timeouts; whatever it achieved, the idempotency key makes the next attempt safe."""
         answer: Future[httpx.Response] = Future()
-        context = contextvars.copy_context()  # the message's log context
+        context = contextvars.copy_context()  # the message's log context and the attempt's span
 
         def attempt() -> None:
             try:

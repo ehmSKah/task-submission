@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 import structlog
 
-from order_consumer import logs
+from order_consumer import logs, tracing
 from order_consumer.adapters.inbound.poll_loop import PollLoop, create_consumer
 from order_consumer.adapters.outbound.fulfilment_http import HttpFulfilmentClient
 from order_consumer.adapters.outbound.kafka_dead_letters import KafkaDeadLetterSink, create_producer
@@ -65,6 +65,7 @@ def build(
         ),
         stop,
         on_close=(store.close, fulfilment.close, dead_letters.close),
+        group=settings.kafka_group_id,
     )
 
 
@@ -76,6 +77,7 @@ def main() -> int:
         log.error("consumer.configuration_invalid", reason=str(error))
         return EXIT_CONFIGURATION
     logs.configure("order-consumer", settings.log_level)
+    tracer_provider = tracing.configure("order-consumer", settings.otlp_endpoint)
 
     stop = threading.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
@@ -89,5 +91,7 @@ def main() -> int:
         # exiting like this flaps during a long outage, as that ADR explains.
         log.error("consumer.stopped", exit_code=EXIT_CRASH, reason=str(failure))
         return EXIT_CRASH
+    finally:
+        tracer_provider.shutdown()  # exports the spans still waiting in their batch
     log.info("consumer.stopped", exit_code=EXIT_CLEAN)
     return EXIT_CLEAN

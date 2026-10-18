@@ -1,4 +1,5 @@
-"""The poll loop commits an offset only once its message reached a terminal outcome (ADR 0004)."""
+"""The poll loop commits an offset only once its message reached a terminal outcome (ADR 0004),
+and processes each message in a span of its own, continuing the record's trace (ADR 0008)."""
 
 import threading
 from dataclasses import dataclass, field
@@ -6,16 +7,22 @@ from typing import Any
 
 import pytest
 from confluent_kafka import KafkaError
+from opentelemetry import trace
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from order_consumer.adapters.inbound.poll_loop import PollLoop
-from order_consumer.application.ports import Delivery
+from order_consumer.application.ports import Delivery, TraceSource
 from order_consumer.application.processing import Outcome
+
+TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
+TRACEPARENT = f"00-{TRACE_ID}-b7ad6b7169203331-01"
 
 
 @dataclass
 class FakeMessage:
     offset_: int
     error_: KafkaError | None = None
+    headers_: list[tuple[str, bytes]] | None = None
 
     def error(self) -> KafkaError | None:
         return self.error_
@@ -36,7 +43,7 @@ class FakeMessage:
         return self.offset_
 
     def headers(self) -> list[tuple[str, bytes]] | None:
-        return None
+        return self.headers_
 
     def timestamp(self) -> tuple[int, int]:
         return (1, 1_792_228_324_000)
@@ -92,7 +99,7 @@ def run(
     timeline: list[str] = []
     kafka = FakeKafkaConsumer(messages, stop, timeline)
     processor = FakeProcessor(timeline, fail_at_offset, outcomes or {})
-    PollLoop(kafka, "orders", processor, stop).run()  # type: ignore[arg-type]
+    PollLoop(kafka, "orders", processor, stop, group="order-consumer").run()  # type: ignore[arg-type]
     return {"timeline": timeline, "seen": processor.seen}
 
 
@@ -119,7 +126,8 @@ def test_a_failure_while_processing_leaves_the_offset_uncommitted() -> None:
     with pytest.raises(RuntimeError):
         stop = threading.Event()
         kafka = FakeKafkaConsumer([FakeMessage(7), FakeMessage(8)], stop, timeline)
-        PollLoop(kafka, "orders", FakeProcessor(timeline, fail_at_offset=8), stop).run()  # type: ignore[arg-type]
+        processor = FakeProcessor(timeline, fail_at_offset=8)
+        PollLoop(kafka, "orders", processor, stop, group="order-consumer").run()  # type: ignore[arg-type]
 
     assert timeline == ["processed 7", "commit 7"]
     assert kafka.closed, "the consumer must be closed even when processing fails"
@@ -132,3 +140,58 @@ def test_the_end_of_a_partition_is_not_a_message() -> None:
 
     assert result["seen"] == []
     assert result["timeline"] == []
+
+
+def test_each_message_is_processed_in_a_span_continuing_its_trace(
+    spans: InMemorySpanExporter,
+) -> None:
+    result = run([FakeMessage(7, headers_=[("traceparent", TRACEPARENT.encode())])])
+
+    [span] = spans.get_finished_spans()
+    assert span.name == "process orders"
+    assert span.kind is trace.SpanKind.CONSUMER
+    assert span.parent is not None and span.parent.span_id == 0xB7AD6B7169203331
+    assert trace.format_trace_id(span.context.trace_id) == TRACE_ID
+    assert dict(span.attributes or {}) == {
+        "messaging.system": "kafka",
+        "messaging.operation.type": "process",
+        "messaging.operation.name": "process",
+        "messaging.destination.name": "orders",
+        "messaging.destination.partition.id": "0",
+        "messaging.kafka.offset": 7,
+        "messaging.consumer.group.name": "order-consumer",
+        "outcome": "handed_over",
+    }
+    [delivery] = result["seen"]
+    assert delivery.trace.trace_id == TRACE_ID
+    assert delivery.trace.source is TraceSource.HEADER
+    assert delivery.trace.traceparent == f"00-{TRACE_ID}-{span.context.span_id:016x}-01"
+
+
+def test_a_message_without_a_traceparent_starts_a_new_trace(spans: InMemorySpanExporter) -> None:
+    result = run([FakeMessage(7)])
+
+    [span] = spans.get_finished_spans()
+    assert span.parent is None
+    [delivery] = result["seen"]
+    assert delivery.trace.source is TraceSource.NEW
+    assert delivery.trace.trace_id == trace.format_trace_id(span.context.trace_id)
+
+
+def test_an_invalid_traceparent_is_replaced_by_a_new_trace(spans: InMemorySpanExporter) -> None:
+    result = run([FakeMessage(7, headers_=[("traceparent", b"00-forged\n")])])
+
+    [span] = spans.get_finished_spans()
+    assert span.parent is None
+    [delivery] = result["seen"]
+    assert delivery.trace.source is TraceSource.REPLACED
+    assert delivery.trace.trace_id == trace.format_trace_id(span.context.trace_id)
+
+
+def test_a_failure_while_processing_ends_the_span_as_an_error(spans: InMemorySpanExporter) -> None:
+    with pytest.raises(RuntimeError):
+        run([FakeMessage(8)], fail_at_offset=8)
+
+    [span] = spans.get_finished_spans()
+    assert span.status.status_code is trace.StatusCode.ERROR
+    assert "outcome" not in (span.attributes or {})

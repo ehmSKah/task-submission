@@ -1,7 +1,8 @@
 """The poll loop: the only place that commits offsets (ADR 0004, 0005).
 
 One message at a time. An offset is committed synchronously, and only once its message has reached
-a terminal outcome, so anything unfinished is redelivered after a crash.
+a terminal outcome, so anything unfinished is redelivered after a crash. Each message is processed
+in a span of its own, continuing the trace its record carries (ADR 0008).
 """
 
 import logging
@@ -19,12 +20,15 @@ from confluent_kafka import (
     Message,
     TopicPartition,
 )
+from opentelemetry import trace
 
-from order_consumer.application.ports import Delivery
+from order_consumer import tracing
+from order_consumer.application.ports import Delivery, MessageTrace
 from order_consumer.application.processing import OrderProcessor, Outcome
 from order_consumer.config import Settings
 
 log = structlog.get_logger()
+tracer = trace.get_tracer(__name__)
 
 TERMINAL = frozenset({Outcome.HANDED_OVER, Outcome.DUPLICATE, Outcome.DEAD_LETTERED})
 
@@ -47,18 +51,19 @@ def create_consumer(settings: Settings) -> Consumer:
     )
 
 
-def _delivery(message: Message, topic: str) -> Delivery:
+def _delivery(message: Message, topic: str, message_trace: MessageTrace) -> Delivery:
     timestamp_type, timestamp_ms = message.timestamp()
     return Delivery(
         key=message.key(),
         value=message.value(),
-        topic=message.topic() or topic,
+        topic=topic,
         partition=message.partition() or 0,
         offset=message.offset() or 0,
         headers=_headers(message),
         timestamp=None
         if timestamp_type == TIMESTAMP_NOT_AVAILABLE
         else datetime.fromtimestamp(timestamp_ms / 1000, UTC),
+        trace=message_trace,
     )
 
 
@@ -84,9 +89,12 @@ class PollLoop:
         processor: OrderProcessor,
         stop: threading.Event,
         on_close: Iterable[Callable[[], None]] = (),
+        *,
+        group: str,
     ) -> None:
         self._consumer = consumer
         self._topic = topic
+        self._group = group
         self._processor = processor
         self._stop = stop
         self._on_close = list(on_close)
@@ -118,9 +126,33 @@ class PollLoop:
                 log.warning("kafka.error", reason=error.str())
             return
 
-        outcome = self._processor.process(_delivery(message, self._topic))
+        outcome = self._process(message)
         if outcome in TERMINAL:
             self._consumer.commit(message=message, asynchronous=False)
+
+    def _process(self, message: Message) -> Outcome:
+        """In the message's span, named and described by OpenTelemetry's messaging conventions."""
+        topic = message.topic() or self._topic
+        parent, source = tracing.incoming_trace(_headers(message))
+        with tracer.start_as_current_span(
+            f"process {topic}",
+            context=parent,
+            kind=trace.SpanKind.CONSUMER,
+            attributes={
+                "messaging.system": "kafka",
+                "messaging.operation.type": "process",
+                "messaging.operation.name": "process",
+                "messaging.destination.name": topic,
+                "messaging.destination.partition.id": str(message.partition() or 0),
+                "messaging.kafka.offset": message.offset() or 0,
+                "messaging.consumer.group.name": self._group,
+            },
+        ) as span:
+            outcome = self._processor.process(
+                _delivery(message, topic, tracing.current_trace(source))
+            )
+            span.set_attribute("outcome", outcome.value)
+            return outcome
 
     def _assigned(self, _consumer: Any, partitions: list[TopicPartition]) -> None:
         log.info("partitions.assigned", partitions=_partition_labels(partitions))

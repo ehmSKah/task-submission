@@ -43,6 +43,7 @@ class Settings:
     fulfilment_timeouts: FulfilmentTimeouts = field(default_factory=FulfilmentTimeouts)
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     kafka_max_poll_interval_ms: int = MAX_POLL_INTERVAL_MS
+    otlp_endpoint: str | None = None  # where spans are exported; without one they are discarded
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> "Settings":
@@ -63,6 +64,12 @@ class Settings:
             if not (math.isfinite(value) and value > 0):
                 raise ConfigurationError(f"{name} must be positive: {raw[:64]!r}")
             return value
+
+        def http_url_or_none(name: str) -> str | None:
+            value = env.get(name, "").strip()
+            if value and not value.startswith(("http://", "https://")):
+                raise ConfigurationError(f"{name} is not an http or https URL: {value[:64]!r}")
+            return value or None
 
         timeouts, policy = FulfilmentTimeouts(), RetryPolicy()
 
@@ -94,6 +101,7 @@ class Settings:
             kafka_max_poll_interval_ms=positive(
                 "KAFKA_MAX_POLL_INTERVAL_MS", int, MAX_POLL_INTERVAL_MS
             ),
+            otlp_endpoint=http_url_or_none("OTEL_EXPORTER_OTLP_ENDPOINT"),
         )
         if not settings.event_schema.is_file():
             raise ConfigurationError(f"ORDER_EVENT_SCHEMA {settings.event_schema} is not a file")
