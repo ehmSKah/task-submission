@@ -17,7 +17,7 @@ def configure(service: str, level: str = "INFO") -> None:
         event_dict.setdefault("instance", instance)
         return event_dict
 
-    shared: list[structlog.types.Processor] = [
+    before_rendering: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
         add_origin,
         structlog.processors.add_log_level,
@@ -25,7 +25,7 @@ def configure(service: str, level: str = "INFO") -> None:
     ]
     structlog.configure(
         processors=[
-            *shared,
+            *before_rendering,
             structlog.processors.dict_tracebacks,
             structlog.processors.JSONRenderer(),
         ],
@@ -42,7 +42,7 @@ def configure(service: str, level: str = "INFO") -> None:
                 structlog.stdlib.ProcessorFormatter.remove_processors_meta,
                 structlog.processors.JSONRenderer(),
             ],
-            foreign_pre_chain=shared,
+            foreign_pre_chain=before_rendering,
         )
     )
     logging.basicConfig(handlers=[handler], level=logging.WARNING, force=True)
