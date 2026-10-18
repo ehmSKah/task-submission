@@ -81,8 +81,8 @@ traceparent: 00-…               # W3C Trace Context, the correlation id (ADR 0
   - It remembers each `Idempotency-Key` with a fingerprint of the body and applies the replay rules above.
   - State is in memory: restarting the stub forgets keys. The restart tests restart the consumer, not the stub.
 - **Control side** (`/_control/…`, not part of the contract):
-  - **Fault rules** are matched per order (`externalReference`), so tests running side by side don't interfere. Each rule applies `times: N`. It can respond with a status (`503` with or without `Retry-After`, `429`, `500`, `400`, `404`, …), respond after a delay, **create the order but answer too late** (which reproduces timeout → `409` → replay), or drop the connection.
-  - **Journal:** every request received with its headers and outcome, and separately the fulfilment orders actually created. Duplicate tests assert "exactly one fulfilment order for this order", however many requests arrived.
+  - **Fault rules** are matched per order (`externalReference`), so tests running side by side don't interfere. Each rule applies `times: N`. It can respond with a status (`503` with or without `Retry-After`, `429`, `500`, `400`, `404`, …), respond after a delay, **create the order but answer too late** (which reproduces timeout → `409` → replay), or drop the connection. Rules are added with `POST /_control/fault-rules` (`{"externalReference": …, "times": 1, "delaySeconds": 3}`); every request for the order that passes the contract checks uses one. A delayed request has already claimed its key, so a repeat meanwhile gets `409`.
+  - **Journal:** every request received with its headers and outcome (no status yet while it is in progress, which is what the hard-kill test waits for), and separately the fulfilment orders actually created. Duplicate tests assert "exactly one fulfilment order for this order", however many requests arrived.
   - **Reset** clears rules, journal and keys between tests.
   - `make demo` uses the same fault rules.
 

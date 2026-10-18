@@ -182,6 +182,7 @@ source = { editable = "fulfilment-stub" }
 dependencies = [
     { name = "fastapi" },
     { name = "openapi-core" },
+    { name = "pydantic" },
     { name = "structlog" },
     { name = "uvicorn" },
 ]
@@ -190,6 +191,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.118" },
     { name = "openapi-core", specifier = ">=0.19.5" },
+    { name = "pydantic", specifier = ">=2.12" },
     { name = "structlog", specifier = ">=25.4" },
     { name = "uvicorn", specifier = ">=0.37" },
 ]

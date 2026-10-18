@@ -4,8 +4,11 @@ Requests are checked against the OpenAPI file, the contract's only definition, s
 stub means the consumer's mapping produced something the contract doesn't allow.
 """
 
+import asyncio
+import hashlib
 import json
 import secrets
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,8 +20,52 @@ from fastapi.responses import JSONResponse
 from openapi_core import OpenAPI
 from openapi_core.contrib.starlette import StarletteOpenAPIRequest
 from openapi_core.exceptions import OpenAPIError
+from pydantic import BaseModel, Field
 
 log = structlog.get_logger()
+
+
+@dataclass
+class IdempotencyRecord:
+    """What the stub remembers per `Idempotency-Key` (ADR 0003). It never forgets until reset.
+
+    Without a response the first request is still in progress.
+    """
+
+    fingerprint: str
+    response: dict[str, str] | None = None
+
+
+@dataclass
+class FaultRule:
+    """A fault for one order, applied to its next `times` requests (ADR 0003)."""
+
+    external_reference: str
+    times: int
+    delay_seconds: float
+
+
+class FaultRuleRequest(BaseModel):
+    """`POST /_control/fault-rules`. Only a delay so far; further faults are added as fields."""
+
+    externalReference: str
+    times: int = Field(default=1, ge=1)
+    delaySeconds: float = Field(default=0.0, ge=0.0, le=60.0)
+
+
+@dataclass
+class FaultRules:
+    rules: list[FaultRule] = field(default_factory=list)
+
+    def take(self, external_reference: str) -> FaultRule | None:
+        """The first rule for the order, with one of its uses spent."""
+        for rule in self.rules:
+            if rule.external_reference == external_reference:
+                rule.times -= 1
+                if rule.times == 0:
+                    self.rules.remove(rule)
+                return rule
+        return None
 
 
 @dataclass
@@ -29,6 +76,12 @@ class Journal:
     def reset(self) -> None:
         self.requests.clear()
         self.fulfilment_orders.clear()
+
+
+def fingerprint(body: bytes) -> str:
+    """The same order with other whitespace or key order is the same body."""
+    canonical = json.dumps(json.loads(body), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def problem(status: int, title: str, **extra: Any) -> JSONResponse:
@@ -58,9 +111,16 @@ def contract_violations(error: OpenAPIError) -> dict[str, Any]:
     }
 
 
-def create_app(spec_path: Path, token: str) -> FastAPI:
+def create_app(
+    spec_path: Path,
+    token: str,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> FastAPI:
+    """`sleep` is how a delay rule waits; tests replace it to hold a request in progress."""
     openapi = OpenAPI.from_file_path(str(spec_path))
     journal = Journal()
+    keys: dict[str, IdempotencyRecord] = {}
+    fault_rules = FaultRules()
     app = FastAPI(title="Fulfilment stub", openapi_url=None, docs_url=None, redoc_url=None)
 
     def bearer_matches(request: Request) -> bool:
@@ -74,6 +134,7 @@ def create_app(spec_path: Path, token: str) -> FastAPI:
             "receivedAt": datetime.now(UTC).isoformat(),
             "idempotencyKey": request.headers.get("idempotency-key"),
             "externalReference": None,
+            "status": None,  # until the request is answered
         }
         journal.requests.append(entry)
 
@@ -90,18 +151,64 @@ def create_app(spec_path: Path, token: str) -> FastAPI:
 
         external_reference = json.loads(body)["externalReference"]
         entry["externalReference"] = external_reference
+        rule = fault_rules.take(external_reference)
+        key = request.headers["idempotency-key"]
+        body_fingerprint = fingerprint(body)
+        known = keys.get(key)
+        if known is not None:
+            if rule is not None:
+                await sleep(rule.delay_seconds)
+            return answer_repeat(known, body_fingerprint, entry)
+
+        # Claimed: until this request is answered, a repeat with the same key gets 409.
+        claim = keys[key] = IdempotencyRecord(body_fingerprint)
+        try:
+            if rule is not None:
+                await sleep(rule.delay_seconds)
+        except BaseException:
+            del keys[key]
+            raise
         fulfilment_order = {
             "id": f"ful-{len(journal.fulfilment_orders) + 1}",
             "externalReference": external_reference,
         }
         journal.fulfilment_orders.append(fulfilment_order)
+        claim.response = fulfilment_order
         entry["status"] = 201
         log.info("fulfilment_order.created", **fulfilment_order)
         return JSONResponse(fulfilment_order, status_code=201)
 
+    def answer_repeat(
+        known: IdempotencyRecord, body_fingerprint: str, entry: dict[str, Any]
+    ) -> Response:
+        """The replay rules of the IETF Idempotency-Key draft (ADR 0003)."""
+        if known.fingerprint != body_fingerprint:
+            entry["status"] = 422
+            return problem(
+                422,
+                "Unprocessable Content",
+                detail="This Idempotency-Key was used with a different request body.",
+            )
+        if known.response is None:
+            entry["status"] = 409
+            return problem(
+                409, "Conflict", detail="The first request with this key is still in progress."
+            )
+        entry["status"] = 201
+        return JSONResponse(known.response, status_code=201)
+
+    @app.post("/_control/fault-rules", status_code=201)
+    def add_fault_rule(rule: FaultRuleRequest) -> FaultRuleRequest:
+        fault_rules.rules.append(FaultRule(rule.externalReference, rule.times, rule.delaySeconds))
+        return rule
+
     @app.get("/_control/requests")
-    def requests() -> list[dict[str, Any]]:
-        return journal.requests
+    def requests(externalReference: str | None = None) -> list[dict[str, Any]]:
+        return [
+            entry
+            for entry in journal.requests
+            if externalReference is None or entry["externalReference"] == externalReference
+        ]
 
     @app.get("/_control/fulfilment-orders")
     def fulfilment_orders(externalReference: str | None = None) -> list[dict[str, str]]:
@@ -114,6 +221,8 @@ def create_app(spec_path: Path, token: str) -> FastAPI:
     @app.delete("/_control", status_code=204)
     def reset() -> None:
         journal.reset()
+        keys.clear()
+        fault_rules.rules.clear()
 
     @app.get("/health")
     def health() -> dict[str, str]:
