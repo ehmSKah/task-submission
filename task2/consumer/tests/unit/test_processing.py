@@ -1,29 +1,35 @@
-"""Processing one delivery (ADR 0004, 0006): store, hand over, record, or dead-letter an invalid
-event, and report the outcome."""
+"""Processing one delivery (ADR 0002, 0004, 0006): store, hand over, record, skip a duplicate, or
+dead-letter an invalid or conflicting event, and report the outcome."""
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 import pytest
+from structlog.testing import capture_logs
 
 from order_consumer.application.ports import (
+    AlreadyStored,
     DeadLetter,
     DeadLetterReason,
     Delivery,
+    EventIdTaken,
     HandoverResult,
     HandoverStatus,
+    ReceivedEvent,
+    Stored,
 )
 from order_consumer.application.processing import OrderProcessor, Outcome
 from order_consumer.domain.downstream import DownstreamRequest
 from order_consumer.domain.event import OrderPlacedReader
-from order_consumer.domain.order import Order
+from order_consumer.domain.order import Order, to_order
 from tests.support.events import EVENT_SCHEMA, order_placed_envelope, order_placed_event
 
 ORDER_ID = UUID("3f1c2a9e-8b4d-4c1e-9f2a-6d7e8f9a0b1c")
 EVENT_ID = UUID("7d2e1f3a-4b5c-4d6e-8f9a-0b1c2d3e4f5a")
+RE_EMITTED_EVENT_ID = UUID("9b04c6d8-2e1f-4a3b-8c5d-6e7f8a9b0c1d")
 
 reader = OrderPlacedReader.from_file(EVENT_SCHEMA)
 
@@ -48,20 +54,40 @@ class StoredOrder:
     fulfilment_order_id: str | None = None
 
 
+@dataclass(frozen=True)
+class ProcessedEvent:
+    order_id: UUID
+    outcome: str
+    received: ReceivedEvent
+
+
 @dataclass
 class FakeOrderStore:
     orders: dict[UUID, StoredOrder] = field(default_factory=dict)
+    processed: dict[UUID, ProcessedEvent] = field(default_factory=dict)
     stored: list[UUID] = field(default_factory=list)
 
-    def store_new(self, order: Order, event_id: UUID) -> bool:
-        if order.order_id in self.orders:
-            return False
-        self.orders[order.order_id] = StoredOrder(order=order, first_event_id=event_id)
+    def store_new(
+        self, order: Order, event: ReceivedEvent
+    ) -> Stored | AlreadyStored | EventIdTaken:
+        existing = self.orders.get(order.order_id)
+        recorded = self.processed.get(event.event_id)
+        if existing is not None:
+            return AlreadyStored(
+                order=existing.order,
+                first_event_id=existing.first_event_id,
+                handover_status=HandoverStatus(existing.handover_status),
+                event_recorded=recorded is not None and recorded.order_id == order.order_id,
+            )
+        if recorded is not None:
+            return EventIdTaken()
+        self.orders[order.order_id] = StoredOrder(order=order, first_event_id=event.event_id)
+        self.processed[event.event_id] = ProcessedEvent(order.order_id, "accepted", event)
         self.stored.append(order.order_id)
-        return True
+        return Stored()
 
-    def handover_status(self, order_id: UUID) -> HandoverStatus:
-        return HandoverStatus(self.orders[order_id].handover_status)
+    def record_duplicate(self, order_id: UUID, event: ReceivedEvent) -> None:
+        self.processed.setdefault(event.event_id, ProcessedEvent(order_id, "duplicate", event))
 
     def record_handover(self, order_id: UUID, fulfilment_order_id: str) -> None:
         stored = self.orders[order_id]
@@ -120,6 +146,9 @@ def test_a_valid_event_is_stored_handed_over_and_recorded() -> None:
     assert stored.first_event_id == EVENT_ID
     assert stored.handover_status == "handed_over"
     assert stored.fulfilment_order_id == "ful-1"
+    assert harness.store.processed[EVENT_ID] == ProcessedEvent(
+        ORDER_ID, "accepted", ReceivedEvent(EVENT_ID, "orders", 1, 42)
+    )
 
 
 def test_the_order_is_stored_before_it_is_handed_over() -> None:
@@ -158,11 +187,108 @@ def test_a_redelivery_of_an_order_already_handed_over_is_skipped() -> None:
     harness = ProcessorWithFakes()
     harness.process()
 
-    outcome = harness.process()
+    with capture_logs() as logs:
+        outcome = harness.process()
 
     assert outcome is Outcome.DUPLICATE
     assert len(harness.fulfilment.requests) == 1, "no second handover"
     assert harness.store.orders[ORDER_ID].fulfilment_order_id == "ful-1"
+    assert [entry["duplicate"] for entry in logs if entry["event"] == "order.duplicate"] == [
+        "redelivery"
+    ]
+
+
+def test_a_re_emission_of_an_order_already_handed_over_is_skipped_and_recorded() -> None:
+    harness = ProcessorWithFakes()
+    harness.process()
+
+    with capture_logs() as logs:
+        outcome = harness.process(order_placed_event(ORDER_ID, RE_EMITTED_EVENT_ID))
+
+    assert outcome is Outcome.DUPLICATE
+    assert len(harness.fulfilment.requests) == 1, "no second handover"
+    assert harness.store.stored == [ORDER_ID]
+    assert harness.store.processed[RE_EMITTED_EVENT_ID].outcome == "duplicate"
+    assert [entry["duplicate"] for entry in logs if entry["event"] == "order.duplicate"] == [
+        "re-emission"
+    ]
+
+
+CONFLICTING_LINES = [{"sku": "KNE-ESC-0042", "quantity": 3, "unitPrice": 1999}]
+
+
+def test_a_conflicting_event_is_dead_lettered_and_the_first_version_stays() -> None:
+    harness = ProcessorWithFakes()
+    harness.process()
+    first_version = harness.store.orders[ORDER_ID].order
+    value = order_placed_event(ORDER_ID, RE_EMITTED_EVENT_ID, lines=CONFLICTING_LINES, total=5997)
+
+    outcome = harness.process(value)
+
+    assert outcome is Outcome.DEAD_LETTERED
+    assert harness.store.orders[ORDER_ID].order == first_version
+    assert len(harness.fulfilment.requests) == 1, "no handover of the conflicting version"
+    assert RE_EMITTED_EVENT_ID not in harness.store.processed
+    [dead_letter] = harness.dead_letters.written
+    assert dead_letter.delivery == delivery(value)
+    assert dead_letter.reason is DeadLetterReason.CONFLICT
+    assert dead_letter.attempts == 0
+    assert (dead_letter.event_id, dead_letter.order_id) == (RE_EMITTED_EVENT_ID, ORDER_ID)
+    assert json.loads(dead_letter.detail) == {
+        "acceptedEventId": str(EVENT_ID),
+        "fields": ["/data/lines", "/data/total"],
+    }
+
+
+def test_an_event_redelivered_with_other_content_is_dead_lettered_as_a_conflict() -> None:
+    harness = ProcessorWithFakes()
+    harness.process()
+
+    outcome = harness.process(order_placed_event(ORDER_ID, EVENT_ID, currency="GBP"))
+
+    assert outcome is Outcome.DEAD_LETTERED
+    [dead_letter] = harness.dead_letters.written
+    assert dead_letter.reason is DeadLetterReason.CONFLICT
+    assert json.loads(dead_letter.detail)["fields"] == ["/data/currency"]
+    assert harness.store.processed[EVENT_ID].outcome == "accepted"
+
+
+def test_a_conflicting_event_is_not_handed_over_while_the_first_handover_is_unfinished() -> None:
+    harness = ProcessorWithFakes()
+    harness.store.store_new(
+        to_order(order_placed_envelope(ORDER_ID, EVENT_ID)["data"]),
+        ReceivedEvent(EVENT_ID, "orders", 1, 41),
+    )
+
+    outcome = harness.process(
+        order_placed_event(ORDER_ID, RE_EMITTED_EVENT_ID, lines=CONFLICTING_LINES, total=5997)
+    )
+
+    assert outcome is Outcome.DEAD_LETTERED
+    assert harness.fulfilment.requests == []
+    assert harness.store.orders[ORDER_ID].handover_status == "awaiting_handover"
+    [dead_letter] = harness.dead_letters.written
+    assert dead_letter.reason is DeadLetterReason.CONFLICT
+
+
+def test_an_event_id_already_recorded_for_another_order_is_a_conflict() -> None:
+    harness = ProcessorWithFakes()
+    harness.process()
+    other_order_id = UUID("5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d")
+    value = order_placed_event(other_order_id, EVENT_ID)
+
+    outcome = harness.processor.process(replace(delivery(value), key=str(other_order_id).encode()))
+
+    assert outcome is Outcome.DEAD_LETTERED
+    assert other_order_id not in harness.store.orders
+    assert len(harness.fulfilment.requests) == 1, "only the first order's handover"
+    [dead_letter] = harness.dead_letters.written
+    assert dead_letter.reason is DeadLetterReason.CONFLICT
+    assert dead_letter.order_id == other_order_id
+    assert json.loads(dead_letter.detail) == {
+        "acceptedEventId": str(EVENT_ID),
+        "fields": ["/data/orderId"],
+    }
 
 
 def test_an_invalid_event_is_dead_lettered_and_neither_stored_nor_handed_over() -> None:

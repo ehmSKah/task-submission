@@ -36,15 +36,49 @@ class HandoverStatus(Enum):
     HANDOVER_FAILED = "handover_failed"
 
 
-class OrderStore(Protocol):
-    def store_new(self, order: Order, event_id: UUID) -> bool:
-        """Stores the order and its lines, awaiting handover, in one transaction.
+@dataclass(frozen=True, slots=True)
+class ReceivedEvent:
+    """An event id and where the event was read: what `processed_events` records (ADR 0002)."""
 
-        Returns False, writing nothing, when an order with this id is already stored.
+    event_id: UUID
+    topic: str
+    partition: int
+    offset: int
+
+
+@dataclass(frozen=True, slots=True)
+class Stored:
+    """The order was new: it is now stored, awaiting handover, and the event recorded."""
+
+
+@dataclass(frozen=True, slots=True)
+class AlreadyStored:
+    """An order with this id was already stored: its first accepted version."""
+
+    order: Order
+    first_event_id: UUID
+    handover_status: HandoverStatus
+    event_recorded: bool  # the incoming event id is already recorded for this order
+
+
+@dataclass(frozen=True, slots=True)
+class EventIdTaken:
+    """The incoming event id is already recorded for another order: nothing was stored."""
+
+
+class OrderStore(Protocol):
+    def store_new(
+        self, order: Order, event: ReceivedEvent
+    ) -> Stored | AlreadyStored | EventIdTaken:
+        """Stores the order, its lines and the event as accepted, in one transaction.
+
+        Writes nothing when an order with this id is already stored, or when the event id is
+        already recorded for another order. Of two consumers racing on one order, one stores it
+        and the other gets the stored version.
         """
 
-    def handover_status(self, order_id: UUID) -> HandoverStatus:
-        """The handover status of a stored order."""
+    def record_duplicate(self, order_id: UUID, event: ReceivedEvent) -> None:
+        """Records the event as a duplicate of the order, unless its id is already recorded."""
 
     def record_handover(self, order_id: UUID, fulfilment_order_id: str) -> None:
         """Marks the order as handed over to the fulfilment service."""
@@ -57,6 +91,7 @@ class FulfilmentClient(Protocol):
 
 class DeadLetterReason(Enum):
     INVALID = "invalid"
+    CONFLICT = "conflict"
 
 
 @dataclass(frozen=True, slots=True)

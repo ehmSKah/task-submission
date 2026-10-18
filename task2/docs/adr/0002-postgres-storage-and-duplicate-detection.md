@@ -24,7 +24,7 @@ An idempotency key based on the event id alone catches S1 but not S2: order `3f1
 |---|---|
 | Same content (redelivery or re-emission) | **Skip and log** (`order.duplicate`, naming redelivery or re-emission). No new effects; the offset is committed. |
 | Different content, new event id (a conflicting event) | **First wins.** The conflicting event goes to the dead-letter topic as **permanent** (reason `conflict`, never retried), with the fields that differ. |
-| Different content, same event id (a producer bug) | The same as a conflicting event. |
+| Different content, same event id (a producer bug) | The same as a conflicting event. This includes an event id already recorded for **another order**: nothing is stored, and the differing field is the order id. |
 
 - **"Skip" means no *new* effects, not "do nothing".** If the original order's handover to the downstream never completed, a duplicate must complete it rather than skip it. How unfinished handovers are recognised and completed is decided with the dual-write strategy.
 

@@ -1,5 +1,5 @@
-"""Processing one delivery: read it, then store, hand over and record (ADR 0004), or set an invalid
-event aside as a dead letter (ADR 0006).
+"""Processing one delivery: read it, then store, hand over and record (ADR 0004), skip a duplicate
+(ADR 0002), or set an invalid or conflicting event aside as a dead letter (ADR 0006).
 
 Returns an Outcome and never commits: only the poll loop commits, according to the outcome
 (ADR 0005).
@@ -7,21 +7,26 @@ Returns an Outcome and never commits: only the poll loop commits, according to t
 
 import json
 from enum import Enum
+from uuid import UUID
 
 import structlog
 
 from order_consumer.application.ports import (
+    AlreadyStored,
     DeadLetter,
     DeadLetterReason,
     DeadLetterSink,
     Delivery,
+    EventIdTaken,
     FulfilmentClient,
     HandoverStatus,
     OrderStore,
+    ReceivedEvent,
+    Stored,
 )
 from order_consumer.domain.downstream import to_downstream_request
 from order_consumer.domain.event import OrderPlacedReader
-from order_consumer.domain.order import to_order
+from order_consumer.domain.order import differing_fields, to_order
 from order_consumer.domain.validation import InvalidEvent
 
 log = structlog.get_logger()
@@ -63,15 +68,36 @@ class OrderProcessor:
             ):
                 log.info("event.received")
 
-                if self._store.store_new(order, event.event_id):
-                    log.info("order.accepted")
-                else:
-                    # Already stored (ADR 0004): complete an unfinished handover, nothing more.
-                    status = self._store.handover_status(order.order_id)
-                    if status is HandoverStatus.HANDED_OVER:
-                        log.info("order.duplicate")
-                        return Outcome.DUPLICATE
-                    log.info("handover.unfinished", handover_status=status.value)
+                received = ReceivedEvent(
+                    event.event_id, delivery.topic, delivery.partition, delivery.offset
+                )
+                match self._store.store_new(order, received):
+                    case Stored():
+                        log.info("order.accepted")
+                    case AlreadyStored() as accepted:
+                        # Compared before anything else: a conflicting event is never handed over,
+                        # not even to complete the first version's unfinished handover.
+                        if fields := differing_fields(accepted.order, order):
+                            return self._set_aside_conflict(
+                                delivery, received, order.order_id, accepted.first_event_id, fields
+                            )
+                        duplicate = "redelivery" if accepted.event_recorded else "re-emission"
+                        if not accepted.event_recorded:
+                            self._store.record_duplicate(order.order_id, received)
+                        # Skip, or complete an unfinished handover, nothing more (ADR 0004).
+                        if accepted.handover_status is HandoverStatus.HANDED_OVER:
+                            log.info("order.duplicate", duplicate=duplicate)
+                            return Outcome.DUPLICATE
+                        log.info(
+                            "handover.unfinished",
+                            handover_status=accepted.handover_status.value,
+                            duplicate=duplicate,
+                        )
+                    case EventIdTaken():
+                        # The same event id with other content (ADR 0002): here another order.
+                        return self._set_aside_conflict(
+                            delivery, received, order.order_id, event.event_id, ["/data/orderId"]
+                        )
 
                 result = self._fulfilment.hand_over(to_downstream_request(order))
                 self._store.record_handover(order.order_id, result.fulfilment_order_id)
@@ -101,6 +127,33 @@ class OrderProcessor:
             )
             log.warning("dead_letter.written", reason=DeadLetterReason.INVALID.value)
             return Outcome.DEAD_LETTERED
+
+    def _set_aside_conflict(
+        self,
+        delivery: Delivery,
+        received: ReceivedEvent,
+        order_id: UUID,
+        accepted_event_id: UUID,
+        fields: list[str],
+    ) -> Outcome:
+        """Conflicting is permanent (ADR 0002): the first accepted version stays, the event is not
+        recorded, and it is dead-lettered at once with the fields that differ."""
+        log.warning("order.conflict", fields=fields, accepted_event_id=str(accepted_event_id))
+        self._dead_letters.write(
+            DeadLetter(
+                delivery=delivery,
+                reason=DeadLetterReason.CONFLICT,
+                detail=json.dumps(
+                    {"acceptedEventId": str(accepted_event_id), "fields": fields},
+                    separators=(",", ":"),
+                ),
+                attempts=0,
+                event_id=received.event_id,
+                order_id=order_id,
+            )
+        )
+        log.warning("dead_letter.written", reason=DeadLetterReason.CONFLICT.value)
+        return Outcome.DEAD_LETTERED
 
 
 def _invalid_detail(invalid: InvalidEvent) -> str:
