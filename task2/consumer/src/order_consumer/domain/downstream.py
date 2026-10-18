@@ -34,7 +34,9 @@ def to_downstream_request(order: Order) -> DownstreamRequest:
                     "unitPrice": amount(line.unit_price),
                     "lineTotal": amount(line.line_total),
                 }
-                for line in order.lines
+                # In SKU order, so the same order always gives the same body: the fulfilment
+                # service compares a repeated request with the first by its body (ADR 0003).
+                for line in sorted(order.lines, key=lambda line: line.sku)
             ],
             "total": amount(order.total),
         },

@@ -74,7 +74,7 @@ producer's        our own        downstream's
 contract          model          contract
 ```
 1. **Event v1 → Order.** Timestamps are normalised to UTC. Whole numbers written with a fraction (`2.0`, which JSON Schema accepts as an integer) become integers. Line totals and the item count are derived. Unknown fields are dropped. The event id, event time and trace id are kept next to the order as processing metadata, not as order fields.
-2. **Order → Downstream request.** The downstream has its own shape, for example money as a decimal string with its currency and the order id as an external reference. The exact contract is decided with the downstream API.
+2. **Order → Downstream request.** The downstream has its own shape, for example money as a decimal string with its currency and the order id as an external reference. The exact contract is decided with the downstream API. Lines are sent in SKU order, so two events describing the same order (ADR 0002) give the same request body, which a repeated handover must (ADR 0003).
 
 - **Both mappings are pure functions**, unit-tested without Kafka, a database or HTTP. A change in the producer's schema touches only mapping 1; a change in the downstream touches only mapping 2.
 - **No silent repairs.** Normalisation changes only how a value is represented (time zone, money format). Business values such as SKUs, currencies or a wrong total are never corrected; they make the event invalid. Otherwise the consumer would be deciding business facts on the producer's behalf.

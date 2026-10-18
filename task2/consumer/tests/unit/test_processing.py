@@ -183,6 +183,21 @@ def test_a_redelivery_completes_an_unfinished_handover() -> None:
     assert harness.store.stored == [ORDER_ID], "the order must be stored only once"
 
 
+def test_a_re_emission_listing_the_lines_differently_repeats_the_first_request() -> None:
+    """The fulfilment service compares a repeated request with the first by its body (ADR 0003)."""
+    harness = ProcessorWithFakes()
+    harness.process()
+    harness.store.orders[ORDER_ID].handover_status = "awaiting_handover"
+    harness.store.orders[ORDER_ID].fulfilment_order_id = None
+    lines = order_placed_envelope(ORDER_ID)["data"]["lines"][::-1]
+
+    outcome = harness.process(order_placed_event(ORDER_ID, RE_EMITTED_EVENT_ID, lines=lines))
+
+    assert outcome is Outcome.HANDED_OVER
+    first, repeated = harness.fulfilment.requests
+    assert repeated == first
+
+
 def test_a_redelivery_of_an_order_already_handed_over_is_skipped() -> None:
     harness = ProcessorWithFakes()
     harness.process()
