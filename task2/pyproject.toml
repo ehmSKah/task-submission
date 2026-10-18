@@ -1,0 +1,88 @@
+# The task2 workspace: the order consumer and the fulfilment stub are separate projects (ADR 0005)
+# sharing one lock file and the development tools. Each image installs only its own member.
+[project]
+name = "task2"
+version = "0.1.0"
+requires-python = ">=3.13,<3.14"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["consumer", "fulfilment-stub"]
+
+[tool.uv.sources]
+order-consumer = { workspace = true }
+fulfilment-stub = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "order-consumer",
+    "fulfilment-stub",
+    "pytest>=8.4",
+    "pytest-cov>=7.1",
+    "httpx2>=2.13",  # Starlette's test client (the consumer itself uses httpx)
+    "hypothesis>=6.170",
+    "ruff>=0.13",
+    "mypy>=1.18",
+    "import-linter>=2.5",
+    "types-PyYAML",
+    "types-jsonschema",
+    "respx>=0.22",  # mocks the consumer's HTTP client in unit tests (ADR 0003)
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --import-mode=importlib"
+pythonpath = ["."]
+markers = [
+    "integration: needs the Compose stack (`make up`)",
+    "reliability: kills, stops or scales the stack's consumer containers (`make up`)",
+]
+
+# The coverage gate covers the core only (ADR 0009): adapters are proven by the integration tests.
+[tool.coverage.run]
+branch = true
+source = ["order_consumer.domain", "order_consumer.application"]
+data_file = "build/.coverage"
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["order_consumer", "fulfilment_stub", "tests", "demo"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+mypy_path = ["consumer/src", "fulfilment-stub/src", "."]
+packages = ["order_consumer", "fulfilment_stub", "demo"]
+
+[[tool.mypy.overrides]]
+module = ["confluent_kafka.*", "openapi_core.*"]
+follow_imports = "silent"
+
+[tool.importlinter]
+root_packages = ["order_consumer"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Domain and application know nothing about Kafka, PostgreSQL, HTTP or adapters"
+type = "forbidden"
+source_modules = ["order_consumer.domain", "order_consumer.application"]
+forbidden_modules = ["order_consumer.adapters", "confluent_kafka", "psycopg", "httpx"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Hexagonal layers"
+type = "layers"
+layers = ["order_consumer.adapters", "order_consumer.application", "order_consumer.domain"]
