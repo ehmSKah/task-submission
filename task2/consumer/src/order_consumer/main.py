@@ -2,6 +2,7 @@
 
 import signal
 import threading
+from collections.abc import Callable
 
 import structlog
 
@@ -9,6 +10,7 @@ from order_consumer import logs
 from order_consumer.adapters.inbound.poll_loop import PollLoop, create_consumer
 from order_consumer.adapters.outbound.fulfilment_http import HttpFulfilmentClient
 from order_consumer.adapters.outbound.postgres_store import PostgresOrderStore
+from order_consumer.application.ports import FulfilmentClient, OrderStore
 from order_consumer.application.processing import OrderProcessor
 from order_consumer.config import ConfigurationError, Settings
 
@@ -18,14 +20,24 @@ EXIT_CLEAN = 0
 EXIT_CONFIGURATION = 2
 
 
-def build(settings: Settings, stop: threading.Event) -> PollLoop:
-    """Wires the real adapters; the in-process integration tests use this too."""
+def _as_is[T](adapter: T) -> T:
+    return adapter
+
+
+def build(
+    settings: Settings,
+    stop: threading.Event,
+    wrap_store: Callable[[OrderStore], OrderStore] = _as_is,
+    wrap_fulfilment: Callable[[FulfilmentClient], FulfilmentClient] = _as_is,
+) -> PollLoop:
+    """Wires the real adapters; the in-process integration tests use this too, wrapping adapters
+    to simulate a crash between two steps (ADR 0007)."""
     store = PostgresOrderStore(settings.database_url)
     fulfilment = HttpFulfilmentClient(settings.fulfilment_base_url, settings.fulfilment_token)
     return PollLoop(
         create_consumer(settings),
         settings.kafka_topic,
-        OrderProcessor(store, fulfilment),
+        OrderProcessor(wrap_store(store), wrap_fulfilment(fulfilment)),
         stop,
         on_close=(store.close, fulfilment.close),
     )

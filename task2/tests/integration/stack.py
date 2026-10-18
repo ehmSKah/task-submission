@@ -93,6 +93,16 @@ def fulfilment_orders(order_id: UUID) -> list[dict[str, str]]:
     return result
 
 
+def handover_requests(order_id: UUID) -> list[int | None]:
+    """The status the stub answered each handover request for the order with, in arrival order;
+    `None` while a request is still in progress."""
+    response = httpx.get(
+        f"{STUB_URL}/_control/requests", params={"externalReference": str(order_id)}
+    )
+    response.raise_for_status()
+    return [entry["status"] for entry in response.json()]
+
+
 def lag(consumers: ConsumerGroup) -> dict[int, int]:
     """Per partition: how many records the group has not yet committed."""
     topic = consumers.topic
