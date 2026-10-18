@@ -14,10 +14,7 @@ from order_consumer.domain.order import Order
 @dataclass(frozen=True, slots=True)
 class DownstreamRequest:
     idempotency_key: str  # the order id (ADR 0002)
-    payload: dict[str, Any]
-
-    def as_payload(self) -> dict[str, Any]:
-        return self.payload
+    payload: dict[str, Any]  # the JSON body, in the fulfilment contract's shape
 
 
 def to_downstream_request(order: Order) -> DownstreamRequest:

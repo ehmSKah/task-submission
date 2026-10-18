@@ -29,7 +29,7 @@ class HttpFulfilmentClient:
     def hand_over(self, request: DownstreamRequest) -> HandoverResult:
         response = self._client.post(
             "/fulfilment-orders",
-            json=request.as_payload(),
+            json=request.payload,
             headers={"Idempotency-Key": request.idempotency_key},
         )
         if response.status_code != httpx.codes.CREATED:

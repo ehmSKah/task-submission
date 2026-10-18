@@ -23,7 +23,7 @@ def test_request_follows_the_fulfilment_contract() -> None:
         order("EUR", (OrderLine(sku="KNE-ESC-0042", quantity=2, unit_price=1999),), total=3998)
     )
 
-    assert request.as_payload() == {
+    assert request.payload == {
         "externalReference": "3f1c2a9e-8b4d-4c1e-9f2a-6d7e8f9a0b1c",
         "customerReference": "a9e2b7c4-1d3f-4e5a-8b6c-7d8e9f0a1b2c",
         "orderedAt": "2026-10-17T09:12:03Z",
@@ -44,7 +44,7 @@ def test_whole_amounts_keep_their_decimals() -> None:
         order("USD", (OrderLine(sku="KNE-ELV-0007", quantity=1, unit_price=500),), total=500)
     )
 
-    assert request.as_payload()["total"] == {"amount": "5.00", "currency": "USD"}
+    assert request.payload["total"] == {"amount": "5.00", "currency": "USD"}
 
 
 def test_currencies_without_minor_units_have_no_decimals() -> None:
@@ -52,7 +52,7 @@ def test_currencies_without_minor_units_have_no_decimals() -> None:
         order("JPY", (OrderLine(sku="KNE-ELV-0007", quantity=3, unit_price=1500),), total=4500)
     )
 
-    payload = request.as_payload()
+    payload = request.payload
     assert payload["lines"][0]["unitPrice"] == {"amount": "1500", "currency": "JPY"}
     assert payload["total"] == {"amount": "4500", "currency": "JPY"}
 
