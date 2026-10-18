@@ -56,6 +56,9 @@ def create_consumer(settings: Settings) -> Consumer:
             # A handover's retries keep the message in hand without polling; the start-up check
             # keeps them within half of this (ADR 0006).
             "max.poll.interval.ms": settings.kafka_max_poll_interval_ms,
+            # Dynamic membership: close() leaves the group at once, and a member that stops
+            # answering is evicted after this long (ADR 0007).
+            "session.timeout.ms": settings.kafka_session_timeout_ms,
             "partition.assignment.strategy": "cooperative-sticky",
             "logger": logging.getLogger("librdkafka"),
         }
