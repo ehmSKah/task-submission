@@ -105,8 +105,8 @@ An outage is not a property of the message. Without a guard, a 30-minute fulfilm
 - **Dead letters are at-least-once.** A crash after the confirmation but before the commit writes the same dead letter twice. Replaying both is harmless, because processing is idempotent.
 
 **Replay**
-- **A small command:** `make replay ARGS="--reason retries-exhausted"`, filtering by reason, order id or time (`--reason` and `--order-id` repeatable, `--since` and `--until` on when the dead letter was written). It runs in a one-off consumer container (`python -m order_consumer.replay`).
-- **Dry run by default:** it lists each selected dead letter (position, reason with the invalid layer, order id, when it was written) and whether it would be replayed or held, and why; `--execute` does it, and exits with 1 if a record wasn't confirmed by the broker.
+- **A small command:** `make replay ARGS="--reason retries-exhausted"`, filtering by reason, order id or time (`--reason` and `--order-id` repeatable, `--since` and `--until` on when the dead letter was written, its Kafka timestamp). It runs in a one-off consumer container (`python -m order_consumer.replay`).
+- **Dry run by default:** it lists each selected dead letter (position, reason with the invalid layer, order id, when it was written) and whether it would be replayed or skipped, and why, as plain lines for a person rather than the services' JSON log lines (ADR 0008); `--execute` does it, and exits with 1 if a record wasn't confirmed by the broker.
 - **It republishes to `orders`:** value, key and original headers, without the `dlt.*` headers and with a `replayed-from` header (`orders.dlt/1/42`), replacing the `replayed-from` of an earlier replay. Records go out in each partition's order through an idempotent producer, so one order's dead letters are replayed in the order they were written.
 - **It reads with its own consumer group (`order-replay`) and never commits.** Each run reads every dead letter on the topic when it starts. A dead letter stays a work item until its retention ends, and the filters, not offsets, choose what a run takes; running it again replays again, which is harmless.
 - **Replayed events go through normal processing.** A `handover_failed` order completes, an order already handed over is skipped, and a duplicate dead letter does nothing.
@@ -148,7 +148,7 @@ An outage is not a property of the message. Without a guard, a 30-minute fulfilm
 - **Replay.**
   - *A documented procedure with Kafka's console tools:* no code, but fiddly with headers and filters, and hard for a reviewer to try.
   - *Replaying straight into processing:* a second entry point, with replayed and live events interleaving.
-  - *Committing the replay group's offsets*, so a run sees only dead letters written since the last: a filtered run would move past the dead letters it left out (another reason, a held invalid event), because a partition's offset can't skip records.
+  - *Committing the replay group's offsets*, so a run sees only dead letters written since the last: a filtered run would move past the dead letters it left out (another reason, a skipped invalid event), because a partition's offset can't skip records.
   - *By hand in kafka-ui:* fine for one dead letter, not for fifty.
 
 ## Consequences

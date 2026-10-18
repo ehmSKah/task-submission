@@ -33,6 +33,8 @@ The **Compose stack is the deliverable**, so it is also what the tests run again
 | `test_duplicate_events.py` | redelivery, re-emission, a conflicting event (dead letter), two consumers racing on one order; in every case exactly one fulfilment order |
 | `test_downstream_failures.py` | transient failures then success; retries exhausted → failed handover, dead letter, replay, handed over; rejected → dead letter; timeout → `409` → replay; wrong token → paused without dead letters; the circuit opening and closing |
 
+Replay has a file of its own, `test_replay.py`: a `retries-exhausted` dead letter replayed once the fault is cleared ends handed over in its trace; a dry run changes nothing; a second replay creates no second fulfilment order; invalid and conflicting dead letters are skipped unless forced.
+
 The README maps each assignment requirement to its tests.
 
 **Determinism**

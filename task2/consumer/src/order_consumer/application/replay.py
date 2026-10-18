@@ -106,7 +106,7 @@ class Replay:
 
 
 @dataclass(frozen=True, slots=True)
-class Held:
+class Skipped:
     """Selected, but not replayed."""
 
     why: str
@@ -131,13 +131,13 @@ def _left_out(name: str) -> bool:
     return lowered.startswith(FAILURE_HEADER_PREFIX) or lowered == REPLAYED_FROM
 
 
-def decide(dead_letter: DeadLetterRecord, selection: Selection) -> Replay | Held | None:
+def decide(dead_letter: DeadLetterRecord, selection: Selection) -> Replay | Skipped | None:
     """None when the selection leaves the dead letter out."""
     if not selection.selects(dead_letter):
         return None
     if dead_letter.reason is None:
-        return Held("no known dlt.reason: not a dead letter of this consumer")
+        return Skipped("no known dlt.reason: not a dead letter of this consumer")
     if _fails_again(dead_letter) and not selection.force:
-        return Held("unchanged bytes fail again; --force replays it")
+        return Skipped("unchanged bytes fail again; --force replays it")
     original = tuple((name, value) for name, value in dead_letter.headers if not _left_out(name))
     return Replay(headers=(*original, (REPLAYED_FROM, dead_letter.position.encode())))

@@ -19,7 +19,7 @@ from uuid import UUID
 from order_consumer.adapters.inbound.dead_letter_reader import read_dead_letters
 from order_consumer.adapters.outbound.kafka_republisher import KafkaRepublisher
 from order_consumer.application.ports import DeadLetterReason
-from order_consumer.application.replay import DeadLetterRecord, Held, Replay, Selection, decide
+from order_consumer.application.replay import DeadLetterRecord, Replay, Selection, Skipped, decide
 from order_consumer.config import ConfigurationError
 
 EXIT_DONE = 0
@@ -43,7 +43,6 @@ class ReplaySettings:
             kafka_bootstrap_servers=bootstrap,
             kafka_topic=env.get("KAFKA_TOPIC", "orders"),
             kafka_dead_letter_topic=env.get("KAFKA_DEAD_LETTER_TOPIC", "orders.dlt"),
-            kafka_group_id=env.get("REPLAY_GROUP_ID", "order-replay"),
         )
 
 
@@ -53,7 +52,7 @@ def _moment(value: str) -> datetime:
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
 
-def _arguments() -> argparse.ArgumentParser:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="replay",
         description="Republish dead letters to the order topic once their cause is fixed. "
@@ -100,7 +99,7 @@ def _line(dead_letter: DeadLetterRecord, status: str) -> str:
 
 
 def run(argv: Sequence[str], settings: ReplaySettings, out: TextIO = sys.stdout) -> int:
-    arguments = _arguments().parse_args(argv)
+    arguments = _parser().parse_args(argv)
     selection = Selection(
         reasons=frozenset(DeadLetterReason(reason) for reason in arguments.reason),
         order_ids=frozenset(arguments.order_id),
@@ -108,7 +107,7 @@ def run(argv: Sequence[str], settings: ReplaySettings, out: TextIO = sys.stdout)
         until=arguments.until,
         force=arguments.force,
     )
-    decided: list[tuple[DeadLetterRecord, Replay | Held]] = []
+    decided: list[tuple[DeadLetterRecord, Replay | Skipped]] = []
     for dead_letter in read_dead_letters(
         settings.kafka_bootstrap_servers,
         settings.kafka_dead_letter_topic,
@@ -122,7 +121,7 @@ def run(argv: Sequence[str], settings: ReplaySettings, out: TextIO = sys.stdout)
         for dead_letter, decision in decided
         if isinstance(decision, Replay)
     ]
-    held = len(decided) - len(replays)
+    skipped = len(decided) - len(replays)
 
     failed: dict[str, str] = {}
     if arguments.execute and replays:
@@ -130,8 +129,8 @@ def run(argv: Sequence[str], settings: ReplaySettings, out: TextIO = sys.stdout)
         failed = republisher.republish(replays)
 
     for dead_letter, decision in decided:
-        if isinstance(decision, Held):
-            status = f"held: {decision.why}"
+        if isinstance(decision, Skipped):
+            status = f"skipped: {decision.why}"
         elif not arguments.execute:
             status = "would replay"
         elif dead_letter.position in failed:
@@ -142,12 +141,10 @@ def run(argv: Sequence[str], settings: ReplaySettings, out: TextIO = sys.stdout)
 
     topic = settings.kafka_topic
     if not arguments.execute:
-        print(
-            f"dry run: {len(replays)} to replay, {held} held; --execute publishes them to {topic}",
-            file=out,
-        )
+        counts = f"{len(replays)} to replay, {skipped} skipped"
+        print(f"dry run: {counts}; --execute publishes them to {topic}", file=out)
         return EXIT_DONE
-    summary = f"replayed {len(replays) - len(failed)} to {topic}, {held} held"
+    summary = f"replayed {len(replays) - len(failed)} to {topic}, {skipped} skipped"
     print(f"{summary}, {len(failed)} failed" if failed else summary, file=out)
     return EXIT_FAILED if failed else EXIT_DONE
 

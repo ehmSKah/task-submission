@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from order_consumer.application.ports import DeadLetterReason
-from order_consumer.application.replay import DeadLetterRecord, Held, Replay, Selection, decide
+from order_consumer.application.replay import DeadLetterRecord, Replay, Selection, Skipped, decide
 
 ORDER_ID = UUID("7d2e1f3a-0000-4000-8000-000000000001")
 WRITTEN_AT = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
@@ -101,21 +101,21 @@ def test_dead_letters_a_fix_on_our_side_can_resolve_are_replayed(
     ],
     ids=["unreadable", "not-a-cloudevent", "schema", "business-rule", "no-layer", "conflict"],
 )
-def test_dead_letters_only_a_corrected_event_resolves_are_held_unless_forced(
+def test_dead_letters_only_a_corrected_event_resolves_are_skipped_unless_forced(
     unchanged_fails_again: DeadLetterRecord,
 ) -> None:
-    held = decide(unchanged_fails_again, Selection())
+    skipped = decide(unchanged_fails_again, Selection())
     forced = decide(unchanged_fails_again, Selection(force=True))
 
-    assert held == Held("unchanged bytes fail again; --force replays it")
+    assert skipped == Skipped("unchanged bytes fail again; --force replays it")
     assert isinstance(forced, Replay)
 
 
 @pytest.mark.parametrize("reason", ["", "retried-too-often"])
-def test_a_record_without_a_known_reason_is_held_even_when_forced(reason: str) -> None:
+def test_a_record_without_a_known_reason_is_skipped_even_when_forced(reason: str) -> None:
     decision = decide(dead_letter(reason), Selection(force=True))
 
-    assert decision == Held("no known dlt.reason: not a dead letter of this consumer")
+    assert decision == Skipped("no known dlt.reason: not a dead letter of this consumer")
 
 
 def test_a_reason_filter_leaves_out_dead_letters_of_other_reasons() -> None:
@@ -140,7 +140,7 @@ def test_an_order_filter_matches_the_key_when_the_order_id_could_not_be_read() -
 
     decision = decide(keyed, Selection(order_ids=frozenset({ORDER_ID})))
 
-    assert isinstance(decision, Held), "selected, and held as an invalid event"
+    assert isinstance(decision, Skipped), "selected, and skipped as an invalid event"
 
 
 def test_a_time_filter_selects_dead_letters_written_from_since_up_to_until() -> None:

@@ -146,7 +146,7 @@ def test_a_dry_run_lists_what_it_would_replay_and_changes_nothing(
     line = line_for(lines, order_id)
     assert "retries-exhausted" in line and line.endswith("would replay")
     assert lines[-1] == (
-        f"dry run: 1 to replay, 0 held; --execute publishes them to {settings.kafka_topic}"
+        f"dry run: 1 to replay, 0 skipped; --execute publishes them to {settings.kafka_topic}"
     )
     assert len(records(settings.kafka_topic)) == 1, "nothing republished"
     stored = stored_order(order_id)
@@ -175,7 +175,7 @@ def test_replaying_the_same_dead_letter_twice_causes_no_second_fulfilment_order(
     assert handover_statuses(order_id) == [503] * 5 + [201], "the second replay is skipped"
 
 
-def test_invalid_and_conflicting_dead_letters_are_held_unless_forced(
+def test_invalid_and_conflicting_dead_letters_are_skipped_unless_forced(
     settings: Settings, replay_settings: replay.ReplaySettings
 ) -> None:
     schema_violation, conflict, unsupported = uuid4(), uuid4(), uuid4()
@@ -200,11 +200,11 @@ def test_invalid_and_conflicting_dead_letters_are_held_unless_forced(
 
         assert_all_committed(group_of(settings))
 
-    held = "held: unchanged bytes fail again; --force replays it"
-    assert line_for(lines, schema_violation).endswith(held)
-    assert line_for(lines, conflict).endswith(held)
+    skipped = "skipped: unchanged bytes fail again; --force replays it"
+    assert line_for(lines, schema_violation).endswith(skipped)
+    assert line_for(lines, conflict).endswith(skipped)
     assert line_for(lines, unsupported).endswith("replayed")
-    assert lines[-1] == f"replayed 1 to {settings.kafka_topic}, 2 held"
+    assert lines[-1] == f"replayed 1 to {settings.kafka_topic}, 2 skipped"
     assert line_for(forced, conflict).endswith("replayed")
     assert [record.key for record in replayed(records(settings.kafka_topic))] == [
         str(unsupported).encode(),
