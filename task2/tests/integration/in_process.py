@@ -21,7 +21,7 @@ class SimulatedCrash(BaseException):
     """A process dying: a BaseException, so no handler for ordinary errors gets to run."""
 
 
-class After:
+class AfterStep:
     """Delegates to the adapter, and calls `then` with the step's name as soon as `step` has
     returned."""
 
@@ -48,15 +48,15 @@ def _crash(step: str) -> None:
 
 
 def crash_after_storing(store: OrderStore) -> OrderStore:
-    return cast(OrderStore, After(store, "store_new", _crash))
+    return cast(OrderStore, AfterStep(store, "store_new", _crash))
 
 
 def crash_after_recording(store: OrderStore) -> OrderStore:
-    return cast(OrderStore, After(store, "record_handover", _crash))
+    return cast(OrderStore, AfterStep(store, "record_handover", _crash))
 
 
 def crash_after_handover(fulfilment: FulfilmentClient) -> FulfilmentClient:
-    return cast(FulfilmentClient, After(fulfilment, "hand_over", _crash))
+    return cast(FulfilmentClient, AfterStep(fulfilment, "hand_over", _crash))
 
 
 class Pause:
@@ -69,7 +69,7 @@ class Pause:
         self._released = threading.Event()
 
     def after_storing(self, store: OrderStore) -> OrderStore:
-        return cast(OrderStore, After(store, "store_new", self._hold))
+        return cast(OrderStore, AfterStep(store, "store_new", self._hold))
 
     def _hold(self, step: str) -> None:
         self._reached.set()

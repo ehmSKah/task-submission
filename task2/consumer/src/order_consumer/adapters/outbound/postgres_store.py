@@ -1,6 +1,7 @@
 """The order store on PostgreSQL, in plain SQL (ADR 0002)."""
 
 from datetime import UTC
+from typing import Literal
 from uuid import UUID
 
 import psycopg
@@ -79,7 +80,12 @@ class PostgresOrderStore:
             self._record(cursor, order_id, event, "duplicate")
 
     @staticmethod
-    def _record(cursor: psycopg.Cursor, order_id: UUID, event: ReceivedEvent, outcome: str) -> bool:
+    def _record(
+        cursor: psycopg.Cursor,
+        order_id: UUID,
+        event: ReceivedEvent,
+        outcome: Literal["accepted", "duplicate"],
+    ) -> bool:
         """Records the event; False, writing nothing, when its id is already recorded."""
         cursor.execute(
             """

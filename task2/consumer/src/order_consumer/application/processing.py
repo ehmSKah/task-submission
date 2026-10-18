@@ -79,7 +79,11 @@ class OrderProcessor:
                         # not even to complete the first version's unfinished handover.
                         if fields := differing_fields(accepted.order, order):
                             return self._set_aside_conflict(
-                                delivery, received, order.order_id, accepted.first_event_id, fields
+                                delivery,
+                                event.event_id,
+                                order.order_id,
+                                accepted.first_event_id,
+                                fields,
                             )
                         duplicate = "redelivery" if accepted.event_recorded else "re-emission"
                         if not accepted.event_recorded:
@@ -96,7 +100,11 @@ class OrderProcessor:
                     case EventIdTaken():
                         # The same event id with other content (ADR 0002): here another order.
                         return self._set_aside_conflict(
-                            delivery, received, order.order_id, event.event_id, ["/data/orderId"]
+                            delivery,
+                            event.event_id,
+                            order.order_id,
+                            event.event_id,
+                            ["/data/orderId"],
                         )
 
                 result = self._fulfilment.hand_over(to_downstream_request(order))
@@ -106,7 +114,7 @@ class OrderProcessor:
 
     def _set_aside(self, delivery: Delivery, invalid: InvalidEvent) -> Outcome:
         """Invalid is permanent (ADR 0001): dead-lettered at once, never retried, nothing
-        stored. A failure to write the dead letter propagates, so nothing is committed."""
+        stored."""
         readable = {
             name: str(value)
             for name, value in (("event_id", invalid.event_id), ("order_id", invalid.order_id))
@@ -115,7 +123,7 @@ class OrderProcessor:
         with structlog.contextvars.bound_contextvars(**readable):
             log.info("event.received")
             log.warning("event.invalid", layer=invalid.layer.value, error_count=invalid.error_count)
-            self._dead_letters.write(
+            return self._write(
                 DeadLetter(
                     delivery=delivery,
                     reason=DeadLetterReason.INVALID,
@@ -125,13 +133,11 @@ class OrderProcessor:
                     order_id=invalid.order_id,
                 )
             )
-            log.warning("dead_letter.written", reason=DeadLetterReason.INVALID.value)
-            return Outcome.DEAD_LETTERED
 
     def _set_aside_conflict(
         self,
         delivery: Delivery,
-        received: ReceivedEvent,
+        event_id: UUID,
         order_id: UUID,
         accepted_event_id: UUID,
         fields: list[str],
@@ -139,7 +145,7 @@ class OrderProcessor:
         """Conflicting is permanent (ADR 0002): the first accepted version stays, the event is not
         recorded, and it is dead-lettered at once with the fields that differ."""
         log.warning("order.conflict", fields=fields, accepted_event_id=str(accepted_event_id))
-        self._dead_letters.write(
+        return self._write(
             DeadLetter(
                 delivery=delivery,
                 reason=DeadLetterReason.CONFLICT,
@@ -148,11 +154,15 @@ class OrderProcessor:
                     separators=(",", ":"),
                 ),
                 attempts=0,
-                event_id=received.event_id,
+                event_id=event_id,
                 order_id=order_id,
             )
         )
-        log.warning("dead_letter.written", reason=DeadLetterReason.CONFLICT.value)
+
+    def _write(self, dead_letter: DeadLetter) -> Outcome:
+        """A failure to write the dead letter propagates, so nothing is committed (ADR 0006)."""
+        self._dead_letters.write(dead_letter)
+        log.warning("dead_letter.written", reason=dead_letter.reason.value)
         return Outcome.DEAD_LETTERED
 
 
