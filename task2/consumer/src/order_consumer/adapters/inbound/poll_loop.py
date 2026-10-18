@@ -35,7 +35,7 @@ def create_consumer(settings: Settings) -> Consumer:
     )
 
 
-def _partitions(partitions: Iterable[TopicPartition]) -> list[str]:
+def _partition_labels(partitions: Iterable[TopicPartition]) -> list[str]:
     return [f"{partition.topic}/{partition.partition}" for partition in partitions]
 
 
@@ -94,10 +94,10 @@ class PollLoop:
             self._consumer.commit(message=message, asynchronous=False)
 
     def _assigned(self, _consumer: Any, partitions: list[TopicPartition]) -> None:
-        log.info("partitions.assigned", partitions=_partitions(partitions))
+        log.info("partitions.assigned", partitions=_partition_labels(partitions))
 
     def _revoked(self, _consumer: Any, partitions: list[TopicPartition]) -> None:
-        log.info("partitions.revoked", partitions=_partitions(partitions))
+        log.info("partitions.revoked", partitions=_partition_labels(partitions))
 
     def _lost(self, _consumer: Any, partitions: list[TopicPartition]) -> None:
-        log.warning("partitions.lost", partitions=_partitions(partitions))
+        log.warning("partitions.lost", partitions=_partition_labels(partitions))
