@@ -31,13 +31,14 @@ Every failure falls into one of **four classes**, and the class alone decides wh
 | Attempts per handover | 5 (the first and 4 retries) |
 | Backoff | exponential with full jitter: random between 0 and min(15 s, 1 s × 2ⁿ) |
 | One attempt | at most 10 s (ADR 0003) |
-| Worst case | ≤ 15 s of waiting + ≤ 50 s of attempts = **≤ 65 s**, under a quarter of the 300 s poll interval |
-| `Retry-After` | honoured up to 15 s; a longer one stops the retries at once (`retries-exhausted`, noting the value) |
+| Worst case | ≤ 15 s of backoff + ≤ 50 s of attempts = **≤ 65 s**, under a quarter of the 300 s poll interval; if every answer asks for a 15 s `Retry-After`, ≤ 60 s of waiting: **≤ 110 s**, still under half of it |
+| `Retry-After` | honoured up to 15 s, waited for instead of the backoff; a longer one stops the retries at once (`retries-exhausted`, noting the value) |
 
 - **Full jitter** spreads the retries of the two consumer instances, so they don't hit a recovering fulfilment service at the same moment.
 - **A long `Retry-After` ends the retries** rather than being shortened: the service has said it is unavailable for a while, and that is the flood guard's business.
-- **The budget is enforced when the consumer starts.** It refuses to start if attempts × attempt deadline + backoff caps exceed half of `max.poll.interval.ms`, so a configuration change can't silently break the poll budget.
-- **Accepted cost: head-of-line blocking.** While one order is being retried, the other partitions of that consumer wait, for at most about a minute.
+- **Every bound is configuration** with these defaults (`HANDOVER_MAX_ATTEMPTS`, `HANDOVER_BACKOFF_BASE_SECONDS`, `HANDOVER_BACKOFF_CAP_SECONDS`, `HANDOVER_RETRY_AFTER_CAP_SECONDS`, `KAFKA_MAX_POLL_INTERVAL_MS`, and the attempt's timeouts of ADR 0003), so tests can shorten them.
+- **The budget is enforced when the consumer starts.** It refuses to start (exit code 2) if attempts × attempt deadline + the longest wait before each retry (its backoff cap or the `Retry-After` cap, whichever is longer) exceed half of `max.poll.interval.ms`, so a configuration change can't silently break the poll budget. Counting the backoff caps alone would miss that a `Retry-After` replaces the backoff.
+- **Accepted cost: head-of-line blocking.** While one order is being retried, the other partitions of that consumer wait, for about a minute, at most two.
 - **Backoff goes through the `Clock` port** (ADR 0005), so it is tested without sleeping.
 
 **The flood guard**
@@ -93,7 +94,7 @@ An outage is not a property of the message. Without a guard, a 30-minute fulfilm
 
 - **Never in a dead letter:** the bearer token and stack traces. Stack traces are in the error log, found through the trace id.
 - **The naming follows Spring Kafka's** dead-letter headers (`kafka_dlt-exception-message`, `kafka_dlt-original-topic`, …), so the scheme is familiar to anyone who knows that convention.
-- **`dlt.detail` for an invalid event**, as JSON written without spaces (shown here with them): `{"layer": "business-rule", "errorCount": 1, "errors": [{"pointer": "/data/total", "message": "4499 is not the sum of the line totals, 4498"}]}`. Errors are left off the end until it fits in 4 KB of UTF-8, and `errorCount` still counts them all. `dlt.consumer` is the group and the instance's host name, e.g. `order-consumer/6c5923dc8164`; timestamps are UTC with milliseconds.
+- **`dlt.detail` for an invalid event**, as JSON written without spaces (shown here with them): `{"layer": "business-rule", "errorCount": 1, "errors": [{"pointer": "/data/total", "message": "4499 is not the sum of the line totals, 4498"}]}`. Errors are left off the end until it fits in 4 KB of UTF-8, and `errorCount` still counts them all. For a failed handover it holds the last attempt's `status` (`null` without an answer) and `error`: `{"status": 503, "error": "503 Service Unavailable"}`, `{"status": null, "error": "ReadTimeout: timed out"}`. A `retries-exhausted` dead letter ended by a long `Retry-After` adds `"retryAfterSeconds": 120.0`; a `rejected` one adds `"problem"`, the start of the response body (at most 1024 characters, shortened further until the detail fits in 4 KB). `dlt.consumer` is the group and the instance's host name, e.g. `order-consumer/6c5923dc8164`; timestamps are UTC with milliseconds.
 - **`dlt.detail` for a conflicting event** names the accepted version it conflicts with and the differing fields as JSON Pointers into the event, never their values: `{"acceptedEventId": "7d2e1f3a-…", "fields": ["/data/lines", "/data/total"]}`. The conflicting values are in the dead letter's own value, the accepted ones in `orders`; for an event id already recorded for another order, `acceptedEventId` is that same id and the field is `/data/orderId`.
 - **The dead-letter producer is idempotent** (`enable.idempotence`, which implies `acks=all`) and waits **at most 10 s** for the broker's confirmation; librdkafka's default of 5 minutes would outlast the poll budget. A dead letter that isn't confirmed in time counts as not written.
 - **Order of steps:** `handover_failed` is set (when an order exists), then the dead letter is written, then, **once the broker has confirmed it**, the offset is committed.
@@ -124,6 +125,7 @@ An outage is not a property of the message. Without a guard, a 30-minute fulfilm
   - *Retrying until success:* not bounded, and a stuck order blocks its partitions.
   - *Shortening a long `Retry-After`:* retries against a service that has said it is unavailable.
   - *Backoff without jitter:* instances retry in step.
+  - *Waiting max(`Retry-After`, backoff) within the 65 s worst case:* keeps the original bound, but either cuts a requested wait short or stops honouring `Retry-After` after the first retries. Waiting what the service asked for, with jitter only when it asks nothing, is the simpler contract; the start-up check makes the longer worst case (110 s) explicit.
 - **Flood guard.**
   - *No guard, rely on replay:* simpler and loses nothing, but every outage becomes manual work and the dead-letter topic stops meaning "this message is bad".
   - *Counting invalid events too:* bad producer data would stop valid events.

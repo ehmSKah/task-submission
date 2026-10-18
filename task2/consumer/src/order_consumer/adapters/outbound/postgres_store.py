@@ -154,6 +154,20 @@ class PostgresOrderStore:
                 (fulfilment_order_id, order_id),
             )
 
+    def mark_handover_failed(self, order_id: UUID) -> None:
+        connection = self._connect()
+        with connection.transaction():
+            # Never over a completed handover: of two consumers racing on one order, the one that
+            # gave up must not undo the other's success.
+            connection.execute(
+                """
+                UPDATE orders
+                SET handover_status = 'handover_failed'
+                WHERE order_id = %s AND handover_status <> 'handed_over'
+                """,
+                (order_id,),
+            )
+
     def close(self) -> None:
         if self._connection is not None:
             self._connection.close()

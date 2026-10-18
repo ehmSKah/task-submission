@@ -1,16 +1,32 @@
 """Settings from the environment, checked when the consumer starts (ADR 0005)."""
 
+import math
 import os
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from order_consumer.application.retries import RetryBudgetExceeded, RetryPolicy
 
 # Where the consumer image puts the event's JSON Schema (ADR 0005: one definition per contract).
 EVENT_SCHEMA = Path("/app/schemas/order-placed.v1.schema.json")
 
 
+# librdkafka's default: a consumer that doesn't poll for this long loses its partitions.
+MAX_POLL_INTERVAL_MS = 300_000
+
+
 class ConfigurationError(Exception):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class FulfilmentTimeouts:
+    """One handover attempt (ADR 0003)."""
+
+    connect: float = 2.0
+    read: float = 5.0  # also bounds writing the request
+    attempt_deadline: float = 10.0  # the whole attempt, however the time is spent
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +40,9 @@ class Settings:
     fulfilment_token: str
     event_schema: Path = EVENT_SCHEMA
     log_level: str = "INFO"
+    fulfilment_timeouts: FulfilmentTimeouts = field(default_factory=FulfilmentTimeouts)
+    retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
+    kafka_max_poll_interval_ms: int = MAX_POLL_INTERVAL_MS
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> "Settings":
@@ -32,6 +51,20 @@ class Settings:
             if not value:
                 raise ConfigurationError(f"{name} is not set")
             return value
+
+        def positive[N: (int, float)](name: str, parse: Callable[[str], N], default: N) -> N:
+            raw = env.get(name, "").strip()
+            if not raw:
+                return default
+            try:
+                value = parse(raw)
+            except ValueError:
+                raise ConfigurationError(f"{name} is not a number: {raw[:64]!r}") from None
+            if not (math.isfinite(value) and value > 0):
+                raise ConfigurationError(f"{name} must be positive: {raw[:64]!r}")
+            return value
+
+        timeouts, policy = FulfilmentTimeouts(), RetryPolicy()
 
         settings = cls(
             kafka_bootstrap_servers=required("KAFKA_BOOTSTRAP_SERVERS"),
@@ -43,7 +76,31 @@ class Settings:
             kafka_dead_letter_topic=env.get("KAFKA_DEAD_LETTER_TOPIC", "orders.dlt"),
             event_schema=Path(env.get("ORDER_EVENT_SCHEMA", str(EVENT_SCHEMA))),
             log_level=env.get("LOG_LEVEL", "INFO").upper(),
+            fulfilment_timeouts=FulfilmentTimeouts(
+                connect=positive("FULFILMENT_CONNECT_TIMEOUT_SECONDS", float, timeouts.connect),
+                read=positive("FULFILMENT_READ_TIMEOUT_SECONDS", float, timeouts.read),
+                attempt_deadline=positive(
+                    "FULFILMENT_ATTEMPT_DEADLINE_SECONDS", float, timeouts.attempt_deadline
+                ),
+            ),
+            retry_policy=RetryPolicy(
+                max_attempts=positive("HANDOVER_MAX_ATTEMPTS", int, policy.max_attempts),
+                backoff_base=positive("HANDOVER_BACKOFF_BASE_SECONDS", float, policy.backoff_base),
+                backoff_cap=positive("HANDOVER_BACKOFF_CAP_SECONDS", float, policy.backoff_cap),
+                retry_after_cap=positive(
+                    "HANDOVER_RETRY_AFTER_CAP_SECONDS", float, policy.retry_after_cap
+                ),
+            ),
+            kafka_max_poll_interval_ms=positive(
+                "KAFKA_MAX_POLL_INTERVAL_MS", int, MAX_POLL_INTERVAL_MS
+            ),
         )
         if not settings.event_schema.is_file():
             raise ConfigurationError(f"ORDER_EVENT_SCHEMA {settings.event_schema} is not a file")
+        try:
+            settings.retry_policy.check_budget(
+                settings.fulfilment_timeouts.attempt_deadline, settings.kafka_max_poll_interval_ms
+            )
+        except RetryBudgetExceeded as exceeded:
+            raise ConfigurationError(str(exceeded)) from None
         return settings

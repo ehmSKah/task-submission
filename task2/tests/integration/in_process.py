@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from typing import Any, cast
 
 from order_consumer.application.ports import FulfilmentClient, OrderStore
+from order_consumer.application.retries import Jitter
 from order_consumer.config import Settings
 from order_consumer.main import build
 from tests.integration.stack import ConsumerGroup
@@ -110,18 +111,34 @@ def run_until_crash(
     raise AssertionError(f"the crash point was not reached within {timeout:.0f} s")
 
 
+def run_until_it_fails(settings: Settings, timeout: float = 30.0) -> BaseException:
+    """Runs a consumer instance until it stops with an error, and returns the error."""
+    stop = threading.Event()
+    deadline = threading.Timer(timeout, stop.set)
+    deadline.start()
+    try:
+        build(settings, stop).run()
+    except Exception as error:
+        return error
+    finally:
+        deadline.cancel()
+    raise AssertionError(f"the consumer did not fail within {timeout:.0f} s")
+
+
 @contextmanager
 def running(
     settings: Settings,
     wrap_store: Callable[[OrderStore], OrderStore] = lambda store: store,
+    jitter: Jitter | None = None,
 ) -> Iterator[None]:
-    """A consumer instance running in a thread for the duration of the block."""
+    """A consumer instance running in a thread for the duration of the block. `jitter` pins the
+    retry backoff where a test depends on when attempts happen (ADR 0009)."""
     stop = threading.Event()
     failures: list[BaseException] = []
 
     def run() -> None:
         try:
-            build(settings, stop, wrap_store).run()
+            build(settings, stop, wrap_store, jitter=jitter).run()
         except BaseException as error:
             failures.append(error)
             raise

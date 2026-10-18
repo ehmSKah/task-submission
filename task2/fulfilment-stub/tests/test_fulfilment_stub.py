@@ -285,3 +285,125 @@ def test_the_request_journal_can_be_filtered_by_order(client: TestClient) -> Non
     journal = client.get("/_control/requests", params={"externalReference": OTHER_ORDER_ID})
 
     assert [entry["externalReference"] for entry in journal.json()] == [OTHER_ORDER_ID]
+
+
+@pytest.mark.parametrize("status", [503, 429, 500, 400, 404, 302, 200, 204, 599])
+def test_a_status_rule_answers_with_that_status_and_creates_nothing(
+    client: TestClient, status: int
+) -> None:
+    client.post("/_control/fault-rules", json={"externalReference": ORDER_ID, "status": status})
+
+    faulty = client.post(
+        "/fulfilment-orders", json=request_body(), headers=headers(), follow_redirects=False
+    )
+    created_meanwhile = client.get("/_control/fulfilment-orders").json()
+    after = client.post("/fulfilment-orders", json=request_body(), headers=headers())
+
+    assert faulty.status_code == status
+    assert created_meanwhile == []
+    assert after.status_code == 201, "the rule is used up and the key was not kept"
+    statuses = [entry["status"] for entry in client.get("/_control/requests").json()]
+    assert statuses == [status, 201]
+
+
+def test_a_status_rule_can_ask_for_a_retry_after(client: TestClient) -> None:
+    client.post(
+        "/_control/fault-rules",
+        json={"externalReference": ORDER_ID, "times": 2, "status": 503, "retryAfter": "120"},
+    )
+
+    answers = [
+        client.post("/fulfilment-orders", json=request_body(), headers=headers()) for _ in range(2)
+    ]
+
+    assert [answer.headers.get("retry-after") for answer in answers] == ["120", "120"]
+
+
+def test_a_delayed_status_answers_late_and_creates_nothing(
+    recording_client: TestClient, delays: list[float]
+) -> None:
+    recording_client.post(
+        "/_control/fault-rules",
+        json={"externalReference": ORDER_ID, "status": 503, "delaySeconds": 3},
+    )
+
+    response = recording_client.post("/fulfilment-orders", json=request_body(), headers=headers())
+
+    assert (response.status_code, delays) == (503, [3.0])
+    assert recording_client.get("/_control/fulfilment-orders").json() == []
+
+
+async def post_over_asgi(app: Any, body: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ASGI messages the app sends for one request: what a server like uvicorn receives."""
+    raw = json.dumps(body).encode()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/fulfilment-orders",
+        "raw_path": b"/fulfilment-orders",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("stub", 8081),
+        "client": ("consumer", 40000),
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(raw)).encode()),
+            *((name.lower().encode(), value.encode()) for name, value in headers().items()),
+        ],
+    }
+    sent: list[dict[str, Any]] = []
+    requested = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal requested
+        if not requested:
+            requested = True
+            return {"type": "http.request", "body": raw, "more_body": False}
+        await asyncio.Event().wait()  # no disconnect while the app answers
+        raise AssertionError("unreachable")
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    await app(scope, receive, send)
+    return sent
+
+
+def test_a_drop_rule_breaks_off_the_answer_and_creates_nothing() -> None:
+    """The answer is started but never completed, so the server closes the connection and the
+    client sees it dropped mid-answer."""
+    app = create_app(spec_path=SPEC, token=TOKEN)
+    client = TestClient(app)
+    client.post(
+        "/_control/fault-rules", json={"externalReference": ORDER_ID, "dropConnection": True}
+    )
+
+    sent = asyncio.run(post_over_asgi(app, request_body()))
+
+    assert [message["type"] for message in sent] == ["http.response.start"]
+    assert client.get("/_control/fulfilment-orders").json() == []
+    [entry] = client.get("/_control/requests").json()
+    assert entry["status"] is None
+    assert entry["fault"] == {"dropConnection": True}
+    after = client.post("/fulfilment-orders", json=request_body(), headers=headers())
+    assert after.status_code == 201, "the key was not kept"
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        pytest.param({"status": 503, "dropConnection": True}, id="a status and a drop"),
+        pytest.param({"retryAfter": "5"}, id="Retry-After without a status"),
+        pytest.param({"status": 201}, id="a 201 that creates nothing"),
+        pytest.param({"status": 99}, id="not an HTTP status"),
+    ],
+)
+def test_a_fault_rule_that_makes_no_sense_is_refused(
+    client: TestClient, rule: dict[str, Any]
+) -> None:
+    response = client.post("/_control/fault-rules", json={"externalReference": ORDER_ID} | rule)
+
+    assert response.status_code == 422

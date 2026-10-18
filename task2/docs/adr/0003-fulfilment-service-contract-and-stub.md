@@ -65,7 +65,9 @@ traceparent: 00-…               # W3C Trace Context, the correlation id (ADR 0
 
 - **Only one layer retries: the consumer's retry policy.** If the HTTP client retried as well, the bound would multiply (3 × 3 = 9 attempts instead of 3). Many clients retry by default, so this is set explicitly.
 - **Kafka sets the outer limit.** A consumer that doesn't poll for longer than `max.poll.interval.ms` (300 s by default) loses its partitions and the message is redelivered. With at most 10 s per attempt, the retry strategy can work out how many attempts and how much backoff fit between polls, or pause the partition instead.
-- **Every value is configuration** with these defaults, so tests can shorten them.
+- **Every value is configuration** with these defaults, so tests can shorten them (`FULFILMENT_CONNECT_TIMEOUT_SECONDS`, `FULFILMENT_READ_TIMEOUT_SECONDS`, which also bounds writing the request, and `FULFILMENT_ATTEMPT_DEADLINE_SECONDS`).
+- **The deadline covers the whole attempt.** `httpx`'s timeouts bound each phase, not their sum, so the attempt runs in a thread of its own and is abandoned when its deadline passes. Its answer is ignored; whatever it achieved, the idempotency key makes the next attempt safe. It usually ends within its phase timeouts, though a server trickling its answer can keep it (and one pooled connection) busy longer, since the read timeout restarts with every chunk.
+- **The HTTP adapter sorts every answer into its class**, including timeouts, dropped connections and a `201` without a fulfilment order id (systemic: there is no proof of the handover); the core sees only the class, the status and a short error. A different contract changes the adapter, not the retry policy.
 - **Library:** `httpx`, which has sync and async APIs and timeouts per phase; `respx` mocks it in unit tests.
 
 **Authentication**
@@ -82,6 +84,7 @@ traceparent: 00-…               # W3C Trace Context, the correlation id (ADR 0
   - State is in memory: restarting the stub forgets keys. The restart tests restart the consumer, not the stub.
 - **Control side** (`/_control/…`, not part of the contract):
   - **Fault rules** are matched per order (`externalReference`), so tests running side by side don't interfere. Each rule applies `times: N`. It can respond with a status (`503` with or without `Retry-After`, `429`, `500`, `400`, `404`, …), respond after a delay, **create the order but answer too late** (which reproduces timeout → `409` → replay), or drop the connection. Rules are added with `POST /_control/fault-rules` (`{"externalReference": …, "times": 1, "delaySeconds": 3}`); every request for the order that passes the contract checks uses one. A delayed request has already claimed its key, so a repeat meanwhile gets `409`.
+  - **The fields of a rule:** `delaySeconds` waits first; then `status` (with an optional `retryAfter`, sent as `Retry-After`) answers with that status, or `dropConnection: true` starts the answer and breaks it off, so the client sees the connection dropped. Both create nothing and release the key. With neither, the order is created after the delay: that is "create but answer too late". A rule that combines a status with a drop, sends `Retry-After` without a status or asks for a `201` is refused. The journal shows which rule each request used.
   - **Journal:** every request received with its headers and outcome (no status yet while it is in progress, which is what the hard-kill test waits for), and separately the fulfilment orders actually created. Duplicate tests assert "exactly one fulfilment order for this order", however many requests arrived.
   - **Reset** clears rules, journal and keys between tests.
   - `make demo` uses the same fault rules.
