@@ -13,12 +13,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 import httpx
 import psycopg
-from confluent_kafka import OFFSET_BEGINNING, Consumer, Message, Producer, TopicPartition
+from confluent_kafka import (
+    OFFSET_BEGINNING,
+    Consumer,
+    KafkaException,
+    Message,
+    Producer,
+    TopicPartition,
+)
 from psycopg.rows import dict_row
 
 from demo import samples
@@ -26,6 +33,29 @@ from demo import samples
 TASK2 = Path(__file__).parents[1]
 TOPIC = "orders"
 DEAD_LETTER_TOPIC = "orders.dlt"
+
+
+class WatermarkReader(Protocol):
+    def get_watermark_offsets(
+        self, partition: TopicPartition, timeout: float
+    ) -> tuple[int, int]: ...
+
+
+def watermarks(
+    reader: WatermarkReader, partition: TopicPartition, within: float = 10.0, pause: float = 0.2
+) -> tuple[int, int]:
+    """The partition's low and high offsets. The query is a single request that librdkafka doesn't
+    retry, so it fails while the client's first broker connections are still settling, e.g. while
+    `localhost` resolves to an unreachable `::1` first. It is asked again until `within` runs
+    out."""
+    deadline = time.monotonic() + within
+    while True:
+        try:
+            return reader.get_watermark_offsets(partition, timeout=within)
+        except KafkaException:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(pause)
 
 
 def _port(name: str, default: int) -> str:
@@ -143,7 +173,7 @@ class Stack:
             ]
             expected = 0
             for partition in partitions:
-                low, high = reader.get_watermark_offsets(partition, timeout=10)
+                low, high = watermarks(reader, partition)
                 expected += high - low
             reader.assign(partitions)
             found: list[DeadLetter] = []

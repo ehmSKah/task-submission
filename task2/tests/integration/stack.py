@@ -17,6 +17,7 @@ from confluent_kafka import (
     OFFSET_BEGINNING,
     Consumer,
     ConsumerGroupState,
+    KafkaException,
     Producer,
     TopicPartition,
 )
@@ -113,6 +114,19 @@ def publish_records(
     assert producer.flush(30) == 0, "not every record was delivered to Kafka"
 
 
+def _watermarks(consumer: Consumer, partition: TopicPartition) -> tuple[int, int]:
+    """librdkafka doesn't retry the watermark query, which fails while a new client's broker
+    connections are still settling (e.g. `localhost` resolving to an unreachable `::1` first)."""
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            return consumer.get_watermark_offsets(partition, timeout=10)
+        except KafkaException:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.2)
+
+
 def records(topic: str) -> list[Record]:
     """Every record on the topic so far, read with a throwaway group."""
     reader = Consumer(
@@ -127,7 +141,7 @@ def records(topic: str) -> list[Record]:
         partitions = [TopicPartition(topic, p, OFFSET_BEGINNING) for p in metadata.partitions]
         expected = 0
         for tp in partitions:
-            low, high = reader.get_watermark_offsets(tp, timeout=10)
+            low, high = _watermarks(reader, tp)
             expected += high - low
         reader.assign(partitions)
         found: list[Record] = []
@@ -302,7 +316,7 @@ def lag(consumers: ConsumerGroup) -> dict[int, int]:
         committed = {tp.partition: tp.offset for tp in probe.committed(partitions, timeout=10)}
         lags = {}
         for tp in partitions:
-            _low, high = probe.get_watermark_offsets(tp, timeout=10)
+            _low, high = _watermarks(probe, tp)
             position = committed[tp.partition]
             lags[tp.partition] = high - (position if position >= 0 else 0)
         return lags
