@@ -59,7 +59,7 @@ The README maps each assignment requirement to its tests.
 
 | Service | Image | Role |
 |---|---|---|
-| `kafka` | `apache/kafka:4.3.1` | single-node KRaft; `INTERNAL://kafka:9092` for containers, `EXTERNAL://localhost:9094` for the host; automatic topic creation off; named volume |
+| `kafka` | `apache/kafka:4.3.1` | single-node KRaft; `INTERNAL://kafka:9092` for containers, `EXTERNAL://127.0.0.1:9094` for the host (not `localhost`, which may resolve to an IPv6 address the published port doesn't listen on); automatic topic creation off; named volume |
 | `kafka-init` | `apache/kafka:4.3.1` (the JVM image, which has the CLI tools) | creates `orders` (3 partitions, 7 days) and `orders.dlt` (3 partitions, 30 days) if missing, then exits |
 | `postgres` | PostgreSQL, current major version | named volume; an init script creates a migration owner and a consumer role with data rights only |
 | `migrate` | dbmate | applies the migrations and the consumer role's grants, then exits |

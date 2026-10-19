@@ -23,7 +23,7 @@ from confluent_kafka import (
 from confluent_kafka.admin import AdminClient, ConsumerGroupDescription, NewTopic
 from psycopg.rows import dict_row
 
-HOST = os.environ.get("STACK_HOST", "localhost")
+HOST = os.environ.get("STACK_HOST", "127.0.0.1")
 KAFKA_BOOTSTRAP = f"{HOST}:{os.environ.get('KAFKA_PORT', '9094')}"
 CONSUMER_DATABASE_URL = (
     "postgresql://order_consumer:local-dev-consumer"

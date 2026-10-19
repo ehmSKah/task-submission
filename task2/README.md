@@ -268,8 +268,9 @@ it automatically) and run `make up`.
 **Host ports** are variables of the `Makefile`, for when a port is taken or several stacks share
 one Docker daemon: `KAFKA_PORT` (9094), `POSTGRES_PORT` (5432), `STUB_PORT` (8081), `UI_PORT`
 (8080) and `JAEGER_UI_PORT` (16686). Compose's own `COMPOSE_PROJECT_NAME` overrides the project
-name, `task2`. `STACK_HOST` is the host the published ports are reached on: `localhost`, or the
-daemon's host when `DOCKER_HOST` points at a remote one.
+name, `task2`. `STACK_HOST` is the host the published ports are reached on: `127.0.0.1`, or the
+daemon's host when `DOCKER_HOST` points at a remote one. It is `127.0.0.1` rather than
+`localhost` because Docker publishes ports on IPv4, while `localhost` may resolve to `::1` first.
 
 ## Assumptions
 
@@ -351,5 +352,8 @@ These are stated rather than hidden. The full list, with what would change each 
   the same to the other targets ([Configuration](#configuration)).
 - **The Docker daemon is remote** (`DOCKER_HOST=tcp://…`): the published ports are on that host,
   which `STACK_HOST` follows; the URLs above then use its name instead of `localhost`.
+- **Kafka logs `Connect to ipv6#[::1]:9094 failed`:** the stack was started with
+  `STACK_HOST=localhost` on a machine where `localhost` resolves to IPv6 first. Start it again
+  with the default (`make up`), which advertises Kafka on `127.0.0.1`.
 - **arm64 or amd64:** every image and Python wheel exists for both; CI runs on amd64.
 - **Starting from scratch:** `make clean && make up` deletes the topics' and the database's data.

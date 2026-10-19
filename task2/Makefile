@@ -1,8 +1,9 @@
 # Setup and execution for task2 (ADR 0009). `make help` lists the targets.
 
 # The host this machine reaches published ports by: the remote Docker daemon's host when
-# DOCKER_HOST points at one (tcp://dind:2375 -> dind), otherwise localhost.
-STACK_HOST ?= $(or $(shell printf '%s' "$$DOCKER_HOST" | sed -n 's|^tcp://\([^:/]*\).*|\1|p'),localhost)
+# DOCKER_HOST points at one (tcp://dind:2375 -> dind), otherwise 127.0.0.1: not localhost, which
+# may resolve to IPv6 first while Docker publishes ports on IPv4.
+STACK_HOST ?= $(or $(shell printf '%s' "$$DOCKER_HOST" | sed -n 's|^tcp://\([^:/]*\).*|\1|p'),127.0.0.1)
 export STACK_HOST
 
 # Host ports and the Compose project, overridable so several stacks can share one Docker daemon.

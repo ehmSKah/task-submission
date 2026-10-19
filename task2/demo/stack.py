@@ -43,7 +43,7 @@ class Endpoints:
 
     @classmethod
     def from_env(cls) -> "Endpoints":
-        host = os.environ.get("STACK_HOST", "localhost")
+        host = os.environ.get("STACK_HOST", "127.0.0.1")
         return cls(
             host=host,
             kafka=f"{host}:{_port('KAFKA_PORT', 9094)}",
